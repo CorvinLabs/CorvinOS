@@ -335,6 +335,7 @@ def rebuild(tenant_id: str) -> dict[str, Any]:
         try:
             validate_location(tenant_id, str(d), adopt=True)
             register(tenant_id, man["id"], d, man.get("template"))
+            set_protection(tenant_id, man["id"], manifest.DEFAULT_CLASS, manifest.DEFAULT_ACCESS)   # never from project.yaml
             added.append(man["id"])
         except (ProjectPathError, RegistryError):
             skipped.append(man["id"])
@@ -382,3 +383,25 @@ def set_protection(tenant_id: str, project_id: str, classification: str, assista
                 e["protection"] = {"classification": classification, "assistant_access": assistant_access}
         data["projects"] = lst
         _save(tenant_id, data)
+
+
+def set_mcp(*, tenant_id: str, project_id: str, sha: Optional[str]) -> None:
+    """Record the sha256 of the MCP file the ENGINE wrote while an MCP feature is on (None = none active). A chat loads a project's MCP
+    servers only when the file on disk still has this hash: a file that came with an adopted folder, or went stale, never runs."""
+    with _lock(tenant_id):
+        data = load(tenant_id)
+        lst = [e for e in data.get("projects", []) if isinstance(e, dict)]
+        for e in lst:
+            if e.get("id") == project_id:
+                if sha:
+                    e["mcp_sha"] = sha
+                else:
+                    e.pop("mcp_sha", None)
+        data["projects"] = lst
+        _save(tenant_id, data)
+
+
+def mcp_sha(*, tenant_id: str, project_id: str) -> Optional[str]:
+    e = get(tenant_id, project_id)
+    v = e.get("mcp_sha") if e else None
+    return v if isinstance(v, str) and len(v) == 64 else None

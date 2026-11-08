@@ -33,8 +33,31 @@ def _env() -> dict[str, str]:
     return e
 
 
+_EXEC_KEYS = (re.compile(r"^filter\..+\.(clean|smudge|process)$"), re.compile(r"^diff\..+\.(command|textconv)$"),
+              re.compile(r"^(diff\.external|core\.(pager|sshcommand|askpass|editor|fsmonitor|hookspath)|gpg\..*program)$"))
+
+
+def neutral_git_args(repo: Path) -> list[str]:
+    """``-c`` overrides that switch off every command a repository's own configuration could make git run (filter and diff drivers, an
+    external diff, a pager ...). A folder the user adopted may carry any ``.git/config``; reading its state must never execute it
+    (release review round 2). Content filters become the identity (``cat``), everything else an empty command."""
+    out: list[str] = []
+    try:
+        r = subprocess.run(["git", "-C", str(repo), "config", "--local", "--list", "-z"], capture_output=True, timeout=10, env=_env())
+        entries = [e for e in r.stdout.decode("utf-8", errors="replace").split("\0") if "\n" in e]
+    except (OSError, subprocess.TimeoutExpired):
+        entries = []
+    for e in entries:
+        key = e.split("\n", 1)[0].lower()
+        if any(p.match(key) for p in _EXEC_KEYS):
+            real = e.split("\n", 1)[0]
+            out += ["-c", f"{real}={'cat' if real.lower().endswith(('.clean', '.smudge')) else ''}"]
+    return out
+
+
 def _git(repo: Path, *args: str, check: bool = True, timeout: int = _GIT_TIMEOUT) -> str:
-    r = subprocess.run(["git", "--no-pager", "-C", str(repo), "-c", "core.quotepath=false", "-c", "core.fsmonitor=false", *args],
+    r = subprocess.run(["git", "--no-pager", "-C", str(repo), "-c", "core.quotepath=false", "-c", "core.fsmonitor=false",
+                        *neutral_git_args(repo), *args],
                        capture_output=True, timeout=timeout, env=_env())
     if check and r.returncode != 0:
         raise ChangesError("git could not read the repository")
@@ -107,7 +130,7 @@ def working_changes_ex(root: Path, *, count_lines: bool = True, timeout: int = _
         head = _has_head(repo)
         nums: dict[str, tuple[Optional[int], Optional[int]]] = {}
         if head:
-            for line in _git(repo, "diff", "--numstat", "HEAD", timeout=timeout).splitlines():
+            for line in _git(repo, "diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD", timeout=timeout).splitlines():
                 a, _, rest = line.partition("\t")
                 d, _, path = rest.partition("\t")
                 nums[path] = (int(a) if a.isdigit() else None, int(d) if d.isdigit() else None)
@@ -221,7 +244,7 @@ def file_view(root: Path, rel: str, commit: Optional[str] = None) -> dict[str, A
     if commit:
         old = meta.get("old_path")
         spec = [inner] + ([old[len(rel) - len(inner):] if old.startswith(rel[: len(rel) - len(inner)]) else old] if old else [])
-        raw = _git(repo, "show", "--format=", "-M", "--unified=3", commit, "--", *spec)
+        raw = _git(repo, "show", "--format=", "-M", "--no-ext-diff", "--no-textconv", "--unified=3", commit, "--", *spec)
     elif meta["status"] == "untracked" or (meta["status"] == "added" and not _has_head(repo)):
         p = repo / inner
         if p.is_symlink() or not p.is_file():
@@ -234,9 +257,9 @@ def file_view(root: Path, rel: str, commit: Optional[str] = None) -> dict[str, A
         out["text"] = data[:MAX_BYTES].decode("utf-8", errors="replace")
         return out
     elif meta["status"] == "deleted":
-        raw = _git(repo, "diff", "--unified=3", "HEAD", "--", inner)
+        raw = _git(repo, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "HEAD", "--", inner)
     else:
-        raw = _git(repo, "diff", "--unified=3", "HEAD", "--", inner) if _has_head(repo) else ""
+        raw = _git(repo, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "HEAD", "--", inner) if _has_head(repo) else ""
     if "Binary files" in raw[:2000] or raw.startswith("Binary"):
         out["binary"] = True
         return out

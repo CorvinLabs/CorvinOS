@@ -32,7 +32,7 @@ def _path(tenant_id: str) -> Path:
 def _load(tenant_id: str) -> dict[str, Any]:
     """sid -> {"project_id", "path"} (the folder the attachment was made for). A legacy entry is a bare project id."""
     try:
-        data = json.loads(_path(tenant_id).read_text(encoding="utf-8"))
+        data = json.loads(_path(tenant_id=tenant_id).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     chats = data.get("chats") if isinstance(data, dict) else None
@@ -46,18 +46,18 @@ def _load(tenant_id: str) -> dict[str, Any]:
 
 
 def _save(tenant_id: str, chats: dict[str, Any]) -> None:
-    p = _path(tenant_id)
+    p = _path(tenant_id=tenant_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(p, (json.dumps({"schema": 1, "chats": chats}, indent=1, sort_keys=True) + "\n").encode("utf-8"), mode=0o600)
 
 
 def attached(tenant_id: str, sid: str) -> Optional[str]:
-    e = _load(tenant_id).get(sid) if SID_RE.match(sid or "") else None
+    e = _load(tenant_id=tenant_id).get(sid) if SID_RE.match(sid or "") else None
     return e["project_id"] if e else None
 
 
 def _entry(tenant_id: str, sid: str) -> Optional[dict[str, Any]]:
-    return _load(tenant_id).get(sid) if SID_RE.match(sid or "") else None
+    return _load(tenant_id=tenant_id).get(sid) if SID_RE.match(sid or "") else None
 
 
 class AttachmentFull(ValueError):
@@ -67,47 +67,47 @@ class AttachmentFull(ValueError):
 def attach(tenant_id: str, sid: str, project_id: str, path: Optional[str] = None) -> None:
     if not SID_RE.match(sid or ""):
         raise ValueError("invalid chat id")
-    with file_lock(_path(tenant_id).with_name("chat_attachments.lock")):
-        chats = _load(tenant_id)
+    with file_lock(_path(tenant_id=tenant_id).with_name("chat_attachments.lock")):
+        chats = _load(tenant_id=tenant_id)
         if sid not in chats and len(chats) >= MAX_ENTRIES:
             raise AttachmentFull("too many attached chats")
         chats[sid] = {"project_id": project_id, "path": path}
-        _save(tenant_id, chats)
+        _save(tenant_id=tenant_id, chats=chats)
 
 
 def detach_project(tenant_id: str, project_id: str) -> list[str]:
     """Detach every chat of this project (removed from the list). Returns the chat ids (release review R2)."""
-    with file_lock(_path(tenant_id).with_name("chat_attachments.lock")):
-        chats = _load(tenant_id)
+    with file_lock(_path(tenant_id=tenant_id).with_name("chat_attachments.lock")):
+        chats = _load(tenant_id=tenant_id)
         gone = [k for k, v in chats.items() if v["project_id"] == project_id]
         for k in gone:
             del chats[k]
         if gone:
-            _save(tenant_id, chats)
+            _save(tenant_id=tenant_id, chats=chats)
     return gone
 
 
 def prune(tenant_id: str, keep) -> int:
     """Drop entries whose chat no longer exists (``keep(sid) -> bool``)."""
-    with file_lock(_path(tenant_id).with_name("chat_attachments.lock")):
-        chats = _load(tenant_id)
+    with file_lock(_path(tenant_id=tenant_id).with_name("chat_attachments.lock")):
+        chats = _load(tenant_id=tenant_id)
         dead = [k for k in chats if not keep(k)]
         for k in dead:
             del chats[k]
         if dead:
-            _save(tenant_id, chats)
+            _save(tenant_id=tenant_id, chats=chats)
     return len(dead)
 
 
 def detach(tenant_id: str, sid: str) -> bool:
     if not SID_RE.match(sid or ""):
         return False
-    with file_lock(_path(tenant_id).with_name("chat_attachments.lock")):
-        chats = _load(tenant_id)
+    with file_lock(_path(tenant_id=tenant_id).with_name("chat_attachments.lock")):
+        chats = _load(tenant_id=tenant_id)
         if sid not in chats:
             return False
         del chats[sid]
-        _save(tenant_id, chats)
+        _save(tenant_id=tenant_id, chats=chats)
     return True
 
 
@@ -122,7 +122,7 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
     (ADR-2317 Decision 6); an error or ``False`` withholds the whole attachment (fail closed).
     ``class_allows(classification) -> bool`` judges the PROJECT's data class against the same engine (ADR-2319);
     the same fail-closed rule holds. ``assistant_access: write`` is the only thing that lifts the write-deny rules."""
-    att = _entry(tenant_id, sid)
+    att = _entry(tenant_id=tenant_id, sid=sid)
     if not att:
         return None
     pid = att["project_id"]
@@ -130,8 +130,8 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
     if not entry:
         return None
     root = Path(str(entry.get("path")))
-    if att.get("path") and os.path.abspath(att["path"]) != os.path.abspath(root):
-        return None                                   # attached to a different folder that once had this id (release review R2)
+    if not att.get("path") or os.path.abspath(att["path"]) != os.path.abspath(root):
+        return None                                   # a legacy entry, or another folder that once had this id: attach again (R2)
     try:
         if not root.is_dir() or root.is_symlink():
             return None
@@ -140,8 +140,8 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
             return None
         # the protection is TENANT state (the registry), not only project.yaml: the assistant can edit files in the project (review R5)
         prot = registry.protection(tenant_id, pid) or {}
-        cls = prot.get("classification") or manifest.classification_of(man)
-        access = prot.get("assistant_access") or manifest.access_of(man)
+        cls = prot.get("classification") or manifest.DEFAULT_CLASS          # never from the assistant-editable project.yaml
+        access = prot.get("assistant_access") or manifest.DEFAULT_ACCESS
         if class_allows is not None:
             try:
                 if not class_allows(cls):
@@ -161,15 +161,20 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
     base = Path(abs_root).as_posix()
     # always: the project's own control files (its grants live there too) - even with write access (release review R5)
     control = [f"{tool}(/{base}/{rel})" for tool in ("Write", "Edit", "NotebookEdit")
-               for rel in ("project.yaml", ".mcp.json", ".corvin/**")]
+               for rel in ("project.yaml", ".mcp.json", ".corvin/**", ".git/**", ".gitattributes")]
     deny = control + ([] if access == "write" else [f"{tool}(/{base}/**)" for tool in ("Write", "Edit", "NotebookEdit")])
     mcp = root / ".corvin" / "local" / "mcp.json"      # the ENGINE's copy only - an adopted repo's own .mcp.json never runs (review R6)
+    want = registry.mcp_sha(tenant_id=tenant_id, project_id=pid)   # set only while an MCP feature is on and the engine wrote the file
+    mcp_ok = False
+    if want and _regular(mcp):
+        import hashlib  # noqa: PLC0415
+        mcp_ok = hashlib.sha256(mcp.read_bytes()).hexdigest() == want
     return {
         "project_id": pid,
         "title": str(man.get("title") or pid)[:120],
         "add_dir": abs_root,
         "env": {RULES_ENV: "1"},
-        "mcp_config": str(mcp) if _regular(mcp) else None,
+        "mcp_config": str(mcp) if mcp_ok else None,
         "deny": deny,
         "classification": cls,
         "access": access,

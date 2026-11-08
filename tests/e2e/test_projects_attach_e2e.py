@@ -128,7 +128,8 @@ class AttachApi(_Base):
             shutil.move(str(self.tmp / "gone"), str(proj))
             # the attachment names the project only; never a path, never in the chat's workdir
             store = (home / "tenants" / tenant_id / "projects" / "chat_attachments.json")
-            self.assertEqual(json.loads(store.read_text())["chats"], {sid: pid})
+            self.assertEqual({k: v["project_id"] for k, v in json.loads(store.read_text())["chats"].items()}, {sid: pid})
+            self.assertEqual(json.loads(store.read_text())["chats"][sid]["path"], str(proj.resolve()))
             self.assertEqual(oct(store.stat().st_mode & 0o777), "0o600")
             self.assertFalse(list(home.rglob(".corvin-project*")))
             # detach
@@ -152,15 +153,13 @@ class AttachApi(_Base):
             parts = attachment.spawn_parts(tenant_id, sid, l34_allows=lambda t: True)
             self.assertEqual(parts["add_dir"], str(proj.resolve()))
             self.assertEqual(parts["env"], {"CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD": "1"})
-            self.assertEqual(parts["mcp_config"], str(proj / ".mcp.json"))
+            self.assertIsNone(parts["mcp_config"], "an adopted .mcp.json is never handed to a chat (release review R6)")
             self.assertTrue(all(d.startswith(("Write(//", "Edit(//", "NotebookEdit(//")) for d in parts["deny"]), parts["deny"])
             # fail closed: a gate that says no (or raises) withholds the whole attachment
             self.assertIsNone(attachment.spawn_parts(tenant_id, sid, l34_allows=lambda t: False))
             self.assertIsNone(attachment.spawn_parts(tenant_id, sid, l34_allows=lambda t: 1 / 0))
-            # a symlinked MCP file is not passed on
-            (proj / ".mcp.json").unlink()
-            (proj / ".mcp.json").symlink_to(self.tmp / "elsewhere.json")
-            self.assertIsNone(attachment.spawn_parts(tenant_id, sid, l34_allows=lambda t: True)["mcp_config"])
+            # the deny rules always cover the project's control files
+            self.assertTrue(any(d.endswith("/project.yaml)") for d in parts["deny"]))
 
 
 @live

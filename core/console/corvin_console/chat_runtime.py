@@ -3393,6 +3393,18 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
     return args
 
 
+def project_rules_allowed(tenant_id: str, text: str) -> bool:
+    """ADR-2317 D6: may the project's rules text (CLAUDE.md) go to the OS engine? Fail closed."""
+    try:
+        from data_classification import classify_task  # type: ignore  # noqa: PLC0415
+        from spawn_gates import check_l34 as _l34, detector_on as _detector_on  # type: ignore  # noqa: PLC0415
+        engine = _configured_os_engine(tenant_id) or "claude_code"
+        cls = classify_task(text, detector=_detector_on(tenant_id))
+        return _l34(engine, tenant_id, classification=cls, channel=CHANNEL, chat_key="") is None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def project_class_refusal(tenant_id: str, classification: str) -> "str | None":
     """ADR-2319: the L34 gate's refusal for a project of this data class against the OS engine, or None if the
     class may go there. Fail closed: a gate that cannot be consulted refuses."""
@@ -3424,10 +3436,7 @@ def _project_attachment_parts_uncached(sess: "WebChatSession") -> "dict[str, Any
         engine = _configured_os_engine(sess.tenant_id) or "claude_code"
 
         def _l34_allows(text: str) -> bool:
-            from data_classification import classify_task  # type: ignore  # noqa: PLC0415
-            from spawn_gates import check_l34 as _l34, detector_on as _detector_on  # type: ignore  # noqa: PLC0415
-            cls = classify_task(text, detector=_detector_on(sess.tenant_id))
-            return _l34(engine, sess.tenant_id, classification=cls, channel=CHANNEL, chat_key=sess.chat_key) is None
+            return project_rules_allowed(sess.tenant_id, text)
 
         return _pa.spawn_parts(sess.tenant_id, sess.sid, l34_allows=_l34_allows,
                                class_allows=lambda cls: project_class_refusal(sess.tenant_id, cls) is None)

@@ -107,7 +107,7 @@ class RolesAndSettings(_Base):
             self.assertEqual(parts["access"], "write")
             whole = [d for d in parts["deny"] if d.endswith(f"{Path(parts['add_dir']).as_posix()}/**)")]
             self.assertEqual(whole, [], "write access lifts the deny over the whole project")
-            self.assertTrue(all(d.endswith(("project.yaml)", ".mcp.json)", ".corvin/**)")) for d in parts["deny"]),
+            self.assertTrue(all(d.endswith(("project.yaml)", ".mcp.json)", ".corvin/**)", ".git/**)", ".gitattributes)")) for d in parts["deny"]),
                             "only the project's control files stay protected (release review R5)")
             self.assertIsNone(attachment.spawn_parts("_default", sid, class_allows=lambda cls: False), "a class the gate refuses withholds the attachment")
 

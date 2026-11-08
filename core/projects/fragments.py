@@ -303,7 +303,7 @@ def suggestions(cat: Catalogue, active: Any) -> list[dict[str, str]]:
 
 @dataclass
 class Op:
-    kind: str                       # "write" | "delete" | "action"
+    kind: str                       # "write" | "action"
     status: str                     # "new" | "changed" | "unchanged" | "skip"
     path: str = ""                  # project-relative, posix
     file_kind: str = ""             # seed | generated | local
@@ -528,14 +528,6 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
             plan.ops.append(Op(kind="write", status="skip", path=".mcp.json", file_kind="local", owner="engine",
                                reason="an existing .mcp.json that this engine did not write is never overwritten"))
             plan.warnings.append(".mcp.json exists and is not the engine's: left untouched; chats use .corvin/local/mcp.json")
-    else:
-        # the feature that needed the block is off: drop the engine's copies, keep anything the user wrote
-        if engine_copy is not None:
-            plan.ops.append(Op(kind="delete", status="changed", path=local_rel, file_kind="local", owner="engine",
-                               diff="(removed: no active feature needs an MCP server)"))
-            if root_copy is not None and root_is_ours:
-                plan.ops.append(Op(kind="delete", status="changed", path=".mcp.json", file_kind="local", owner="engine",
-                                   diff="(removed: no active feature needs an MCP server)"))
     if kb_on:
         cmds = _kb_commands(ctx)
         st, df = _status_of(root, f"{LOCAL_DIR}/kb-commands.md", cmds, "local")
@@ -596,11 +588,6 @@ def apply_plan(plan: Plan, root: Path, ctx: dict[str, str], runner: Optional[Act
         if op.kind == "write":
             target = ensure_inside(root, root / op.path)
             atomic_write(target, op.content, mode=0o600 if op.file_kind == "local" else 0o644, root=root)
-            written.append(op.path)
-        elif op.kind == "delete":
-            target = ensure_inside(root, root / op.path)          # never through a symlink, never outside the project
-            if target.is_file() and not target.is_symlink():
-                target.unlink()
             written.append(op.path)
         else:
             if runner is None:

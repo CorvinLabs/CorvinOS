@@ -344,13 +344,37 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
             "expires_in_s": int(PLAN_TTL_S)}
 
 
+def _need_git() -> None:
+    if shutil.which("git") is None:
+        raise Conflict("git is not installed on this machine; install git and try again - nothing was changed", "git_missing")
+
+
 def _git(root: Path, *args: str) -> None:
-    r = subprocess.run(["git", "-C", str(root), "-c", "user.name=CorvinOS", "-c", "user.email=corvin@localhost",
-                        "-c", f"core.hooksPath={os.devnull}", "-c", "commit.gpgsign=false", *args],
-                       capture_output=True, text=True, env=kb_projection._env("operator"), encoding="utf-8",
-                       errors="replace", timeout=120)
+    from core.projects import changes  # noqa: PLC0415
+    _need_git()
+    try:
+        r = subprocess.run(["git", "-C", str(root), "-c", "user.name=CorvinOS", "-c", "user.email=corvin@localhost",
+                            "-c", f"core.hooksPath={os.devnull}", "-c", "commit.gpgsign=false", *changes.neutral_git_args(Path(root)), *args],
+                           capture_output=True, text=True, env=kb_projection._env("operator"), encoding="utf-8",
+                           errors="replace", timeout=120)
+    except OSError as exc:
+        raise Conflict(f"git could not be run ({type(exc).__name__})", "git_missing") from None
     if r.returncode != 0:
         raise ProjectsError(f"git {args[0]} failed: {(r.stderr or r.stdout).strip()[:200]}")
+
+
+def _sync_mcp(tenant_id: str, project_id: str, root: Path, active: Any) -> None:
+    """Record the hash of the MCP file the engine just wrote, but only while an active feature declares MCP servers; otherwise clear it.
+    A chat loads project MCP servers only against this record (release review round 2)."""
+    import hashlib  # noqa: PLC0415
+    try:
+        cat = catalogue(tenant_id)
+        needs = any(cat.fragments[f].mcp for f in F.closure(cat, sorted(active)) if f in cat.fragments)
+    except Exception:  # noqa: BLE001
+        needs = False
+    f = Path(root) / ".corvin" / "local" / "mcp.json"
+    sha = hashlib.sha256(f.read_bytes()).hexdigest() if needs and f.is_file() and not f.is_symlink() else None
+    registry.set_mcp(tenant_id=tenant_id, project_id=project_id, sha=sha)
 
 
 def _runner(tenant_id: str, root: Path):
@@ -451,6 +475,7 @@ def create_project(tenant_id: str, plan_id: str) -> dict[str, Any]:
             registry.unregister(tenant_id, rec.project_id)
             raise Conflict(f"creating the project failed ({type(exc).__name__}); it was taken off the list and its folder "
                            f"{loc} was left as it is - remove it or add it again", "create_failed") from None
+        _sync_mcp(tenant_id, rec.project_id, loc, plan.features)
         outcome = "applied"
     finally:
         try:
@@ -487,7 +512,7 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
             raise Conflict("a project with this id is already registered", "id_taken")
         _audit(tenant_id, "project.adopted", project_id=man["id"], template=man.get("template"))
         registry.register(tenant_id, man["id"], loc, man.get("template"))        # writes nothing in the project
-        registry.set_protection(tenant_id, man["id"], manifest.classification_of(man), manifest.access_of(man))
+        registry.set_protection(tenant_id, man["id"], manifest.DEFAULT_CLASS, manifest.DEFAULT_ACCESS)   # a manifest may not grant itself write access
         return get_project(tenant_id, man["id"])
     ttl = (title or loc.name).strip()
     if not 0 < len(ttl) <= 120:
@@ -589,8 +614,8 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
 def _protection_of(tenant_id: str, project_id: str, man: dict[str, Any]) -> dict[str, str]:
     """The tenant's own record wins; project.yaml is a copy the assistant could have edited (release review R5)."""
     prot = registry.protection(tenant_id, project_id) or {}
-    return {"classification": prot.get("classification") or manifest.classification_of(man),
-            "assistant_access": prot.get("assistant_access") or manifest.access_of(man)}
+    return {"classification": prot.get("classification") or manifest.DEFAULT_CLASS,          # never from project.yaml
+            "assistant_access": prot.get("assistant_access") or manifest.DEFAULT_ACCESS}
 
 
 def list_projects(tenant_id: str) -> dict[str, Any]:
@@ -676,12 +701,22 @@ def set_features(tenant_id: str, project_id: str, changes: dict[str, bool], *, a
                                                  mode="repair"), project_id)
     if "kb" in added:
         bound_engine(tenant_id)
+    if any(o.kind == "action" and o.action in ("git_init", "git_commit") for o in plan.pending()):
+        _need_git()
     for f in [*added, *removed]:                                              # audit-first, one record each
         _audit(tenant_id, "project.feature_toggled", project_id=project_id, feature=f, to="on" if f in want else "off",
                template=man.get("template"))
+    before = dict(man)
     man["features"] = {**man.get("features", {}), **{f: (f in want) for f in dict.fromkeys([*man.get("features", {}), *want, *active])}}
     manifest.write(root, man)
-    F.apply_plan(plan, root, {**ctx, "_root": str(root)}, _runner(tenant_id, root))
+    try:
+        F.apply_plan(plan, root, {**ctx, "_root": str(root)}, _runner(tenant_id, root))
+    except Exception as exc:  # noqa: BLE001 - project.yaml must not claim a feature that was never applied
+        manifest.write(root, before)
+        if isinstance(exc, ProjectsError):
+            raise
+        raise Conflict(f"the change could not be applied ({type(exc).__name__}); project.yaml was left as it was", "apply_failed") from None
+    _sync_mcp(tenant_id, project_id, root, want)
     out = get_project(tenant_id, project_id)
     out["warnings"] = external_warnings(tenant_id, sorted(want)) if "acs" in added else []
     return out
@@ -699,8 +734,11 @@ def repair(tenant_id: str, project_id: str, *, dry_run: bool = False) -> dict[st
     if dry_run or not pending:
         return summary
     _require_plugins(tenant_id, plan, project_id)
+    if any(o.kind == "action" and o.action in ("git_init", "git_commit") for o in pending):
+        _need_git()
     _audit(tenant_id, "project.repaired", project_id=project_id, template=man.get("template"), files=len(plan.pending()))
     res = F.apply_plan(plan, root, {**ctx, "_root": str(root)}, _runner(tenant_id, root))
+    _sync_mcp(tenant_id, project_id, root, manifest.active_features(man))
     return {**summary, "written": res["written"], "actions": res["actions"]}
 
 
@@ -1034,10 +1072,19 @@ def chat_attachment(tenant_id: str, session_id: str) -> dict[str, Any]:
         withheld = "the project folder is missing or its project.yaml is not usable"
     else:
         att = attachment._entry(tenant_id, session_id) or {}
-        if att.get("path") and os.path.abspath(att["path"]) != os.path.abspath(str(e.get("path"))):
+        if not att.get("path") or os.path.abspath(att["path"]) != os.path.abspath(str(e.get("path"))):
             withheld = "this chat was attached to a different folder with the same id; attach it again"
         else:
             withheld = _class_refusal(tenant_id, summ.get("classification", "internal"))
+            if withheld is None:
+                from . import chat_runtime  # noqa: PLC0415
+                rules = Path(str(e.get("path"))) / "CLAUDE.md"
+                try:
+                    txt = rules.read_text(encoding="utf-8", errors="replace") if rules.is_file() and not rules.is_symlink() else ""
+                except OSError:
+                    txt = ""
+                if txt and not chat_runtime.project_rules_allowed(tenant_id, txt):
+                    withheld = "the project's CLAUDE.md may not go to the assistant's engine (data-flow rule)"
     return {"session_id": session_id, "project_id": pid, "title": summ.get("title"), "withheld": withheld}
 
 
