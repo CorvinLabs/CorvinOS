@@ -134,7 +134,9 @@ export function ExplorerPanel({ projectId, title, onClose, onOpenChanges }: { pr
           <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Tasks in progress</h3>
           {tasks.isLoading && <Skeleton className="h-8 w-full" />}
           {tasks.data && running.length === 0 && <p className="text-sm text-muted-foreground" data-testid="explorer-tasks-empty">No task of this project is in progress.</p>}
-          {tasks.error && <p className="text-xs text-muted-foreground">The board could not be read just now.</p>}
+          {tasks.error && (tasks.error instanceof ApiError && tasks.error.status === 404
+            ? <p className="text-sm text-muted-foreground" data-testid="explorer-tasks-none">This project has no task board yet. Switch on the knowledge base in its settings to get one.</p>
+            : <p className="text-xs text-muted-foreground" data-testid="explorer-tasks-error">The board could not be read just now.</p>)}
           <ul className="space-y-1">
             {running.map((t) => (
               <li key={t.id}><Link to={`/app/initiatives?scope=project:${encodeURIComponent(projectId)}`} className="block truncate rounded border px-2 py-1 text-sm hover:bg-muted" data-testid="explorer-task">{t.title}</Link></li>

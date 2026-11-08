@@ -154,3 +154,20 @@ test("Escape closes the explorer and the Changes button swaps to the Changes pan
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("explorer-panel")).toHaveCount(0);
 });
+
+test("a project without a knowledge base says it has no task board instead of a read error", async ({ page }) => {
+  await setup(page);
+  await page.route(/\/v1\/console\/task-tracking\/items/, (r) => r.fulfill({ status: 404, json: { detail: "no such project" } }));
+  await open(page);
+  await expect(page.getByTestId("explorer-tasks-none")).toContainText("no task board yet");
+  await expect(page.getByTestId("explorer-tasks-error")).toHaveCount(0);
+  await expect(page.getByTestId("explorer-tasks-empty")).toHaveCount(0);
+});
+
+test("a board that fails for another reason says so plainly", async ({ page }) => {
+  await setup(page);
+  await page.route(/\/v1\/console\/task-tracking\/items/, (r) => r.fulfill({ status: 500, json: { detail: "boom" } }));
+  await open(page);
+  await expect(page.getByTestId("explorer-tasks-error")).toContainText("could not be read just now");
+  await expect(page.getByTestId("explorer-tasks-none")).toHaveCount(0);
+});
