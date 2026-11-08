@@ -29,6 +29,21 @@ from test_admin_route import _audit_events  # noqa: E402
 from test_admin_route import _sandbox as _console_sandbox  # noqa: E402
 
 
+
+
+def _quiesce_projector() -> None:
+    """Stop every projector thread the sandboxed console started, before this test writes to the KB with raw git.
+
+    GET /kb/status starts the tenant's projector (ensure_started, since 0105fa870); that thread heals and commits
+    in the same checkout while the test runs `git add`/`git commit` against it, so the two race on .git/index.lock
+    (T-0366: 4 of 30 runs failed before this). The next status call restarts it; no raw git command overlaps it.
+    Looks the module up in sys.modules: the sandbox re-imports it per test."""
+    kp = sys.modules.get("corvin_console.kb_projection")
+    if kp is None:
+        return
+    for t in list(kp._threads):
+        kp.stop(t)
+
 @__import__("contextlib").contextmanager
 def _sandbox(tmp):
     """The shared console sandbox, plus: every projector thread started inside it is stopped
@@ -175,6 +190,7 @@ class KbProjectionE2E(unittest.TestCase):
             p = _kb_file(self.kb / "kb" / "tasks", self.t2["id"])
             doc = L.parse(p)
             L.write_doc(p, L.fm_set(doc.text, "labels", "\n- escalated"), like=doc)
+            _quiesce_projector()                       # T-0366: no projector commit may hold index.lock now
             _sh("git", "add", "-A", cwd=self.kb)
             _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "escalate", cwd=self.kb)
             self._sync(client, csrf)
@@ -289,6 +305,7 @@ class KbProjectionE2E(unittest.TestCase):
                 self.assertIn(want, evs)
 
     def _commit(self, msg):
+        _quiesce_projector()
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A", cwd=self.kb)
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg, cwd=self.kb)
 
@@ -572,6 +589,7 @@ class KbPeriodicLoopE2E(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _commit(self, msg):
+        _quiesce_projector()
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A", cwd=self.kb)
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg, cwd=self.kb)
 
