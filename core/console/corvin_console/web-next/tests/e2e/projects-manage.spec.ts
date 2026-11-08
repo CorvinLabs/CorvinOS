@@ -65,3 +65,30 @@ test("Rename sends only the title; Move needs a second confirming click and then
   await expect.poll(() => moved?.location).toBe("/home/u/projects/new");
   await expect(page.getByTestId("manage-note")).toContainText("2 machine-local file(s) regenerated");
 });
+
+test("Use in a chat: attach sends the chosen chat, detach appears once the chat is attached to this project", async ({ page }) => {
+  await base(page);
+  await page.route(/\/v1\/console\/chat\/sessions$/, (r) => r.fulfill({ json: { tenant_id: "_default", count: 1, sessions: [
+    { sid: "chat1", chat_key: "k", title: "Video script chat", created_at: 1, last_active_at: 2, turn_count: 3, workdir: "/w" }] } }));
+  let attachedTo: string | null = null;
+  let body: { session_id?: string } | null = null;
+  await page.route(/\/v1\/console\/projects\/chat-attachment/, (r) => r.fulfill({ json: { session_id: "chat1", project_id: attachedTo, title: attachedTo } }));
+  await page.route(new RegExp(`/v1/console/projects/${ID}/attach$`), (r) => { body = r.request().postDataJSON(); attachedTo = ID; return r.fulfill({ json: { attached: true, note: "Applies from the chat's next message." } }); });
+  await page.route(/\/v1\/console\/projects\/detach$/, (r) => { attachedTo = null; return r.fulfill({ json: { attached: false } }); });
+  await page.goto(`/console/app/projects/${ID}?tab=settings`);
+  await expect(page.getByTestId("attach-submit")).toBeDisabled();             // no chat chosen
+  await page.getByTestId("attach-chat").selectOption("chat1");
+  await page.getByTestId("attach-submit").click();
+  await expect.poll(() => body?.session_id).toBe("chat1");
+  await expect(page.getByTestId("attach-note-chat")).toContainText("next message");
+  await expect(page.getByTestId("detach-submit")).toBeVisible();
+  await page.getByTestId("detach-submit").click();
+  await expect(page.getByTestId("attach-submit")).toBeVisible();
+});
+
+test("Use in a chat with no chats says how to get one", async ({ page }) => {
+  await base(page);
+  await page.route(/\/v1\/console\/chat\/sessions$/, (r) => r.fulfill({ json: { tenant_id: "_default", count: 0, sessions: [] } }));
+  await page.goto(`/console/app/projects/${ID}?tab=settings`);
+  await expect(page.getByTestId("attach-no-chats")).toContainText("Start one in the console");
+});

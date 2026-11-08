@@ -205,3 +205,19 @@ export function renameProject(id: string, title: string, csrf: string): Promise<
 export function moveProject(id: string, location: string, csrf: string): Promise<ProjectDetail & { repaired_files: number | null }> {
   return api(`/projects/${encodeURIComponent(id)}/move`, { method: "POST", body: { location }, csrf });
 }
+
+export interface ChatAttachment { session_id: string; project_id: string | null; title: string | null }
+
+/** Which project (if any) one console chat is attached to. */
+export function getChatAttachment(sessionId: string, signal?: AbortSignal): Promise<ChatAttachment> {
+  return api<ChatAttachment>(`/projects/chat-attachment?session_id=${encodeURIComponent(sessionId)}`, { signal });
+}
+
+/** Attaches the project to one chat: its rules and tools become available there; its files stay read-only. */
+export function attachProject(id: string, sessionId: string, csrf: string): Promise<{ attached: boolean; note: string }> {
+  return api(`/projects/${encodeURIComponent(id)}/attach`, { method: "POST", body: { session_id: sessionId }, csrf });
+}
+
+export function detachProject(sessionId: string, csrf: string): Promise<{ attached: boolean }> {
+  return api("/projects/detach", { method: "POST", body: { session_id: sessionId }, csrf });
+}

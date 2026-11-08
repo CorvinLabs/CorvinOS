@@ -3350,11 +3350,41 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
     for d in _web_workspace_roots(sess.tenant_id):
         args += ["--add-dir", d]
 
+    # ADR-2317: an attached project is made available - never made the cwd. Rules arrive through
+    # --add-dir + the CLAUDE.md-dirs env (set where the spawn env is built), the project's MCP block through
+    # an extra --mcp-config, and write access is withheld by deny rules (read-only unless a grant says otherwise).
+    _att = _project_attachment_parts(sess)
+    if _att:
+        args += ["--add-dir", _att["add_dir"]]
+        if _att.get("mcp_config"):
+            args += ["--mcp-config", _att["mcp_config"]]
+        args += ["--disallowedTools", *_att["deny"]]
+
     if model:
         args.extend(["--model", model])
     if resume:
         args.append("--continue")
     return args
+
+
+def _project_attachment_parts(sess: "WebChatSession") -> "dict[str, Any] | None":
+    """The attached project's spawn additions for this chat, judged by L34 against the OS engine; None if none."""
+    try:
+        from core.projects import attachment as _pa  # noqa: PLC0415
+        if _pa.attached(sess.tenant_id, sess.sid) is None:
+            return None
+        engine = _configured_os_engine(sess.tenant_id) or "claude_code"
+
+        def _l34_allows(text: str) -> bool:
+            from data_classification import classify_task  # type: ignore  # noqa: PLC0415
+            from spawn_gates import check_l34 as _l34, detector_on as _detector_on  # type: ignore  # noqa: PLC0415
+            cls = classify_task(text, detector=_detector_on(sess.tenant_id))
+            return _l34(engine, sess.tenant_id, classification=cls, channel=CHANNEL, chat_key=sess.chat_key) is None
+
+        return _pa.spawn_parts(sess.tenant_id, sess.sid, l34_allows=_l34_allows)
+    except Exception:  # noqa: BLE001 - an attachment problem must never break a chat turn
+        _log.warning("project attachment skipped", exc_info=True)
+        return None
 
 
 # ── ADR-0114 — Web-Chat Delegation Path ──────────────────────────────
@@ -8647,6 +8677,9 @@ async def _stream_turn_impl(
     # model's last answer, whatever the scope cap says (bg_scope.cli_env).
     if (_bgs_env := _load_bg_scope()) is not None and hasattr(_bgs_env, "cli_env"):
         _spawn_env.update(_bgs_env.cli_env(_spawn_env))
+    _att_parts = _project_attachment_parts(sess)          # ADR-2317: project rules reach the context, the project is never the cwd
+    if _att_parts:
+        _spawn_env.update(_att_parts["env"])
     # T-0230 — the spawn must go where the L35 gate looked. `check_console_spawn_or_refusal`
     # validates the host of the provider assigned to claude_code, so the env carries that
     # provider's route (the bridge does the same through the same function) and an inherited

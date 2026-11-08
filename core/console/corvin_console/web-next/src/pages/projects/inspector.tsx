@@ -20,7 +20,7 @@ import { explain } from "./wizard";
 import { TABS, conflictOf, healthHeadline, parseTab, rowState, tabGate, videoNameProblem, type Conflict, type Tab } from "./inspector-logic";
 import { ComputeTab, DirectoryTab, DocsTab, FeatureOff, KnowledgeTab, StructureTab, TasksTab, VideosTab } from "./inspector-tabs";
 import { stateOf } from "./encodings";
-import { RenameMoveSection } from "./manage";
+import { AttachSection, RenameMoveSection } from "./manage";
 
 const KEY = (id: string) => ["projects", "detail", id] as const;
 const HEALTH = (id: string) => ["projects", "health", id] as const;
@@ -322,10 +322,11 @@ function SettingsTab({ d, csrf }: { d: ProjectDetail; csrf: string }) {
       </div>
       <div className="space-y-2">
         <h2 className="font-medium">Open</h2>
-        <p className="text-sm text-muted-foreground">Shows the command to open this folder in your own editor. Attaching it to a chat comes later.</p>
+        <p className="text-sm text-muted-foreground">Shows the command to open this folder in your own editor. To use it in a console chat, attach it below.</p>
         <Button size="sm" variant="outline" onClick={() => openMut.mutate()} disabled={openMut.isPending} data-testid="open-project">Show command</Button>
         {opened && <code className="block break-all rounded bg-muted p-2 text-xs" data-testid="open-command">{opened}</code>}
       </div>
+      <AttachSection d={d} csrf={csrf} />
       <RenameMoveSection d={d} csrf={csrf} onChanged={() => { void qc.invalidateQueries({ queryKey: KEY(d.id) }); void qc.invalidateQueries({ queryKey: HEALTH(d.id) }); void qc.invalidateQueries({ queryKey: ["projects", "list"] }); }} />
       <RemoveSection projectId={d.id} csrf={csrf} onDone={() => void qc.invalidateQueries({ queryKey: ["projects", "list"] })} />
       {note && <p role="status" className="text-sm" data-testid="settings-note">{note}</p>}

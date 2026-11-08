@@ -242,3 +242,25 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   (they hold absolute paths); the response carries `repaired_files`. Audit: `project.renamed`, `project.moved`.
 - UI: "Add existing folder" on the list, Rename and Move in the Settings tab (Move needs a second confirming click).
   Browser proof: `tests/e2e/projects-manage.spec.ts`.
+
+
+## Chat attachment (T-0364, ADR-2317)
+
+A project can be attached to one console chat (Settings tab, "Use in a chat"; API `POST /projects/{id}/attach`,
+`POST /projects/detach`, `GET /projects/chat-attachment?session_id=`). The attachment is console state per chat in
+`<tenant_home>/projects/chat_attachments.json` (0o600, names a project id only - never a path, never inside the chat's
+working directory). The project is NEVER the CLI's cwd. On each spawn (`chat_runtime._build_args`,
+`_project_attachment_parts`; implementation `core/projects/attachment.py`) the CLI gets, verified with real runs (NOTE-0018):
+
+| Need | Mechanism |
+|---|---|
+| project rules in context | `--add-dir <project>` + env `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` (`--add-dir` alone only grants file access) |
+| project MCP servers | an extra `--mcp-config <project>/.mcp.json` (additive: the persona's servers stay; a symlinked or oversized file is not passed) |
+| read-only project | `--disallowedTools Write(//<abs>/**) Edit(//...) NotebookEdit(//...)` - the `//` form holds even under `--dangerously-skip-permissions`; the `/<abs>/**` form does NOT |
+| data flow | the project's `CLAUDE.md` passes L34 against the OS engine per spawn; a refusal or an error withholds the whole attachment |
+
+Boundaries (stated, not hidden): a Bash write is outside what a tool rule can see (same as the path gate); `--resume <id>` works
+from any cwd, so chat isolation rests on the console never passing another chat's id; Windows path form of the deny rule is unverified.
+Proof: `tests/e2e/test_projects_attach_e2e.py` (API half always; live half with `CLAUDE_LIVE_E2E=1` drives a real chat over the real
+WebSocket: rules in context, project MCP tool answers, a write into the project is refused, rules gone after detach, project tree
+byte-identical) and `tests/e2e/projects-manage.spec.ts`. Audit: `project.attached`, `project.detached`.

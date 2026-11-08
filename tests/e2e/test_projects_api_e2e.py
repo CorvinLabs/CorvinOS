@@ -305,7 +305,7 @@ class ProjectsApiE2E(unittest.TestCase):
             o = c.own.post(f"{_URL}/{pid}/open", headers=hdr).json()
             self.assertEqual(o["project"]["id"], pid)
             self.assertIn(str(proj), o["command"])
-            self.assertFalse(o["chat_attachment"])
+            self.assertTrue(o["chat_attachment"])
             before = _tree_hash(proj)
             r = c.own.delete(f"{_URL}/{pid}", headers=hdr)
             self.assertEqual(r.status_code, 200, r.text)

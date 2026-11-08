@@ -657,8 +657,8 @@ def open_project(tenant_id: str, project_id: str) -> dict[str, Any]:
         raise Conflict(f"the project is {summary['state']}: {summary.get('reason', '')}", "not_openable")
     _audit(tenant_id, "project.opened", project_id=project_id, template=summary.get("template") or None)
     path = summary["path"]
-    return {"project": summary, "command": f'cd "{path}"', "chat_attachment": False,
-            "note": "Opening sets the console context; attaching the project to a chat waits for ADR-2317."}
+    return {"project": summary, "command": f'cd "{path}"', "chat_attachment": True,
+            "note": "Opening shows the command for your own terminal. To use the project in a console chat, attach it to that chat."}
 
 
 def remove_from_registry(tenant_id: str, project_id: str) -> dict[str, Any]:
@@ -913,3 +913,45 @@ def _video_rows(root: Path, man: dict[str, Any]) -> list[dict[str, Any]]:
         rows.append({"name": name, "de": de == "yes", "en": en == "yes", "folder": folder,
                      "state": state, "folder_exists": bool(folder) and Path(folder).is_dir()})
     return rows
+
+
+# ── chat attachment (T-0364, ADR-2317) ───────────────────────────────────────────────────────
+
+def _require_chat(tenant_id: str, session_id: str) -> None:
+    from . import chat_runtime  # noqa: PLC0415 - heavy import, only on this path
+    from core.projects import attachment  # noqa: PLC0415
+    if not attachment.SID_RE.match(session_id or "") or chat_runtime.get_session(tenant_id, session_id) is None:
+        raise NotFound("no such chat")
+
+
+def attach_chat(tenant_id: str, project_id: str, session_id: str) -> dict[str, Any]:
+    """Attach the project to one chat of this tenant. The project is never the chat's cwd."""
+    from core.projects import attachment  # noqa: PLC0415
+    e = _entry(tenant_id, project_id)
+    if _summary(tenant_id, e)["state"] != "ok":
+        raise Conflict("only a project in state ok can be attached", "not_openable")
+    _require_chat(tenant_id, session_id)
+    _audit(tenant_id, "project.attached", project_id=project_id)
+    attachment.attach(tenant_id, session_id, project_id)
+    return {"project_id": project_id, "session_id": session_id, "attached": True,
+            "note": "Applies from the chat's next message. The project's files are read-only for the assistant; its rules and tools are available."}
+
+
+def detach_chat(tenant_id: str, session_id: str) -> dict[str, Any]:
+    from core.projects import attachment  # noqa: PLC0415
+    _require_chat(tenant_id, session_id)
+    pid = attachment.attached(tenant_id, session_id)
+    if pid is None:
+        return {"session_id": session_id, "attached": False}
+    _audit(tenant_id, "project.detached", project_id=pid)
+    attachment.detach(tenant_id, session_id)
+    return {"session_id": session_id, "attached": False, "project_id": pid}
+
+
+def chat_attachment(tenant_id: str, session_id: str) -> dict[str, Any]:
+    from core.projects import attachment  # noqa: PLC0415
+    _require_chat(tenant_id, session_id)
+    pid = attachment.attached(tenant_id, session_id)
+    e = registry.get(tenant_id, pid) if pid else None
+    return {"session_id": session_id, "project_id": pid if e else None,
+            "title": _summary(tenant_id, e).get("title") if e else None}

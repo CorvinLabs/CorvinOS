@@ -54,6 +54,11 @@ class RenameBody(BaseModel):
     title: str = Field(min_length=1, max_length=120)
 
 
+class AttachBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: str = Field(min_length=1, max_length=64)
+
+
 class MoveBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     location: str = Field(min_length=1, max_length=1000)
@@ -120,6 +125,21 @@ def create(body: CreateBody, rec: SessCsrf) -> dict:
 @router.post("/adopt", status_code=201)
 def adopt(body: AdoptBody, rec: SessCsrf) -> dict:
     return _call(svc.adopt_project, rec.tenant_id, body.location, project_id=body.project_id, title=body.title)
+
+
+@router.get("/chat-attachment")
+def chat_attachment(session_id: str, rec: Sess) -> dict:
+    return _call(svc.chat_attachment, rec.tenant_id, session_id)
+
+
+@router.post("/detach")
+def detach(body: AttachBody, rec: SessCsrf) -> dict:
+    return _call(svc.detach_chat, rec.tenant_id, body.session_id)
+
+
+@router.post("/{project_id}/attach")
+def attach(project_id: str, body: AttachBody, rec: SessCsrf) -> dict:
+    return _call(svc.attach_chat, rec.tenant_id, project_id, body.session_id)
 
 
 @router.get("/{project_id}")

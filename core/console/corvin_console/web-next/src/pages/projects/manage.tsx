@@ -1,9 +1,10 @@
 /** Adopt, rename and move (T-0362). Every action says what it will and will not touch before it runs. */
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
-import { adoptProject, moveProject, renameProject, type ProjectDetail } from "@/lib/api/projects";
+import { adoptProject, attachProject, detachProject, getChatAttachment, moveProject, renameProject, type ProjectDetail } from "@/lib/api/projects";
+import { listChatSessions } from "@/lib/api/sessions";
 import { explain } from "./wizard";
 
 export function AdoptSection() {
@@ -77,6 +78,56 @@ export function RenameMoveSection({ d, csrf, onChanged }: { d: ProjectDetail; cs
         )}
       </div>
       {msg && <p role="status" className="text-sm" data-testid="manage-note">{msg}</p>}
+    </div>
+  );
+}
+
+/** Attach this project to one console chat (and take it off again). */
+export function AttachSection({ d, csrf }: { d: ProjectDetail; csrf: string }) {
+  const [sid, setSid] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const chats = useQuery({ queryKey: ["chat", "sessions", "for-attach"], queryFn: ({ signal }) => listChatSessions(signal) });
+  const current = useQuery({
+    queryKey: ["projects", "chat-attachment", sid], enabled: !!sid,
+    queryFn: ({ signal }) => getChatAttachment(sid, signal),
+  });
+  const qc = useQueryClient();
+  const refresh = () => void qc.invalidateQueries({ queryKey: ["projects", "chat-attachment", sid] });
+  const attach = useMutation({
+    mutationFn: () => attachProject(d.id, sid, csrf),
+    onSuccess: (r) => { setMsg(r.note); refresh(); },
+    onError: (e) => setMsg(explain(e)),
+  });
+  const detach = useMutation({
+    mutationFn: () => detachProject(sid, csrf),
+    onSuccess: () => { setMsg("Detached. The chat no longer sees this project."); refresh(); },
+    onError: (e) => setMsg(explain(e)),
+  });
+  const list = chats.data?.sessions ?? [];
+  const attachedHere = current.data?.project_id === d.id;
+  return (
+    <div className="space-y-2" data-testid="attach-section">
+      <h2 className="font-medium">Use in a chat</h2>
+      <p className="text-sm text-muted-foreground">Attach this project to one console chat: the chat can follow the project's rules and use its tools. The assistant can read the project but not change its files. The chat keeps its own folder and history.</p>
+      {chats.isLoading ? <p className="text-sm text-muted-foreground">Loading chats…</p> : list.length === 0 ? (
+        <p className="text-sm text-muted-foreground" data-testid="attach-no-chats">There is no chat yet. Start one in the console, then come back here.</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <select className="rounded border bg-background px-2 py-1 text-sm" value={sid} onChange={(e) => { setSid(e.target.value); setMsg(null); }} aria-label="Chat" data-testid="attach-chat">
+            <option value="">Choose a chat…</option>
+            {list.map((c) => <option key={c.sid} value={c.sid}>{c.title || c.sid}</option>)}
+          </select>
+          {attachedHere ? (
+            <Button size="sm" variant="outline" onClick={() => detach.mutate()} disabled={detach.isPending} data-testid="detach-submit">Detach</Button>
+          ) : (
+            <Button size="sm" variant="outline" onClick={() => attach.mutate()} disabled={!sid || attach.isPending} data-testid="attach-submit">Attach</Button>
+          )}
+          {sid && current.data?.project_id && !attachedHere && (
+            <span className="text-xs text-muted-foreground" data-testid="attach-other">This chat is attached to another project; attaching replaces it.</span>
+          )}
+        </div>
+      )}
+      {msg && <p role="status" className="text-sm" data-testid="attach-note-chat">{msg}</p>}
     </div>
   );
 }
