@@ -231,6 +231,8 @@ from .routes import (
     datahub_api as datahub_route,
     # Corvin-Knowledge Marketplace Plugin API
     plugins_corvin_knowledge_api as plugins_corvin_knowledge_api_route,
+    # ADR-2315 - projects (registry, templates, features)
+    projects as projects_route,
     # ADR-2028 — Natural Language Intent Router (Phase 9a)
     intents as intents_route,
     # ADR-2029 — User-Centric CorvinOS Control Plane (Phase 9b)
@@ -490,6 +492,8 @@ router.include_router(marketplace_custom_repos_route.router,
 # tests/e2e/test_marketplace_single_install_route.py.
 # Corvin-Knowledge Marketplace Plugin API (Graph visualization, settings, sync)
 router.include_router(plugins_corvin_knowledge_api_route.router, tags=["console-corvin-knowledge"])
+# ADR-2315 — projects: /v1/console/projects (registry, plan/create/adopt, features, repair, open)
+router.include_router(projects_route.router, tags=["console-projects"])
 # ADR-2028 — Natural Language Intent Router (Phase 9a)
 router.include_router(intents_route.router, tags=["console-intents"])
 # ADR-2029 — User-Centric CorvinOS Control Plane (Phase 9b Streams 1-4)
