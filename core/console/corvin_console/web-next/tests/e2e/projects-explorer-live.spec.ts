@@ -49,6 +49,7 @@ test("a real turn typed in the browser shows up live in the explorer, in order, 
   const working = page.locator('[data-testid="explorer-agent"][data-state="working"]');
   await expect(working).toBeVisible({ timeout: 30_000 });
   const workingAt = Date.now();
+  expect(workingAt - sentAt, "Enter -> the Working card (the card must follow the turn's own start event, not the next reconnect)").toBeLessThan(5000);
   // 2. its tool call appears as a row, and a file row follows
   const toolRow = page.locator('[data-testid="explorer-row"][data-kind="tool"]', { hasText: /Wrote|Edited|Ran/ }).first();
   await expect(toolRow).toBeVisible({ timeout: 120_000 });

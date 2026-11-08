@@ -100,11 +100,28 @@ export type Msg =
   | { type: "end"; reason: string }
   | { type: "conn"; conn: Conn };
 
+/** The agents follow the events at once; a snapshot (every reconnect) replaces them with the server's truth. Waiting for the next snapshot
+ *  made the "Working" card appear up to 10 s late - found on the live console. */
+export function agentsAfter(agents: ActivityAgent[], e: ActivityEvent): ActivityAgent[] {
+  const sid = e.session_id;
+  if (!sid) return agents;
+  const i = agents.findIndex((a) => a.session_id === sid);
+  if (e.kind === "turn_started") {
+    const fresh: ActivityAgent = { session_id: sid, title: e.title ?? "", state: "working", since: e.ts, tool: null, detail: "", tools: 0 };
+    return i >= 0 ? agents.map((a, k) => (k === i ? fresh : a)) : [...agents, fresh];
+  }
+  if (i < 0) return agents;                                          // an event of a chat we never saw start: do not invent an agent
+  const a = agents[i];
+  if (e.kind === "tool_use") return agents.map((x, k) => (k === i ? { ...a, tool: e.name ?? null, detail: e.detail ?? "", tools: a.tools + 1 } : x));
+  if (e.kind === "turn_finished") return agents.map((x, k) => (k === i ? { ...a, state: "idle", tool: null, detail: "", finished: e.ts, ok: e.reason === "done" } : x));
+  return agents;
+}
+
 function applyEvent(s: State, e: ActivityEvent): State {
   if (e.seq <= s.lastSeq) return s;                                  // already seen (a reconnect repeats the tail)
   const titles = e.session_id && e.title ? { ...s.titles, [e.session_id]: e.title } : s.titles;
   const row = rowFor(e, titles);
-  return { ...s, lastSeq: e.seq, titles, rows: row ? addRow(s.rows, row) : s.rows };
+  return { ...s, lastSeq: e.seq, titles, agents: agentsAfter(s.agents, e), rows: row ? addRow(s.rows, row) : s.rows };
 }
 
 export function reduce(s: State, m: Msg): State {
@@ -117,7 +134,7 @@ export function reduce(s: State, m: Msg): State {
       const changedEpoch = s.epoch !== null && s.epoch !== d.epoch;
       let next: State = { ...s, epoch: d.epoch, agents: d.agents, watcher: d.watcher, conn: "live", gap: s.gap || d.gap };
       if (d.reset || changedEpoch) next = { ...next, rows: [], lastSeq: 0, restarted: true, gap: false };
-      for (const e of d.events) next = applyEvent(next, e);
+      for (const e of d.events) next = { ...applyEvent(next, e), agents: next.agents };            // the backlog fills the feed; the agents stay the server's
       if (d.seq > next.lastSeq && d.events.length === 0) next = { ...next, lastSeq: d.seq };
       return next;
     }

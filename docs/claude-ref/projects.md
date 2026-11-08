@@ -313,3 +313,36 @@ fixed full-width sheet. See "UI" below.
   in the wizard, and a menu that left the screen on a phone.
 - Proof: `tests/e2e/projects-roles.spec.ts`, `projects-chat-menu.spec.ts` (real chat session, stubbed project endpoints), unit tests `projects-roles`,
   `projects-changes`, `projects-wizard`.
+
+
+## Explorer: a live view of how the project is worked on (T-0374..T-0379, CONCEPT-0128, ADR-2320, REVIEW-0060)
+
+The project menu has one more entry, **Explorer**, and a live dot on its button while an agent works on the project (the dot polls the cheap snapshot
+every 8 s; it never opens a stream). The panel shows, top to bottom: a status line in words (Live, Reconnecting, paused, could not connect), **Now**
+(one card per chat working on the project: current tool, elapsed time, tool count; finished chats collapse to a line), **Tasks in progress** (the project's
+board items), **Activity** (newest first, All / Tools / Files, repeated tool rows collapse to "x N", ids link to Tasks and the Knowledge Graph).
+
+- **Channel** `core/projects/activity.py`: in memory, per (tenant, project), 300 events, lost on restart (`epoch` in every snapshot and in every event id
+  `<epoch>:<seq>` makes a restart visible; the panel says so). A closed field set: a tool event carries `detail` derived by ONE function
+  (`describe_tool`: Bash -> the program name, file tools -> the file NAME, WebFetch -> the host, everything else nothing) - never an input, a command body,
+  a URL query, a search text, a prompt, an answer or a file's content, even if a producer hands a raw dict to `publish`.
+- **Producers**: `chat_runtime.stream_turn` starts a `TurnTracker` for a chat attached to a project, the tool hook sits in `_stream_turn_impl` at the
+  `tool_use` block (where `parent_tool_use_id` is visible -> `sub`), the finish is published exactly once in the wrapper's `finally` (`done`, `error` or
+  `closed`); no error reaches the turn. A per-project git watcher (`working_changes_ex`, no line counting, 8 s git timeout, back-off, silent first look,
+  baseline kept across restarts) runs only while a stream is open.
+- **API** `GET /projects/{id}/activity[?after=<epoch>:<seq>]` (snapshot: agents, backlog, `reset`, `gap`, `oldest_seq`, `watcher`; starts no watcher) and
+  `GET /projects/{id}/activity/stream` (SSE: `retry`, `snapshot`, `activity`, `end`; `Last-Event-ID` resumes; 429 above 8 streams per tenant, 404 for another tenant).
+- **A stream lives 10 s** (`STREAM_LIFETIME_S`) and the browser reconnects: uvicorn force-cancels an in-flight response at its 15 s graceful timeout and never tells the app.
+  Measured on an isolated instance with the production timeout: one open explorer stream -> the server stops in 6.3 s, 0 forced cancels; one open `settings/stream`
+  (30 min lifetime, T-0380) -> 15.3 s and a forced cancel. Every restart of the live console shows that forced cancel today; the explorer is not the cause.
+- **Watcher and a busy host**: optional work yields to `loop_health.host_saturated()` - EXCEPT while an agent works on the project (found live: starting a real turn
+  stalls the loop 2 s, which marked the host saturated for 120 s and paused file watching exactly while the user watched). Idle + saturated -> paused, the panel says so.
+- **The assistant is told where the project is** (`chat_runtime._attached_project_block`): the attached project is NOT its working directory; files for it belong in
+  the project folder, by absolute path. Without that sentence "create a file in the project" landed in the chat's own folder (found by the live explorer test; the explorer
+  showed the tool call and, correctly, no file change).
+- **The panel's agents follow the events** (`activity-logic.ts::agentsAfter`), a snapshot replaces them. Waiting for the next snapshot made the Working card appear up to 15 s late.
+- **Proof**: `tests/e2e/test_projects_activity_e2e.py` (real HTTP + real git; watcher under load; privacy markers; mutation probes; a live half with the real CLI - the turn's tool
+  messages equal the explorer's rows in order and no marker leaks), `tests/e2e/projects-explorer.spec.ts` (served bundle, fake EventSource for deterministic states),
+  `tests/e2e/projects-explorer-live.spec.ts` (nothing stubbed: a real turn typed in the browser, the real stream; Write frame -> visible row, Enter -> Working card under 5 s),
+  unit tests `projects-activity`. Note: Starlette's `TestClient` buffers a whole response, so receipt latency is measured over a real socket (`httpx` against the running console) instead.
+- **Not covered, stated**: chats of other surfaces, ACS/worker runs (not linked to projects), persistence, per-user filtering, steering from the explorer.

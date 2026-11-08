@@ -66,6 +66,30 @@ describe("the feed", () => {
   });
 });
 
+describe("agents follow the events, not only the snapshots (found live: the card appeared 15 s late)", () => {
+  it("a turn start makes the chat a working agent at once, a tool call updates it, a finish makes it idle", () => {
+    let s = feed(INITIAL, [E(1, "turn_started", { title: "Fix VAT" }, 2000)]);
+    expect(s.agents).toHaveLength(1);
+    expect([s.agents[0].state, s.agents[0].title, s.agents[0].since, s.agents[0].tools]).toEqual(["working", "Fix VAT", 2000, 0]);
+    s = feed(s, [E(2, "tool_use", { name: "Bash", detail: "pytest" }, 2001), E(3, "tool_use", { name: "Edit", detail: "a.py" }, 2002)]);
+    expect([s.agents[0].tool, s.agents[0].detail, s.agents[0].tools]).toEqual(["Edit", "a.py", 2]);
+    s = feed(s, [E(4, "turn_finished", { reason: "done" }, 2003)]);
+    expect([s.agents[0].state, s.agents[0].tool, s.agents[0].ok, s.agents[0].finished]).toEqual(["idle", null, true, 2003]);
+    s = feed(s, [E(5, "turn_started", { title: "Fix VAT" }, 2010), E(6, "turn_finished", { reason: "error" }, 2011)]);
+    expect([s.agents[0].state, s.agents[0].ok]).toEqual(["idle", false]);
+    expect(s.agents).toHaveLength(1);                                                        // the same chat is one agent
+  });
+  it("two chats are two agents; an event of an unknown chat's tool does not invent one", () => {
+    const s = feed(INITIAL, [E(1, "turn_started", { title: "A", session_id: "a" } as never), E(2, "turn_started", { title: "B", session_id: "b" } as never)]);
+    expect(s.agents.map((a) => a.session_id).sort()).toEqual(["a", "b"]);
+    expect(feed(INITIAL, [E(1, "tool_use", { name: "Read", session_id: "ghost" } as never)]).agents).toEqual([]);
+  });
+  it("a snapshot is authoritative: it replaces what the events built", () => {
+    const s = feed(INITIAL, [E(1, "turn_started", { title: "A" })]);
+    expect(reduce(s, { type: "snapshot", data: snap({ seq: 1, agents: [] }) }).agents).toEqual([]);
+  });
+});
+
 describe("snapshots, restarts and gaps", () => {
   it("a snapshot sets agents and watcher, fills the backlog and the cursor", () => {
     const s = reduce(INITIAL, { type: "snapshot", data: snap({ seq: 2, events: [E(1, "turn_started"), E(2, "tool_use", { name: "Bash", detail: "git" })], agents: [agent("working")] }) });

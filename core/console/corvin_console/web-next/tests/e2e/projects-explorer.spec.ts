@@ -71,15 +71,15 @@ test("a turn is followed live: working card, tool rows collapse, file rows link,
   await setup(page);
   await open(page);
   await expect(page.getByTestId("explorer-empty")).toContainText("No agent has worked");
-  const agents = (state: string, extra: Record<string, unknown> = {}) => [{ session_id: "c1", title: "Fix VAT", state, since: Date.now() / 1000 - 30, tool: "Bash", detail: "pytest", tools: 3, ...extra }];
-  await push(page, "activity", ev(1, "turn_started", { title: "Fix VAT" }));
-  await push(page, "snapshot", SNAP({ seq: 1, events: [ev(1, "turn_started", { title: "Fix VAT" })], agents: agents("working") }));
+  await push(page, "activity", ev(1, "turn_started", { title: "Fix VAT" }));              // no snapshot: the event alone makes the card
   await expect(page.locator('[data-testid="explorer-agent"][data-state="working"]')).toContainText("Fix VAT");
-  await expect(page.getByTestId("agent-tool")).toContainText("Now: Bash pytest");
+  await expect(page.getByTestId("agent-tool")).toContainText("Thinking");
   await expect(page.getByTestId("agent-elapsed")).toContainText("Working for");
   await expect(page.getByTestId("explorer-announce")).toHaveText("Corvin started working in Fix VAT");
   for (let i = 2; i <= 4; i++) await push(page, "activity", ev(i, "tool_use", { name: "Read", detail: "invoice.py" }));
   await push(page, "activity", ev(5, "tool_use", { name: "Bash", detail: "pytest" }));
+  await expect(page.getByTestId("agent-tool")).toContainText("Now: Bash pytest");
+  await expect(page.getByTestId("agent-tool")).toContainText("4 tool calls");
   await push(page, "activity", ev(6, "file_changed", { path: "docs/kb/tasks/T-0012-vat.md", status: "modified", additions: 4, deletions: 1, area: "knowledge", links: [{ id: "T-0012", kind: "task" }] }));
   const texts = await page.getByTestId("explorer-row").evaluateAll((els) => els.map((e) => (e.textContent || "").replace(/\s+/g, " ").trim()));
   expect(texts[0]).toContain("Changed docs/kb/tasks/T-0012-vat.md +4 -1");
@@ -92,7 +92,6 @@ test("a turn is followed live: working card, tool rows collapse, file rows link,
   await page.locator('[data-testid="explorer-filter"][data-filter="tools"]').click();
   await expect(page.getByTestId("explorer-row")).toHaveCount(3);                               // started + Read x3 (one row) + Bash
   await push(page, "activity", ev(7, "turn_finished", { reason: "done" }));
-  await push(page, "snapshot", SNAP({ seq: 7, events: [], agents: agents("idle", { tool: null, finished: Date.now() / 1000, ok: true }) }));
   await expect(page.locator('[data-testid="explorer-agent"][data-state="idle"]')).toContainText("finished");
   await expect(page.getByTestId("explorer-announce")).toHaveText("Corvin finished in Fix VAT");
 });
