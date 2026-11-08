@@ -1020,9 +1020,12 @@ def project_changes(tenant_id: str, project_id: str, commit: Optional[str] = Non
     from core.projects import changes  # noqa: PLC0415
     root, _man = _load_project(tenant_id, project_id)
     try:
-        files = changes.commit_files(root, commit) if commit else changes.working_changes(root)
+        if commit:
+            files, cut = changes.commit_files(root, commit), False
+        else:
+            files, cut = changes.working_changes_ex(root)
         return {"project_id": project_id, "commit": commit, "files": files, "commits": changes.recent_commits(root),
-                "has_repository": bool(changes.repos(root)), "truncated": len(files) >= changes.MAX_FILES}
+                "has_repository": bool(changes.repos(root)), "truncated": cut or len(files) >= changes.MAX_FILES}
     except changes.ChangesError as exc:
         raise ProjectsError(str(exc)) from None
 

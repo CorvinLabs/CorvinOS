@@ -33,9 +33,9 @@ def _env() -> dict[str, str]:
     return e
 
 
-def _git(repo: Path, *args: str, check: bool = True) -> str:
+def _git(repo: Path, *args: str, check: bool = True, timeout: int = _GIT_TIMEOUT) -> str:
     r = subprocess.run(["git", "--no-pager", "-C", str(repo), "-c", "core.quotepath=false", "-c", "core.fsmonitor=false", *args],
-                       capture_output=True, timeout=_GIT_TIMEOUT, env=_env())
+                       capture_output=True, timeout=timeout, env=_env())
     if check and r.returncode != 0:
         raise ChangesError("git could not read the repository")
     return r.stdout.decode("utf-8", errors="replace")
@@ -91,33 +91,44 @@ def _count_lines(p: Path) -> Optional[int]:
 
 def working_changes(root: Path) -> list[dict[str, Any]]:
     """Files that differ from HEAD (and untracked ones), across the project's repositories."""
+    return working_changes_ex(root)[0]
+
+
+def working_changes_ex(root: Path, *, count_lines: bool = True, timeout: int = _GIT_TIMEOUT) -> tuple[list[dict[str, Any]], bool]:
+    """Like :func:`working_changes`, plus a ``truncated`` flag (the list was cut at ``MAX_FILES``). ``count_lines=False`` skips reading
+    untracked files for their line count (the live watcher polls often and must stay cheap). The cut is applied AFTER sorting by path, so
+    the same input always yields the same list."""
     files: list[dict[str, Any]] = []
     for prefix, repo in repos(root):
         head = _has_head(repo)
         nums: dict[str, tuple[Optional[int], Optional[int]]] = {}
         if head:
-            for line in _git(repo, "diff", "--numstat", "HEAD").splitlines():
+            for line in _git(repo, "diff", "--numstat", "HEAD", timeout=timeout).splitlines():
                 a, _, rest = line.partition("\t")
                 d, _, path = rest.partition("\t")
                 nums[path] = (int(a) if a.isdigit() else None, int(d) if d.isdigit() else None)
-        status = _git(repo, "status", "--porcelain=v1", "-z", "-uall")
-        for ent in [e for e in status.split("\0") if e]:
+        # `-z` prints a rename or copy as "XY new\0old\0": the old path is a SEPARATE field that must be consumed with its entry
+        parts = [e for e in _git(repo, "status", "--porcelain=v1", "-z", "-uall", timeout=timeout).split("\0") if e]
+        i = 0
+        while i < len(parts):
+            ent = parts[i]
+            i += 1
             code, path = ent[:2], ent[3:]
-            if " -> " in path:
-                path = path.split(" -> ")[-1]
+            if code[0] in "RC" or code[1] in "RC":
+                i += 1                                  # skip the old path
             st = "untracked" if code == "??" else "deleted" if "D" in code else "added" if "A" in code else "renamed" if "R" in code else "modified"
             add, dele = nums.get(path, (None, None))
             if st == "untracked" or (st == "added" and not head):
-                add, dele = _count_lines(repo / path), 0
+                add, dele = (_count_lines(repo / path) if count_lines else None), 0
             full = prefix + path
             files.append({"path": full, "status": st, "additions": add, "deletions": dele, "area": _area(full),
                           "ids": ids_in(Path(path).name)})
-            if len(files) >= MAX_FILES:
-                break
+    files.sort(key=lambda f: (f["area"] != "code", f["path"]))
+    truncated = len(files) > MAX_FILES
+    files = files[:MAX_FILES]
     for f in files:
         f["links"] = [{"id": i, "kind": _kind(i)} for i in f.pop("ids")]
-    files.sort(key=lambda f: (f["area"] != "code", f["path"]))
-    return files
+    return files, truncated
 
 
 def recent_commits(root: Path) -> list[dict[str, Any]]:

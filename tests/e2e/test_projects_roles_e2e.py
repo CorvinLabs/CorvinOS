@@ -156,6 +156,29 @@ class ChangeView(_Base):
             self.assertEqual(c.other.get(f"{_URL}/{pid}/changes").status_code, 404)
             self.assertEqual(c.other.get(f"{_URL}/{pid}/changes/file", params={"path": "README.md"}).status_code, 404)
 
+    def test_a_rename_is_one_entry_and_its_old_path_is_not_a_phantom_change(self):
+        """Review finding (2026-11-08): `git status -z` prints a rename as `R  new\\0old\\0`; the old path must be consumed with its entry."""
+        with self._ctx() as c:
+            pid, root = self._new(c)
+            (root / "src_old.py").write_text("print(1)\n")
+            _git(root, "add", "-A")
+            _git(root, "commit", "-qm", "add src_old")
+            _git(root, "mv", "src_old.py", "new.py")
+            files = c.own.get(f"{_URL}/{pid}/changes").json()["files"]
+            self.assertEqual(sorted((f["path"], f["status"]) for f in files), [("new.py", "renamed")], files)
+
+    def test_the_cut_is_deterministic_and_flagged(self):
+        from core.projects import changes
+        with self._ctx() as c:
+            pid, root = self._new(c)
+            for n in range(changes.MAX_FILES + 20):
+                (root / f"f{n:04d}.txt").write_text("x")
+            a, cut_a = changes.working_changes_ex(root, count_lines=False)
+            b, cut_b = changes.working_changes_ex(root, count_lines=False)
+            self.assertEqual((len(a), cut_a), (changes.MAX_FILES, True))
+            self.assertEqual([f["path"] for f in a], [f["path"] for f in b])
+            self.assertTrue(c.own.get(f"{_URL}/{pid}/changes").json()["truncated"])
+
     def test_reading_never_writes_or_locks_and_a_folder_without_git_is_explained(self):
         with self._ctx() as c:
             pid, root = self._new(c)
