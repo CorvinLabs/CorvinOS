@@ -69,3 +69,21 @@ describe("video names (the same rule the server enforces)", () => {
     expect(videoNameProblem("x".repeat(61))).toMatch(/at most 60/);
   });
 });
+
+import { TABS, tabGate } from "@/pages/projects/inspector-logic";
+describe("inspector tabs and their features", () => {
+  it("every tab of the design exists once: Overview, Structure, Docs, Knowledge, Tasks, Videos, Directory, Compute, Features, Settings", () => {
+    expect(TABS.map((t) => t.id)).toEqual(["overview", "structure", "docs", "knowledge", "tasks", "videos", "directory", "compute", "features", "settings"]);
+    expect(new Set(TABS.map((t) => t.id)).size).toBe(TABS.length);
+  });
+  it("a feature tab is shut while its feature is off and open while it is on", () => {
+    expect(tabGate("docs", ["core", "kb"])).toEqual({ open: true, feature: "kb" });
+    expect(tabGate("docs", ["core"])).toEqual({ open: false, feature: "kb" });
+    expect(tabGate("compute", ["core", "claude"])).toEqual({ open: false, feature: "acs" });
+  });
+  it("overview, structure, features and settings never depend on a feature", () => {
+    for (const t of ["overview", "structure", "features", "settings"] as const) {
+      expect(tabGate(t, [])).toEqual({ open: true, feature: null });
+    }
+  });
+});

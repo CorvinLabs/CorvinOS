@@ -17,7 +17,8 @@ import { useAuth } from "@/lib/auth";
 import { createVideo, getHealth, getProject, openProject, removeProjectFromList, repairProject, setFeatures, type FeatureRow, type ProjectDetail } from "@/lib/api/projects";
 import { cn } from "@/lib/utils";
 import { explain } from "./wizard";
-import { TABS, conflictOf, healthHeadline, parseTab, rowState, videoNameProblem, type Conflict, type Tab } from "./inspector-logic";
+import { TABS, conflictOf, healthHeadline, parseTab, rowState, tabGate, videoNameProblem, type Conflict, type Tab } from "./inspector-logic";
+import { ComputeTab, DirectoryTab, DocsTab, FeatureOff, KnowledgeTab, StructureTab, TasksTab, VideosTab } from "./inspector-tabs";
 import { stateOf } from "./encodings";
 
 const KEY = (id: string) => ["projects", "detail", id] as const;
@@ -80,9 +81,22 @@ export default function ProjectInspectorPage() {
               </button>
             ))}
           </nav>
-          {tab === "overview" && <OverviewTab projectId={d.id} videosOn={(d.active ?? []).includes("videos")} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />}
-          {tab === "features" && <FeaturesTab d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />}
-          {tab === "settings" && <SettingsTab d={d} csrf={csrf} />}
+          {(() => {
+            const gate = tabGate(tab, d.active ?? []);
+            if (!gate.open && gate.feature) return <FeatureOff d={d} feature={gate.feature} />;
+            switch (tab) {
+              case "overview": return <OverviewTab projectId={d.id} videosOn={(d.active ?? []).includes("videos")} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />;
+              case "structure": return <StructureTab id={d.id} />;
+              case "docs": return <DocsTab id={d.id} />;
+              case "knowledge": return <KnowledgeTab id={d.id} />;
+              case "tasks": return <TasksTab id={d.id} />;
+              case "videos": return <VideosTab id={d.id} />;
+              case "directory": return <DirectoryTab d={d} />;
+              case "compute": return <ComputeTab id={d.id} />;
+              case "features": return <FeaturesTab d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />;
+              case "settings": return <SettingsTab d={d} csrf={csrf} />;
+            }
+          })()}
         </>
       )}
     </div>

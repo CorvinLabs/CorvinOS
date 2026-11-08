@@ -478,6 +478,11 @@ def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
     if out["state"] != "ok":
         return out
     try:
+        man = manifest.load(Path(str(e["path"])))
+        out["directory_peers"] = [str(x) for x in ((man.get("directory") or {}).get("peers") or [])]
+    except (manifest.ManifestError, AttributeError, TypeError):
+        out["directory_peers"] = []
+    try:
         cat = catalogue(tenant_id)
     except Unavailable as exc:
         return {**out, "catalogue": {"available": False, "reason": str(exc)}}
@@ -763,3 +768,76 @@ def new_video(tenant_id: str, project_id: str, name: str) -> dict[str, Any]:
             "No knowledge base on this project: the folder and sources.md were created; no epic or tasks.")
     return {"video": {"name": name, "path": str(vdir), "languages": langs, "kb": kb_on,
                       "epic": epic_id, "tasks": tasks}, "note": note}
+
+
+# ── structure, docs and videos of one project (T-0359) ──────────────────────────────────────
+
+_STRUCTURE_SKIP = frozenset({".git", "__pycache__", "node_modules", ".venv"})
+_STRUCTURE_MAX = 400
+
+
+def structure(tenant_id: str, project_id: str, depth: int = 2) -> dict[str, Any]:
+    """What is in the project folder, for the inspector's Structure, Docs and Videos tabs. Read-only; symlinks are
+    listed but never followed; a directory listing stops at a fixed number of entries."""
+    root, man = _load_project(tenant_id, project_id)
+    depth = max(1, min(int(depth), 4))
+    entries: list[dict[str, Any]] = []
+    truncated = False
+
+    def walk(d: Path, rel: str, level: int) -> None:
+        nonlocal truncated
+        try:
+            children = sorted(d.iterdir(), key=lambda p: (not p.is_dir(), p.name))
+        except OSError:
+            return
+        for c in children:
+            if truncated:
+                return
+            if c.name in _STRUCTURE_SKIP:
+                continue
+            r = f"{rel}/{c.name}" if rel else c.name
+            if len(entries) >= _STRUCTURE_MAX:
+                truncated = True
+                return
+            if c.is_symlink():
+                entries.append({"path": r, "kind": "symlink", "size": None})
+                continue
+            if c.is_dir():
+                entries.append({"path": r, "kind": "dir", "size": None})
+                if level < depth:
+                    walk(c, r, level + 1)
+            else:
+                try:
+                    size = c.stat().st_size
+                except OSError:
+                    size = None
+                entries.append({"path": r, "kind": "file", "size": size})
+
+    walk(root, "", 1)
+    docs_dir = root / "docs" / "kb"
+    kb_counts: dict[str, int] = {}
+    if docs_dir.is_dir():
+        for sub in ("initiatives", "epics", "tasks"):
+            kb_counts[sub] = len(list((docs_dir / sub).glob("*.md"))) if (docs_dir / sub).is_dir() else 0
+    for sub in ("concepts", "decisions", "ideas", "implementation-plans", "notes", "adversarial-reviews"):
+        kb_counts[sub] = len(list((root / "docs" / sub).glob("*.md"))) if (root / "docs" / sub).is_dir() else 0
+    return {"project_id": project_id, "entries": entries, "truncated": truncated, "kb_counts": kb_counts,
+            "videos": _video_rows(root, man), "videos_root": str(_videos_root(tenant_id, root, man))}
+
+
+def _video_rows(root: Path, man: dict[str, Any]) -> list[dict[str, Any]]:
+    """The rows of videos/INDEX.md (one per video), each with whether its folder still exists."""
+    index = root / "videos" / "INDEX.md"
+    if not index.is_file() or index.is_symlink():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in index.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("|") or line.startswith("|---") or line.startswith("| video "):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 5:
+            continue
+        name, de, en, folder, state = cells[0], cells[1], cells[2], cells[3].strip("`"), cells[4]
+        rows.append({"name": name, "de": de == "yes", "en": en == "yes", "folder": folder,
+                     "state": state, "folder_exists": bool(folder) and Path(folder).is_dir()})
+    return rows

@@ -115,6 +115,12 @@ def get_project(project_id: str, rec: Sess) -> dict:
     return _call(svc.get_project, rec.tenant_id, project_id)
 
 
+@router.get("/{project_id}/structure")
+def get_structure(project_id: str, rec: Sess, depth: int = 2) -> dict:
+    """The project folder's entries (read-only), its knowledge-base counts and its video rows (T-0359)."""
+    return _call(svc.structure, rec.tenant_id, project_id, depth)
+
+
 @router.get("/{project_id}/health")
 def get_health(project_id: str, rec: Sess) -> dict:
     return _call(svc.health, rec.tenant_id, project_id)

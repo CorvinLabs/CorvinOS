@@ -131,6 +131,23 @@ export interface FeatureRow {
 export interface ProjectDetail extends ProjectSummary {
   catalogue?: { available: boolean; reason?: string; features?: FeatureRow[]; suggestions?: { feature: string; suggests: string }[] };
   warnings?: string[];
+  /** the peers this project may ask (directory.peers of project.yaml) */
+  directory_peers?: string[];
+}
+
+export interface StructureEntry { path: string; kind: "file" | "dir" | "symlink"; size: number | null }
+export interface VideoRow { name: string; de: boolean; en: boolean; folder: string; state: string; folder_exists: boolean }
+export interface ProjectStructure {
+  project_id: string;
+  entries: StructureEntry[];
+  truncated: boolean;
+  kb_counts: Record<string, number>;
+  videos: VideoRow[];
+  videos_root: string;
+}
+
+export function getStructure(id: string, signal?: AbortSignal): Promise<ProjectStructure> {
+  return api<ProjectStructure>(`/projects/${encodeURIComponent(id)}/structure`, { signal });
 }
 
 export interface FeatureRequest {

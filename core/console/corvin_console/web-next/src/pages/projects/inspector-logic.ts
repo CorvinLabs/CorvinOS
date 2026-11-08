@@ -6,14 +6,31 @@ import { ApiError } from "@/lib/api/client";
 import type { FeatureRow } from "@/lib/api/projects";
 import { featureLabel } from "./encodings";
 
-export type Tab = "overview" | "features" | "settings";
-export const TABS: { id: Tab; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "features", label: "Features" },
-  { id: "settings", label: "Settings" },
+export type Tab = "overview" | "structure" | "docs" | "knowledge" | "tasks" | "videos" | "directory" | "compute" | "features" | "settings";
+
+/** Each tab, and the feature it needs (null = always there). A tab whose feature is off shows "Feature off". */
+export const TABS: { id: Tab; label: string; feature: string | null }[] = [
+  { id: "overview", label: "Overview", feature: null },
+  { id: "structure", label: "Structure", feature: null },
+  { id: "docs", label: "Docs", feature: "kb" },
+  { id: "knowledge", label: "Knowledge", feature: "graph" },
+  { id: "tasks", label: "Tasks", feature: "tasks" },
+  { id: "videos", label: "Videos", feature: "videos" },
+  { id: "directory", label: "Directory", feature: "directory" },
+  { id: "compute", label: "Compute", feature: "acs" },
+  { id: "features", label: "Features", feature: null },
+  { id: "settings", label: "Settings", feature: null },
 ];
+
 export function parseTab(v: string | null): Tab {
   return TABS.some((t) => t.id === v) ? (v as Tab) : "overview";
+}
+
+/** Whether a tab's content may be shown, and which feature to offer when it may not. */
+export function tabGate(tab: Tab, active: string[]): { open: boolean; feature: string | null } {
+  const t = TABS.find((x) => x.id === tab);
+  if (!t || t.feature === null) return { open: true, feature: null };
+  return { open: active.includes(t.feature), feature: t.feature };
 }
 
 /** What one feature row offers: switch on/off, and why it cannot be switched on yet. */

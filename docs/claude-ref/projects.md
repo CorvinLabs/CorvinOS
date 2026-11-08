@@ -162,7 +162,7 @@ before the fix), `tests/e2e/projects-wizard.spec.ts` (the served bundle, network
 review, a pulled requirement, a refused plan, a conflict). The real create path is proven over HTTP in
 `tests/e2e/test_projects_api_e2e.py`; the browser spec never creates a real project.
 
-## Inspector (T-0359, partly built)
+## Inspector (T-0359)
 
 `/app/projects/:projectId` (a detail route: mounted in `web-next/src/App.tsx`, not PANELS; not in the sidebar).
 Built tabs: **Overview** (the server's health checks, headline never "all good" over a red check), **Features**
@@ -171,8 +171,19 @@ needs more asks first and then sends `accept_dependencies`; a feature whose tena
 switched on and says why), **Settings** (repair: preview, then apply; show the open command; remove from the list
 with a confirmation that the files stay). Pure decisions in `pages/projects/inspector-logic.ts` (unit-tested).
 
-**Not built yet** (T-0359 stays open until they exist, each with real data or an explained empty state): Structure,
-Docs, Knowledge, Tasks, Videos, Compute. Proof so far: `tests/unit/projects-inspector.test.ts` (9, incl. a mutation
+**Also built** (T-0359): Structure (`GET /projects/{id}/structure`, read-only, two levels, .git left out, symlinks listed
+never followed), Docs (knowledge-base counts from the same read), Knowledge (opens the project's graph with
+`?scope=project:<id>`), Tasks (the project's items from `GET /task-tracking/items?scope=project:<id>`, a link to the
+scoped board), Videos (the rows of videos/INDEX.md, each with whether its folder exists), Directory (the project's
+`directory.peers`, empty explained), Compute (the compute worker check from Overview health, and a note that runs are not
+linked to a project yet). A tab whose feature is off shows **Feature off** with the requirements and a switch that sends
+`accept_dependencies`. Tab gating: `pages/projects/inspector-logic.ts` (`TABS`, `tabGate`); bodies: `inspector-tabs.tsx`.
+Proof: `tests/e2e/test_projects_structure_e2e.py` (folder listing unchanged after reading; another tenant without
+structure), `tests/e2e/projects-tabs.spec.ts` (5 browser tests on the served bundle, incl. a tab with its feature on and
+the feature-off switch), `tests/unit/projects-inspector.test.ts` (13).
+
+**Not built yet** (T-0359 stays open until this is verified on the other tabs' data): nothing in the list above is
+missing; the open part is a Playwright run of every tab against a real created project (the stubs answer the shape). Proof so far: `tests/unit/projects-inspector.test.ts` (9, incl. a mutation
 probe on the dependants confirmation), `tests/e2e/projects-inspector.spec.ts` (6, served bundle, network stubbed).
 
 ## Scope of the Tasks board and the Knowledge Graph (T-0360)
