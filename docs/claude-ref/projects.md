@@ -264,3 +264,7 @@ from any cwd, so chat isolation rests on the console never passing another chat'
 Proof: `tests/e2e/test_projects_attach_e2e.py` (API half always; live half with `CLAUDE_LIVE_E2E=1` drives a real chat over the real
 WebSocket: rules in context, project MCP tool answers, a write into the project is refused, rules gone after detach, project tree
 byte-identical) and `tests/e2e/projects-manage.spec.ts`. Audit: `project.attached`, `project.detached`.
+
+**Project chip.** A chat's header shows a chip with the attached project's title (`pages/projects/chat-chip.tsx`, reads
+`GET /projects/chat-attachment`); it links to the project's Settings tab. No attachment, or a failing lookup, renders nothing - the
+chip never breaks the chat. Proof: `tests/e2e/projects-chat-chip.spec.ts` (a real chat session of the console; only the lookup is stubbed).

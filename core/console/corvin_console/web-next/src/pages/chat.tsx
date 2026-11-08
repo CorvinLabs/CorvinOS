@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ProjectChip } from "@/pages/projects/chat-chip";
 import { classifyDiffLines, diffCounts, DIFF_WITHHELD_TEXT } from "@/lib/diff-lines";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -1527,6 +1528,7 @@ function ChatPane({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <ProjectChip sid={sid} />
           {streaming && bgOpen > 0 && (
             <span
               className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground"
