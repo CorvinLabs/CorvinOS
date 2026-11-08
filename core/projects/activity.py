@@ -243,7 +243,12 @@ async def _watch(tenant: str, project: str, root_for: Any) -> None:
                     ch.state, ch.watcher = "off", None
                 return
         try:
-            if loop_health is not None and loop_health.host_saturated():       # optional work yields to a busy host
+            with _lock:
+                working = any(a["state"] == "working" for a in ch.agents.values())
+            # Optional work yields to a busy host - EXCEPT while an agent works on this project: that is exactly when the user watches, and
+            # starting a real turn is itself what stalls the loop and marks the host saturated (found live, 2026-11-08). One git status in a
+            # worker thread every few seconds is the cost.
+            if loop_health is not None and loop_health.host_saturated() and not working:
                 with _lock:
                     ch.state = "paused"
             else:

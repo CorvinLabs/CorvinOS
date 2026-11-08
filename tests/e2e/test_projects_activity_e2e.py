@@ -267,7 +267,7 @@ class ActivityLive(_Base):
             sid = (r0.json().get("session") or {}).get("sid") or r0.json().get("sid") or r0.json().get("session_id")
             self.assertEqual(client.post(f"{_URL}/{pid}/attach", json={"session_id": sid}, headers=hdr).status_code, 200)
             target = proj / "explorer-live.txt"
-            ask = f"Create the file {target} containing the text {self.MARK} using your Write tool. Then reply DONE."
+            ask = f"Create a file named explorer-live.txt in the project containing the text {self.MARK}. Then reply DONE."   # no path: how a user talks
             seen = []
             with client.websocket_connect(f"/v1/console/chat/sessions/{sid}/stream") as ws:
                 self.assertEqual(ws.receive_json()["type"], "ready")
@@ -280,7 +280,7 @@ class ActivityLive(_Base):
                     if m.get("type") == "done":
                         break
                     self.assertNotEqual(m.get("type"), "error", m)
-            self.assertTrue(target.exists(), "the assistant did not write the file")
+            self.assertTrue(target.exists(), "the assistant did not write the file INTO the attached project")
             snap = client.get(f"{_URL}/{pid}/activity").json()
             kinds = [e["kind"] for e in snap["events"]]
             self.assertEqual(kinds[0], "turn_started", kinds)
@@ -288,10 +288,55 @@ class ActivityLive(_Base):
             self.assertEqual(snap["events"][-1]["reason"], "done")
             tools = [e["name"] for e in snap["events"] if e["kind"] == "tool_use"]
             self.assertEqual(tools, seen, "the explorer's tool rows must equal the turn's own tool_use messages, in order")
-            self.assertIn("Write", tools)
-            w = [e for e in snap["events"] if e["kind"] == "tool_use" and e["name"] == "Write"][0]
-            self.assertEqual(w["detail"], "explorer-live.txt")
+            self.assertTrue({"Write", "Edit", "Bash"} & set(tools), f"no tool that can create a file was used: {tools}")   # the model picks the tool
+            for e in snap["events"]:
+                if e["kind"] == "tool_use" and e["name"] in ("Write", "Edit"):
+                    self.assertEqual(e["detail"], "explorer-live.txt")                    # the file NAME only
+                if e["kind"] == "tool_use" and e["name"] == "Bash":
+                    self.assertRegex(e["detail"], r"^[A-Za-z0-9._/-]{0,24}$")            # a program name, never a command body
             dumped = json.dumps(snap)
             for secret in (self.MARK, "Create the file", "using your Write tool", str(proj)):
                 self.assertNotIn(secret, dumped, f"{secret!r} leaked into the explorer's events")
             self.assertEqual([a["state"] for a in snap["agents"]], ["idle"])
+
+
+# ── the watcher under a "busy host" (found live: starting a real turn stalls the loop and marks the host saturated) ──
+
+class WatcherUnderLoad(unittest.TestCase):
+    """While an agent works on the project the user is watching: the watcher must keep going even when ``host_saturated()`` is true;
+    with nobody working it yields to the busy host (optional work)."""
+
+    def _run(self, saturated: bool, working: bool, wait_s: float = 4.5):
+        import asyncio
+        import tempfile
+        from unittest import mock
+        d = Path(tempfile.mkdtemp())
+        _git(d, "init", "-q")
+        (d / "a.txt").write_text("a")
+        _git(d, "add", "-A")
+        _git(d, "commit", "-qm", "base")
+        tenant, pid = "t-load", f"p-load-{int(saturated)}{int(working)}"
+        if working:
+            tr = activity.TurnTracker(tenant, pid, "chat-1", "Work")
+            tr.start()
+
+        async def go():
+            q = activity.subscribe(tenant, pid, lambda: str(d))
+            await asyncio.sleep(1.0)                                    # the first look (silent baseline)
+            (d / "new.txt").write_text("n")
+            await asyncio.sleep(wait_s)
+            activity.unsubscribe(tenant, pid, q)
+            await asyncio.sleep(0.2)
+        import corvin_console.loop_health as lh
+        with mock.patch.object(lh, "host_saturated", lambda now=None: saturated):
+            asyncio.run(go())
+        return [e for e in activity.snapshot(tenant, pid)["events"] if e["kind"] == "file_changed"]
+
+    def test_a_working_agent_keeps_the_watcher_going_on_a_saturated_host(self):
+        self.assertEqual([e["path"] for e in self._run(saturated=True, working=True)], ["new.txt"])
+
+    def test_an_idle_project_yields_to_a_saturated_host(self):
+        self.assertEqual(self._run(saturated=True, working=False), [])
+
+    def test_a_normal_host_watches_either_way(self):
+        self.assertEqual([e["path"] for e in self._run(saturated=False, working=False)], ["new.txt"])

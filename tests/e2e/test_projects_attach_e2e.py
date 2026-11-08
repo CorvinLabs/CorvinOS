@@ -81,6 +81,28 @@ class _Base(unittest.TestCase):
         return (b.get("session") or {}).get("sid") or b.get("sid") or b.get("session_id")
 
 
+class AttachPrompt(_Base):
+    def test_the_system_prompt_names_the_project_folder_and_what_the_assistant_may_do(self):
+        """Found by the live explorer test: without it "in the project" meant the chat's own folder."""
+        with _sandbox(self.tmp / "s") as (client, home, tenant_id, _emitter, _chain):
+            from corvin_console import chat_runtime
+            csrf = client.headers.get("X-CSRF-Token") or getattr(client, "csrf", None)
+            hdr = {"X-CSRF-Token": csrf} if csrf else {}
+            proj, pid = self._project(client, tenant_id, csrf)
+            sid = self._chat(client, csrf)
+            sess = chat_runtime.get_session(tenant_id, sid)
+            self.assertEqual(chat_runtime._attached_project_block(sess), "", "no project attached: no block")
+            client.post(f"{_URL}/{pid}/attach", json={"session_id": sid}, headers=hdr)
+            block = chat_runtime._attached_project_block(sess)
+            self.assertIn(str(proj.resolve()), block)
+            self.assertIn("read-only for you", block)
+            client.put(f"{_URL}/{pid}/settings", json={"assistant_access": "write", "confirm": True}, headers=hdr)
+            block = chat_runtime._attached_project_block(sess)
+            self.assertIn("You may create and change files in it.", block)
+            self.assertNotIn("read-only", block)
+            self.assertIn(block, chat_runtime._turn_system_prompt(sess))
+
+
 class AttachApi(_Base):
     def test_attach_detach_read_and_the_refusals(self):
         with _sandbox(self.tmp / "s") as (client, home, tenant_id, _emitter, _chain):

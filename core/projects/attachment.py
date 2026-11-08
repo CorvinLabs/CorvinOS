@@ -117,6 +117,7 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
     mcp = root / ".mcp.json"
     return {
         "project_id": pid,
+        "title": str(man.get("title") or pid)[:120],
         "add_dir": abs_root,
         "env": {RULES_ENV: "1"},
         "mcp_config": str(mcp) if _regular(mcp) else None,

@@ -3132,6 +3132,23 @@ def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str
         return ""
 
 
+def _attached_project_block(sess: "WebChatSession") -> str:
+    """ADR-2317: tell the assistant WHERE the attached project is and what it may do there. Without this the project is only an extra
+    directory the CLI may read: "create a file in the project" lands in the chat's own folder (found by the live explorer test)."""
+    try:
+        att = _project_attachment_parts(sess)
+        if not att:
+            return ""
+        can = ("You may create and change files in it." if att.get("access") == "write"
+               else "It is read-only for you: read it, but do not try to change its files.")
+        return (f"\n\n## Attached project\nThis chat is attached to the project \"{att.get('title', att['project_id'])}\" in the folder "
+                f"{att['add_dir']} (data class: {att.get('classification', 'internal')}). When the user asks you to create, change or look "
+                f"at something \"in the project\", work in that folder and use absolute paths; your own working folder is only for scratch "
+                f"files. {can}\n")
+    except Exception:  # noqa: BLE001 - an attachment problem must never break a turn
+        return ""
+
+
 def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
                         cel_brief: str = "", *, ledger_prompt: str | None = None,
                         with_ledger: bool = True) -> str:
@@ -3153,6 +3170,7 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
         + _user_profile_block()
         + _memory_index_block()
         + _knowledge_base_block(sess)
+        + _attached_project_block(sess)
         + _voice_audience_block()
         + _acs_directive_block(task_text)
         + _cel_brief_block(cel_brief)
