@@ -28,6 +28,7 @@ import {
   Package,
   Plug,
   Blocks,
+  FolderKanban,
   Server,
   Settings,
   ShieldCheck,
@@ -127,6 +128,7 @@ interface NavGroup {
 const _ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Brain,                  // vibe-engineering, models (ADR-0885)
   ListChecks,             // initiatives
+  FolderKanban,           // projects
   CheckCircle,            // quality gates
   Settings,               // settings
   Network,                // bridges
@@ -175,6 +177,8 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/vibe-engineering", label: "Learnings", icon: Brain },
       // "Tasks": the Task-Tracking SSOT (routes/task_tracking.py) + runtime activity — directly below Learnings. Sidebar label per operator request 2026-09-22; the route stays /app/initiatives for existing links.
       { to: "/app/initiatives", label: "Tasks", icon: ListChecks },
+      // Projects (ADR-2315): the tenant's project folders. Also a PANELS entry (registry.tsx).
+      { to: "/app/projects", label: "Projects", icon: FolderKanban },
     ],
   },
   // ONE marketplace (ADR-0892): plugins (browse + install + manage), skill

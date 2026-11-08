@@ -23,7 +23,7 @@ import {
   GitHubPage, SyncMonitorPage,
   QualityGatesPage, CorvinKnowledgePage, VideoProducerPage,
   DataHubUnifiedPage,
-  OTELTelemetryPage, VibeEngineeringPage, InitiativesPage, ModelsPage,
+  OTELTelemetryPage, VibeEngineeringPage, InitiativesPage, ProjectsPage, ModelsPage,
   ControlIntentRouterPage, ControlPlanePluginsPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
   LayerForgeAnalyticsPage,
 } from "@/lazy-pages";
@@ -106,6 +106,9 @@ export const PANELS: ConsolePanel[] = [
   // Initiatives board: live status of running/finished initiative tasks, directly
   // below Learnings in the sidebar (operator request 2026-09-22).
   rc("initiatives", "Tasks", InitiativesPage, { nav: { label: "Tasks", icon: "ListChecks", group: "primary" } }),
+  // Projects: folders the user owns, indexed per tenant (routes/projects.py). Registered here AND in
+  // NAV_GROUPS (layout.tsx) - tests/unit/panel-nav-wiring.test.ts fails on only one of the two.
+  rc("projects", "Projects", ProjectsPage, { nav: { label: "Projects", icon: "FolderKanban", group: "primary" } }),
   rc("dashboard", "Dashboard", DashboardPage, { nav: { label: "Dashboard", icon: "LayoutDashboard", group: "primary" } }),
   rc("settings", "Settings", SettingsPage, { nav: { label: "Settings", icon: "Settings", group: "system" } }),
   rc("compute", "Compute", ComputePage, { nav: { label: "Compute", icon: "Gauge", group: "build" } }),

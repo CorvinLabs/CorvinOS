@@ -4,7 +4,7 @@ A **project** is a directory the user owns, with a `project.yaml`. CorvinOS keep
 Losing the index loses no project. Design: `Corvin-Knowledge` CONCEPT-0126; decisions ADR-2315
 (project object), ADR-2316 (several KBs, scope), ADR-2317 (chat context); plan PLAN-0970.
 Status 2026-11-08: registry, manifest, fragment engine and the API exist (T-0351, T-0352, T-0355); the
-template catalogue is the first-party plugin `project_templates` (T-0354, T-0356, in Corvin-Marketplace); the console (E-052) is the next task.
+template catalogue is the first-party plugin `project_templates` (T-0354, T-0356, in Corvin-Marketplace, published); the console's Projects panel exists as a list (T-0357); wizard, inspector, scope selector, videos action and doctor (T-0358 to T-0362) are next.
 
 ## Where things live
 
@@ -116,3 +116,33 @@ whose health shows what is missing. A project can never enable a tenant plugin: 
 `project.registry_removed`, `project.blocked` (a refusal; best effort). Allowlist: `project_id`,
 `feature`, `to`, `template`, `files` (count), `reason_class`, `outcome`, `tenant_id` - never a path.
 `project.feature_files_removed` and `project.video_created` are registered with their tasks.
+
+## Console panel (T-0357)
+
+`/app/projects` (sidebar: Projects, below Tasks). **Two registrations** are needed and both exist: `PANELS`
+(`web-next/src/panels/registry.tsx`, `rc("projects", ...)`) mounts the route, `NAV_GROUPS`
+(`web-next/src/components/layout.tsx`) draws the sidebar entry; `tests/unit/panel-nav-wiring.test.ts` fails on
+only one of the two. The page is a DIRECTORY (`src/pages/projects/`); a sibling `pages/projects.tsx` would shadow
+it silently (`tests/unit/page-dir-shadow.test.ts`).
+
+| Piece | Path |
+|---|---|
+| Page (list, empty state, error) | `web-next/src/pages/projects/index.tsx` |
+| Mappings (state, feature names, empty-state text, sorting) | `web-next/src/pages/projects/encodings.ts` (unit-tested; no mapping lives in the component) |
+| API client | `web-next/src/lib/api/projects.ts` |
+| Unit tests | `tests/unit/projects-encodings.test.ts`, `tests/unit/projects-page.test.tsx` |
+| Browser test (real bundle, network stubbed) | `tests/e2e/projects-panel.spec.ts` |
+
+Behaviour: a project whose folder is gone is SHOWN as "Directory missing" with the server's reason and sorted
+first - never dropped; the cards show readable feature names (`core` is not a chip), what the template offers but
+the project switched off, the template and the folder. With no project the empty state explains the folder model
+("removing it from this list never deletes a file") and, when the template plugin is not enabled for the tenant,
+names that and links to the Marketplace. There is deliberately NO "New project" / "Adopt" button yet: a button
+that does nothing is a stub on a production surface; the wizard (T-0358) adds it. UI text is English and carries
+no ADR id and no plugin index id (asserted).
+
+To run the browser test against the live console (it only stubs and reads): `CORVIN_E2E_ALLOW_LIVE=1
+CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test -c playwright.config.ts
+tests/e2e/projects-panel.spec.ts --project=chromium`. The console is `data-theme` driven, so the theme test sets
+`localStorage["corvin-theme"]` (plus `corvin-dark-default-v2`, or the boot script migrates light to dark) and asserts
+the rendered `data-theme` first - a run that renders one theme twice proves nothing.

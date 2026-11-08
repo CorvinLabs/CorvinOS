@@ -158,6 +158,12 @@ export const InitiativesPage = React.lazy(() =>
   import("@/pages/tasks").then((m) => ({ default: m.default }))
 );
 
+// Projects - the tenant's projects (folders the user owns, indexed in the registry; routes/projects.py).
+// A page DIRECTORY: no sibling pages/projects.tsx may exist (file beats directory silently).
+export const ProjectsPage = React.lazy(() =>
+  import("@/pages/projects").then((m) => ({ default: m.default }))
+);
+
 
 
 
