@@ -146,3 +146,18 @@ CONSOLE_BASE_URL=http://127.0.0.1:8765/console npx playwright test -c playwright
 tests/e2e/projects-panel.spec.ts --project=chromium`. The console is `data-theme` driven, so the theme test sets
 `localStorage["corvin-theme"]` (plus `corvin-dark-default-v2`, or the boot script migrates light to dark) and asserts
 the rendered `data-theme` first - a run that renders one theme twice proves nothing.
+
+## New-project wizard (T-0358)
+
+"New project" on `/app/projects` opens a four-step dialog (`web-next/src/pages/projects/wizard-dialog.tsx`):
+template, name and optional folder, features (requirements shown, a missing tenant plugin named), review. The
+review is the server's **plan** (`POST /v1/console/projects/plan`): nothing is written until "Create", which sends
+the plan id (`POST /v1/console/projects`). Create stays disabled unless the plan says `ready`; a conflict or a
+missing plugin is shown in the review, a refusal (path rule, unknown template) is shown as the server's own
+sentence and does not advance. Every decision lives in `pages/projects/wizard.ts` (unit-tested): switching a feature
+on pulls in its requirements first, core is never a choice, an empty folder means the server default.
+
+Proof: `tests/unit/projects-wizard.test.ts` (incl. a mutation: dropping the toggled feature fails it, which it did
+before the fix), `tests/e2e/projects-wizard.spec.ts` (the served bundle, network stubbed: four steps, gating,
+review, a pulled requirement, a refused plan, a conflict). The real create path is proven over HTTP in
+`tests/e2e/test_projects_api_e2e.py`; the browser spec never creates a real project.

@@ -6,8 +6,10 @@
  * sample data: no project, no card. Creating, inspecting and opening arrive as their own views.
  */
 import { Link } from "react-router-dom";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Blocks, FolderKanban, RefreshCw } from "lucide-react";
+import { AlertTriangle, Blocks, FolderKanban, Plus, RefreshCw } from "lucide-react";
+import { NewProjectDialog } from "./wizard-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -68,6 +70,7 @@ function ProjectCard({ p }: { p: ProjectSummary }) {
 }
 
 export default function ProjectsPage() {
+  const [wizardOpen, setWizardOpen] = useState(false);
   const projects = useQuery({ queryKey: PROJECTS_KEY, queryFn: ({ signal }) => listProjects(signal), refetchInterval: 10_000 });
   const templates = useQuery({ queryKey: TEMPLATES_KEY, queryFn: ({ signal }) => listTemplates(signal), staleTime: 30_000 });
 
@@ -88,11 +91,18 @@ export default function ProjectsPage() {
             </p>
           )}
         </div>
-        <Button variant="outline" size="sm" onClick={() => { void projects.refetch(); void templates.refetch(); }}
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={() => setWizardOpen(true)} disabled={templates.data?.available === false}
+            data-testid="new-project-button">
+            <Plus className="mr-2 h-4 w-4" aria-hidden /> New project
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => { void projects.refetch(); void templates.refetch(); }}
           disabled={projects.isFetching} aria-label="Refresh projects">
           <RefreshCw className={cn("mr-2 h-4 w-4", projects.isFetching && "animate-spin")} aria-hidden /> Refresh
         </Button>
+        </div>
       </header>
+      <NewProjectDialog open={wizardOpen} onOpenChange={setWizardOpen} />
 
       {loadError && (
         <div role="alert" className="rounded-lg border border-red-500/40 p-3 text-sm text-red-700 dark:text-red-300" data-testid="projects-error">

@@ -1,0 +1,183 @@
+/**
+ * New project - a four-step dialog: template, name and location, features, review.
+ * The review IS the server's plan (nothing is written until "Create"). Every decision lives in wizard.ts.
+ */
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { useAuth } from "@/lib/auth";
+import { createProject, listTemplates, planProject, type ProjectPlan, type TemplateInfo } from "@/lib/api/projects";
+import { featureLabel } from "./encodings";
+import { INITIAL, canAdvance, choosable, chooseTemplate, explain, featureNames, planRequest, templateById, toggleFeature,
+  type WizardState } from "./wizard";
+
+const TEMPLATES_KEY = ["projects", "templates"] as const;
+const PROJECTS_KEY = ["projects", "list"] as const;
+
+export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const { session } = useAuth();
+  const csrf = session?.csrf_token ?? "";
+  const qc = useQueryClient();
+  const [s, setS] = useState<WizardState>(INITIAL);
+  const [plan, setPlan] = useState<ProjectPlan | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
+
+  const cat = useQuery({ queryKey: TEMPLATES_KEY, queryFn: ({ signal }) => listTemplates(signal), enabled: open });
+  const tpl: TemplateInfo | undefined = useMemo(() => templateById(cat.data, s.templateId), [cat.data, s.templateId]);
+
+  const planMut = useMutation({
+    mutationFn: (req: ReturnType<typeof planRequest>) => planProject(req, csrf),
+    onSuccess: (p) => { setPlan(p); setError(null); setS((x) => ({ ...x, step: 4 })); },
+    onError: (e) => setError(explain(e)),
+  });
+  const close = (o: boolean) => { if (!o) { setS(INITIAL); setPlan(undefined); setError(null); } onOpenChange(o); };
+  const createMut = useMutation({
+    mutationFn: () => createProject(plan!.plan_id, csrf),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: PROJECTS_KEY });
+      close(false);
+    },
+    onError: (e) => setError(explain(e)),
+  });
+
+  const set = (patch: Partial<WizardState>) => { setError(null); setS((x) => ({ ...x, ...patch })); };
+  const next = () => {
+    if (s.step === 3) { setPlan(undefined); planMut.mutate(planRequest(s)); return; }
+    if (canAdvance(s, plan)) setS((x) => ({ ...x, step: (x.step + 1) as WizardState["step"] }));
+  };
+  const back = () => { setError(null); setS((x) => ({ ...x, step: (x.step - 1) as WizardState["step"] })); };
+
+  return (
+    <Dialog open={open} onOpenChange={close}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl" data-testid="new-project-wizard">
+        <DialogHeader>
+          <DialogTitle>New project</DialogTitle>
+          <DialogDescription data-testid="wizard-step">Step {s.step} of 4</DialogDescription>
+        </DialogHeader>
+
+        {s.step === 1 && (
+          <section className="space-y-3" aria-label="Choose a template">
+            {cat.isLoading && <p className="text-sm text-muted-foreground">Loading templates…</p>}
+            {cat.data && !cat.data.available && (
+              <p className="text-sm text-red-700 dark:text-red-300" data-testid="wizard-unavailable">{cat.data.reason}</p>
+            )}
+            {(cat.data?.templates ?? []).map((t) => (
+              <button key={t.id} type="button" data-testid="template-option" data-template={t.id}
+                aria-pressed={s.templateId === t.id}
+                onClick={() => set(chooseTemplate(s, cat.data, t.id))}
+                className={`w-full rounded-lg border p-3 text-left ${s.templateId === t.id ? "border-primary bg-primary/5" : "border-border"}`}>
+                <div className="font-medium">{t.title}</div>
+                <div className="text-sm text-muted-foreground">{t.description}</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  On by default: {t.features.filter((f) => f !== "core").map(featureLabel).join(", ") || "nothing else"}
+                </div>
+              </button>
+            ))}
+          </section>
+        )}
+
+        {s.step === 2 && (
+          <section className="space-y-3" aria-label="Name and location">
+            <label className="block space-y-1 text-sm">
+              <span>Project name</span>
+              <Input data-testid="wizard-title" value={s.title} maxLength={120} autoFocus
+                onChange={(e) => set({ title: e.target.value })} placeholder="e.g. Plumbline explainer" />
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span>Folder (optional)</span>
+              <Input data-testid="wizard-location" value={s.location} onChange={(e) => set({ location: e.target.value })}
+                placeholder={cat.data?.projects_root ? `${cat.data.projects_root}/<name>` : "inside your projects folder"} />
+              <span className="block text-xs text-muted-foreground">Empty = a new folder named after the project, inside your projects folder.</span>
+            </label>
+          </section>
+        )}
+
+        {s.step === 3 && tpl && (
+          <section className="space-y-3" aria-label="Features">
+            <p className="text-sm text-muted-foreground">Switch features on or off. Each one can be changed later; switching off never deletes a file.</p>
+            <ul className="space-y-2">
+              {choosable(tpl).map((id) => {
+                const on = s.features.includes(id);
+                const f = cat.data?.features.find((x) => x.id === id);
+                return (
+                  <li key={id}>
+                    <label className="flex items-start gap-3 rounded-lg border p-3">
+                      <input type="checkbox" className="mt-1" data-testid="feature-toggle" data-feature={id}
+                        checked={on} onChange={() => set(toggleFeature(s, cat.data, id))} />
+                      <span className="min-w-0">
+                        <span className="block font-medium">{featureLabel(id)}</span>
+                        {f?.description && <span className="block text-xs text-muted-foreground">{f.description}</span>}
+                        {f && f.requires.filter((r) => r !== "core").length > 0 && (
+                          <span className="block text-xs text-muted-foreground" data-testid="feature-requires">
+                            Needs: {f.requires.filter((r) => r !== "core").map(featureLabel).join(", ")}
+                          </span>
+                        )}
+                        {f?.plugins.filter((p) => p.state !== "enabled").map((p) => (
+                          <span key={p.plugin} className="block text-xs text-amber-700 dark:text-amber-300" data-testid="feature-plugin-missing">
+                            Needs the {p.plugin.replace(/_/g, " ")} plugin, which is {p.state} for this tenant.
+                          </span>
+                        ))}
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" data-testid="docs-separate" checked={s.docsMode === "nested"}
+                onChange={(e) => set({ docsMode: e.target.checked ? "nested" : "plain" })} />
+              Keep the knowledge base in its own git repository (recommended)
+            </label>
+          </section>
+        )}
+
+        {s.step === 4 && plan && (
+          <section className="space-y-3 text-sm" aria-label="Review" data-testid="wizard-review">
+            <p>Nothing is written until you press Create.</p>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+              <dt className="text-muted-foreground">Project</dt><dd data-testid="review-title">{plan.title} <span className="font-mono text-xs">({plan.project_id})</span></dd>
+              <dt className="text-muted-foreground">Folder</dt><dd className="break-all font-mono text-xs" data-testid="review-location">{plan.location}</dd>
+              <dt className="text-muted-foreground">Features</dt><dd data-testid="review-features">{featureNames(plan.features).join(", ") || "none"}</dd>
+              <dt className="text-muted-foreground">Files</dt><dd data-testid="review-files">{plan.files.length} to write</dd>
+              <dt className="text-muted-foreground">Git</dt><dd>{plan.docs_mode === "nested" ? "knowledge base in its own repository" : "one repository"}</dd>
+            </dl>
+            {plan.pulled.length > 0 && (
+              <p data-testid="review-pulled" className="text-muted-foreground">
+                Added because they are needed: {plan.pulled.map(featureLabel).join(", ")}.
+              </p>
+            )}
+            {plan.plugins.filter((p) => p.state !== "enabled").map((p) => (
+              <p key={p.plugin} className="text-red-700 dark:text-red-300" data-testid="review-plugin-missing">
+                The {p.plugin.replace(/_/g, " ")} plugin is {p.state}. Enable it in the Marketplace first.
+              </p>
+            ))}
+            {plan.conflicts.map((c) => (
+              <p key={c} className="text-red-700 dark:text-red-300" data-testid="review-conflict">{c}</p>
+            ))}
+            {plan.warnings.map((w) => (
+              <p key={w} className="text-amber-700 dark:text-amber-300" data-testid="review-warning">{w}</p>
+            ))}
+          </section>
+        )}
+
+        {error && <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="wizard-error">{error}</p>}
+
+        <div className="flex items-center justify-between gap-2 pt-2">
+          <Button variant="ghost" onClick={back} disabled={s.step === 1 || planMut.isPending || createMut.isPending}>Back</Button>
+          {s.step < 4 && (
+            <Button onClick={next} disabled={!canAdvance(s, plan) || planMut.isPending} data-testid="wizard-next">
+              {s.step === 3 ? (planMut.isPending ? "Planning…" : "Review") : "Next"}
+            </Button>
+          )}
+          {s.step === 4 && (
+            <Button onClick={() => createMut.mutate()} disabled={!plan?.ready || createMut.isPending} data-testid="wizard-create">
+              {createMut.isPending ? "Creating…" : "Create project"}
+            </Button>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

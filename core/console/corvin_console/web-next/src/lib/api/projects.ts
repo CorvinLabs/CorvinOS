@@ -71,3 +71,45 @@ export function listProjects(signal?: AbortSignal): Promise<ProjectList> {
 export function listTemplates(signal?: AbortSignal): Promise<TemplateCatalogue> {
   return api<TemplateCatalogue>("/projects/templates", { signal });
 }
+
+export interface PlanFile { path: string; owner: string; kind: "seed" | "generated" | "local"; status: string }
+export interface PlanAction { action: string; owner: string; status: string }
+export interface PlanPlugin { plugin: string; state: PluginNeed["state"] }
+
+/** The preview of a project: nothing is written until `createProject` gets its plan id. */
+export interface ProjectPlan {
+  plan_id: string;
+  project_id: string;
+  title: string;
+  template: string;
+  docs_mode: "nested" | "plain";
+  location: string;
+  features: string[];
+  /** Features added because an active one requires them (the user should see them). */
+  pulled: string[];
+  files: PlanFile[];
+  actions: PlanAction[];
+  warnings: string[];
+  conflicts: string[];
+  plugins: PlanPlugin[];
+  suggestions: { feature: string; suggests: string }[];
+  ready: boolean;
+  expires_in_s: number;
+}
+
+export interface PlanRequest {
+  template: string;
+  title: string;
+  project_id?: string;
+  location?: string;
+  features?: string[];
+  docs_mode?: "nested" | "plain";
+}
+
+export function planProject(body: PlanRequest, csrf: string): Promise<ProjectPlan> {
+  return api<ProjectPlan>("/projects/plan", { method: "POST", body, csrf });
+}
+
+export function createProject(planId: string, csrf: string): Promise<{ project: ProjectSummary; written: string[]; actions: string[] }> {
+  return api("/projects", { method: "POST", body: { plan_id: planId }, csrf });
+}
