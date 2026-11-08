@@ -8,6 +8,7 @@ plugin, add an entry there; to stop bundling one, remove it (already-installed c
 |---|---|---|---|---|
 | 1 | CorvinTV (formerly Video Producer) | `plugin:buildin-media-corvintv` | 1.7.0 | **Yes** — first-party (`buildin` tier: origin `vetted`, `requires_consent: false`, `pii_risk: medium`), so boot installs AND enables it; the registry id stays `video_producer` |
 | 2 | Knowledge Graph | `plugin:buildin-knowledge_management-corvin_knowledge` | 1.2.0 | **Yes** — first-party (`buildin` tier: origin `vetted`, `requires_consent: false`, `pii_risk: low`), so boot installs AND enables it; the tenant knowledge base is created on the next projector tick (ADR-2265) |
+| 3 | Project templates | `plugin:buildin-knowledge_management-project_templates` | 1.0.0 | **Yes** — first-party (`buildin` tier, `requires_consent: false`, `network_egress: none`, `pii_risk: low`, data only), so boot installs and enables it; the Projects panel can create a project with no operator step (ADR-2318). Listed after the Knowledge Graph because the project features `kb`, `tasks` and `graph` need it. Proof: `web-next/tests/e2e-fresh/project-templates-default.spec.ts`. |
 
 ## Entry format
 

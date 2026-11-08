@@ -62,3 +62,16 @@ plugins:
       The tenant's own knowledge base (concepts, decisions, implementation plans) projected
       onto the task board, with the concept, ADR and implementation-plan gates and the
       Knowledge Graph panel.
+  - index_id: plugin:buildin-knowledge_management-project_templates
+    registry_id: project_templates
+    name: Project templates
+    min_version: "1.0.0"
+    enable: true
+    # ADR-2318: the Projects panel (ADR-2315) creates projects from these templates; without the plugin every
+    # fresh install showed "New project" disabled. First-party (buildin tier, requires_consent: false,
+    # network_egress: none, pii_risk: low, data only), so boot installs AND enables it. After the Knowledge
+    # Graph on purpose: the project features kb, tasks and graph need that plugin.
+    # Proof: web-next/tests/e2e-fresh/project-templates-default.spec.ts (red before this entry, green after).
+    reason: >-
+      Templates for CorvinOS projects (knowledge base, tasks, Claude Code rules, videos, compute, ...), so the
+      Projects panel can create a project on a fresh installation with no operator step.
