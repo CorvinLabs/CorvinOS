@@ -33,7 +33,7 @@ async function stub(page: Page) {
     ? r.fulfill({ json: { removed: ID, files_deleted: false } }) : r.fulfill({ json: DETAIL })));
   await page.route(new RegExp(`/v1/console/projects/${ID}/health$`), (r) => r.fulfill({ json: CHECKS }));
   await page.route(new RegExp(`/v1/console/projects/${ID}/features$`), (r) => r.fulfill({ json: DETAIL }));
-  await page.route(new RegExp(`/v1/console/projects/${ID}/repair$`), (r) => r.fulfill({ json: { pending: [{ path: "CLAUDE.md", status: "changed", diff: "" }], dry_run: true } }));
+  await page.route(new RegExp(`/v1/console/projects/${ID}/repair$`), (r) => r.fulfill({ json: { pending: [{ path: "CLAUDE.md", status: "changed", diff: "--- a/CLAUDE.md\n+++ b/CLAUDE.md\n-## Core (old)\n+## Core" }], dry_run: true } }));
 }
 
 test("the overview shows every check and never claims all is well over a red one", async ({ page }) => {
@@ -77,6 +77,7 @@ test("repair is previewed before it is applied", async ({ page }) => {
   await page.goto(`/console/app/projects/${ID}?tab=settings`);
   await page.getByTestId("repair-preview").click();
   await expect(page.getByTestId("repair-pending")).toHaveText("changed: CLAUDE.md");
+  await expect(page.getByTestId("repair-diff")).toBeVisible();
   await expect(page.getByTestId("repair-apply")).toBeVisible();
 });
 

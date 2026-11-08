@@ -305,7 +305,14 @@ function SettingsTab({ d, csrf }: { d: ProjectDetail; csrf: string }) {
           <div className="space-y-2" data-testid="repair-preview-result">
             {preview.pending.length === 0 ? <p className="text-sm">Nothing to repair.</p> : (
               <>
-                <ul className="text-sm">{preview.pending.map((p) => <li key={p.path} data-testid="repair-pending" className="font-mono text-xs">{p.status}: {p.path}</li>)}</ul>
+                <ul className="space-y-2 text-sm">
+                  {preview.pending.map((p) => (
+                    <li key={p.path} data-testid="repair-pending" className="space-y-1">
+                      <div className="font-mono text-xs">{p.status}: {p.path}</div>
+                      {p.diff && <pre className="max-h-64 overflow-auto rounded bg-muted p-2 text-xs" data-testid="repair-diff">{p.diff}</pre>}
+                    </li>
+                  ))}
+                </ul>
                 <Button size="sm" onClick={() => applyMut.mutate()} disabled={applyMut.isPending} data-testid="repair-apply">Apply repair</Button>
               </>
             )}
