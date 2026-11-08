@@ -174,3 +174,23 @@ with a confirmation that the files stay). Pure decisions in `pages/projects/insp
 **Not built yet** (T-0359 stays open until they exist, each with real data or an explained empty state): Structure,
 Docs, Knowledge, Tasks, Videos, Compute. Proof so far: `tests/unit/projects-inspector.test.ts` (9, incl. a mutation
 probe on the dependants confirmation), `tests/e2e/projects-inspector.spec.ts` (6, served bundle, network stubbed).
+
+## Scope of the Tasks board and the Knowledge Graph (T-0360)
+
+Both pages read one URL parameter, `?scope=`: `all` (Tasks only, the default there), `bound` (the tenant's own
+knowledge base), `project:<id>` (one project's knowledge base), `both` (Knowledge Graph only: the bound knowledge base
+and every selectable project joined). Unknown project ids fall back to the default rather than showing an empty board.
+Pure decisions in `pages/projects/scope.ts` (9 unit tests incl. a mutation probe on the qualification).
+
+- **Tasks:** `getTaskItems(signal, false, scope)` passes the parameter to `GET /task-tracking/items`; the scope survives
+  every change of view (the page rebuilds its query string, so `setQuery` carries it over explicitly).
+- **Knowledge Graph:** one request per knowledge base (`/graph` or `/graph?project=<id>`), joined by `mergeGraphs`:
+  a project's labels are qualified (`alpha/T-0001`), two equal local ids stay separate nodes, relations never cross
+  knowledge bases, so the two graphs form two islands. A node's document is read with its own project
+  (`/doc/{key}?project=<id>`). The query key carries the project ids: a direct link is parsed before the project list
+  has arrived, and the graph must load again once it has (found by a screenshot; the test now covers a late list).
+- **Card moves** still use the existing board path (`kbTransition` → `/kb-transition`); the server resolves the
+  project from the card's label (proven over HTTP in `tests/e2e/test_project_kb_writes_e2e.py`).
+
+Proof: `tests/e2e/projects-scope.spec.ts` (3 browser tests on the served bundle, endpoints stubbed, incl. the direct
+link with a delayed project list). Screenshot checked: two islands, qualified labels, "4 of 4 nodes shown".

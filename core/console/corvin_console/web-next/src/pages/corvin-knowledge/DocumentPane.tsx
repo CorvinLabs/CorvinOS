@@ -42,6 +42,8 @@ function RefList({ title, refs, onOpen, testid }: { title: string; refs: DocRef[
 
 interface Props {
   nodeKey: string | null;
+  /** The project whose knowledge base holds the node; null = the bound knowledge base (ADR-2316). */
+  project?: string | null;
   index: LinkIndex;
   basePath: string;
   onOpen: (key: string) => void;
@@ -49,11 +51,11 @@ interface Props {
 }
 
 /** Reads one node's Markdown (GET /doc/{key}) and renders it with ids turned into links. */
-export function DocumentPane({ nodeKey, index, basePath, onOpen, onBack }: Props) {
+export function DocumentPane({ nodeKey, project = null, index, basePath, onOpen, onBack }: Props) {
   const top = useRef<HTMLDivElement>(null);
   const q = useQuery({
-    queryKey: ["corvin-knowledge", "doc", nodeKey],
-    queryFn: ({ signal }) => api<KnowledgeDoc>(`${basePath}/doc/${encodeURIComponent(nodeKey ?? "")}`, { signal }),
+    queryKey: ["corvin-knowledge", "doc", project, nodeKey],
+    queryFn: ({ signal }) => api<KnowledgeDoc>(`${basePath}/doc/${encodeURIComponent(nodeKey ?? "")}${project ? `?project=${encodeURIComponent(project)}` : ""}`, { signal }),
     enabled: !!nodeKey,
     retry: false,
     staleTime: 30_000,

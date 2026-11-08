@@ -24,10 +24,13 @@ import { api, ApiError } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth";
 import { GraphCanvas } from "./GraphCanvas";
 import { DocumentPane } from "./DocumentPane";
+import { listProjects } from "@/lib/api/projects";
+import { ScopeSelect } from "@/pages/projects/scope-select";
+import { graphScopes, mergeGraphs, parseScope, scopeParam, selectableProjects, type Scope } from "@/pages/projects/scope";
 import { buildLinkIndex } from "./link-resolver";
 import { neighbourhood, newestDecisionKey, searchNodes } from "./graph-model";
 
-export interface KnowledgeEntity { id: string; label?: string; file?: string; type: string; title: string; status: string; tags: string[] }
+export interface KnowledgeEntity { id: string; label?: string; file?: string; type: string; title: string; status: string; tags: string[]; /** the project whose knowledge base holds the node (ADR-2316); null/absent = the bound KB */ scope?: string | null }
 export interface KnowledgeRelation { from_id: string; to_id: string; relation: string }
 export interface KnowledgeGraph { entities: KnowledgeEntity[]; relations: KnowledgeRelation[] }
 export interface KnowledgeConfig {
@@ -78,7 +81,29 @@ export function CorvinKnowledgePage() {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
   const qc = useQueryClient();
-  const graph = useQuery({ queryKey: [...KEY_GRAPH], queryFn: ({ signal }) => api<KnowledgeGraph>(`${BASE_PATH}/graph`, { signal }), retry: false });
+  // ADR-2316 / T-0360: which knowledge base(s) the graph shows. One request per knowledge base; a "both"
+  // view joins them (labels qualified with the project id, islands never joined by an invented edge).
+  const [scopeParams, setScopeParams] = useSearchParams();
+  const projectsQ = useQuery({ queryKey: ["projects", "list"], queryFn: ({ signal }) => listProjects(signal), retry: false });
+  const pickable = selectableProjects(projectsQ.data?.projects);
+  const scope: Scope = parseScope(scopeParams.get("scope"), pickable.map((p) => p.id), { kind: "bound" });
+  const scopeKey = scopeParam(scope);
+  const setScope = (raw: string) => setScopeParams((p) => { const n = new URLSearchParams(p); if (raw === "bound") n.delete("scope"); else n.set("scope", raw); n.delete("node"); return n; }, { replace: true });
+  const graph = useQuery({
+    // the project ids are part of the key: a direct link (?scope=both) is parsed before the project list
+    // has arrived, and the graph must load again once it has (a key without them kept the bound graph only)
+    queryKey: [...KEY_GRAPH, scopeKey, pickable.map((p) => p.id).join(",")],
+    queryFn: async ({ signal }) => {
+      const ids = graphScopes(scope, pickable.map((p) => p.id));
+      const parts = await Promise.all(ids.map(async (pid) => {
+        const g = await api<KnowledgeGraph>(`${BASE_PATH}/graph${pid ? `?project=${encodeURIComponent(pid)}` : ""}`, { signal });
+        return { projectId: pid ?? null, entities: g.entities.map((e) => ({ ...e, label: e.label ?? e.id })), relations: g.relations };
+      }));
+      const merged = mergeGraphs(parts);
+      return { ...parts[0], entities: merged.entities, relations: merged.relations } as unknown as KnowledgeGraph;
+    },
+    retry: false,
+  });
   const config = useQuery({ queryKey: [...KEY_CONFIG], queryFn: ({ signal }) => api<KnowledgeConfig>(`${BASE_PATH}/config`, { signal }), retry: false });
 
   const [params, setParams] = useSearchParams();
@@ -209,6 +234,9 @@ export function CorvinKnowledgePage() {
                 </ul>
               )}
             </label>
+            <ScopeSelect value={scopeKey} label="Knowledge base" onChange={setScope}
+              options={[{ value: "bound", label: "Corvin" }, { value: "both", label: "Corvin + projects" },
+                ...pickable.map((p) => ({ value: `project:${p.id}`, label: p.title ?? p.id }))]} />
             <div className="flex rounded-md border border-border" role="group" aria-label="View">
               {(["focus", "all"] as const).map((m) => (
                 <Button key={m} size="sm" variant={mode === m ? "accent" : "ghost"} aria-pressed={mode === m} onClick={() => { setMode(m); setLayoutChoice(null); }}>{m === "focus" ? "Focus" : "All"}</Button>
@@ -259,7 +287,7 @@ export function CorvinKnowledgePage() {
             ) : (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <GraphCanvas nodes={shown.entities} edges={shown.relations} selectedKey={selectedKey} statusColours={colours} onSelect={select} layoutMode={layoutMode} onLayoutModeChange={setLayoutChoice} fullscreen={fullscreen} onFullscreen={setFullscreen} />
-                <DocumentPane nodeKey={selectedKey && known.has(selectedKey) ? selectedKey : null} index={linkIndex} basePath={BASE_PATH} onOpen={select} onBack={canGoBack ? () => navigate(-1) : null} />
+                <DocumentPane nodeKey={selectedKey && known.has(selectedKey) ? selectedKey : null} project={entities.find((e) => e.id === selectedKey)?.scope ?? null} index={linkIndex} basePath={BASE_PATH} onOpen={select} onBack={canGoBack ? () => navigate(-1) : null} />
               </div>
             )}
             </>

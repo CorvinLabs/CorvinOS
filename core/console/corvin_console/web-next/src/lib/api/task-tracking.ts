@@ -163,9 +163,13 @@ export type ItemPatchBody = Partial<Omit<ItemCreateBody, "kind" | "title">> & {
 const BASE = "/task-tracking";
 const POLL_TIMEOUT_MS = 8_000;
 
-export function getTaskItems(signal?: AbortSignal, includeDeleted = false): Promise<ItemList> {
-  return api<ItemList>(`${BASE}/items${includeDeleted ? "?include_deleted=true" : ""}`,
-    { signal, timeoutMs: POLL_TIMEOUT_MS });
+/** `scope`: "bound" (the tenant's own items only) or "project:<id>"; omitted = every item (ADR-2316). */
+export function getTaskItems(signal?: AbortSignal, includeDeleted = false, scope?: string): Promise<ItemList> {
+  const q = new URLSearchParams();
+  if (includeDeleted) q.set("include_deleted", "true");
+  if (scope) q.set("scope", scope);
+  const qs = q.toString();
+  return api<ItemList>(`${BASE}/items${qs ? `?${qs}` : ""}`, { signal, timeoutMs: POLL_TIMEOUT_MS });
 }
 
 export function getTaskItem(id: string, signal?: AbortSignal): Promise<ItemDetail> {

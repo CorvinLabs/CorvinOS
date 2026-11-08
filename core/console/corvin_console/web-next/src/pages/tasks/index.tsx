@@ -32,6 +32,9 @@ import {
   type Item, type ItemCreateBody, type ItemStatus,
 } from "@/lib/api/task-tracking";
 import { cn } from "@/lib/utils";
+import { listProjects } from "@/lib/api/projects";
+import { ScopeSelect } from "@/pages/projects/scope-select";
+import { parseScope, scopeParam, selectableProjects, type Scope } from "@/pages/projects/scope";
 import { RunningNow, SourceNotes, TaskTable, TypeChips } from "./activity-parts";
 import { CreateDialog } from "./create-dialog";
 import { DetailDrawer } from "./detail-drawer";
@@ -135,8 +138,18 @@ export default function TasksPage() {
   const selectedId = params.get("item");
   const filters = useMemo(() => filtersFromQuery(params), [params]);
 
+  // ADR-2316 / T-0360: which knowledge base the board shows. The scope lives in the URL and survives every
+  // other change (setQuery rebuilds the whole query string, so it is carried over explicitly below).
+  const scopeRaw = params.get("scope");
+  const projectsQ = useQuery({ queryKey: ["projects", "list"], queryFn: ({ signal }) => listProjects(signal), retry: false });
+  const pickable = selectableProjects(projectsQ.data?.projects);
+  const scope: Scope = parseScope(scopeRaw, pickable.map((p) => p.id), { kind: "all" });
+  const scopeKey = scope.kind === "all" ? "" : scopeParam(scope);
+  const setScope = (raw: string) => setParams((p) => { const n = new URLSearchParams(p); if (raw === "all") n.delete("scope"); else n.set("scope", raw); return n; }, { replace: true });
+
   const setQuery = useCallback((patch: { view?: View; item?: string | null; filters?: Filters }) => {
     const next = new URLSearchParams();
+    if (scopeRaw) next.set("scope", scopeRaw);
     const v = patch.view ?? view;
     if (v !== "tree") next.set("view", v);
     const f = patch.filters ?? filters;
@@ -144,14 +157,14 @@ export default function TasksPage() {
     const it = patch.item === undefined ? selectedId : patch.item;
     if (it) next.set("item", it);
     setParams(next, { replace: true });
-  }, [view, filters, selectedId, setParams]);
+  }, [view, filters, selectedId, scopeRaw, setParams]);
   const setFilters = (f: Filters) => setQuery({ filters: f });
 
   const [skew, setSkew] = useState(0);
   const q = useQuery({
-    queryKey: [...ITEMS_KEY],
+    queryKey: [...ITEMS_KEY, scopeKey],
     queryFn: async ({ signal }) => {
-      const b = await getTaskItems(signal);
+      const b = await getTaskItems(signal, false, scopeKey || undefined);
       setSkew(clockSkewMs(b.server_time, Date.now()));
       return b;
     },
@@ -354,6 +367,11 @@ export default function TasksPage() {
             <RunningNow runs={runningNow} onOpen={() => { setRunTypes(new Set<TaskType>()); setQuery({ view: "activity" }); }} />
           )}
 
+          <div className="flex flex-wrap items-end gap-3">
+            <ScopeSelect value={scopeKey || "all"} label="Knowledge base" onChange={setScope}
+              options={[{ value: "all", label: "All" }, { value: "bound", label: "Corvin" },
+                ...pickable.map((p) => ({ value: `project:${p.id}`, label: p.title ?? p.id }))]} />
+          </div>
           <div className="flex flex-wrap items-center gap-2 border-b pb-2" role="tablist" aria-label="View">
             {VIEWS.map((v) => (
               <button key={v.id} type="button" role="tab" aria-selected={view === v.id} aria-controls="tasks-view-panel" data-testid={`view-${v.id}`}
