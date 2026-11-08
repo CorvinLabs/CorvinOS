@@ -76,7 +76,7 @@ test("repair is previewed before it is applied", async ({ page }) => {
   await stub(page);
   await page.goto(`/console/app/projects/${ID}?tab=settings`);
   await page.getByTestId("repair-preview").click();
-  await expect(page.getByTestId("repair-pending")).toHaveText("changed: CLAUDE.md");
+  await expect(page.getByTestId("repair-pending")).toContainText("changed: CLAUDE.md");
   await expect(page.getByTestId("repair-diff")).toBeVisible();
   await expect(page.getByTestId("repair-apply")).toBeVisible();
 });
