@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
-import { adoptProject, attachProject, detachProject, getChatAttachment, moveProject, renameProject, setProjectSettings, type Access, type DataClass, type ProjectDetail } from "@/lib/api/projects";
+import { adoptProject, attachProject, detachProject, getChatAttachment, moveProject, renameProject, setProjectSettings, setProjectsRoot, type Access, type DataClass, type ProjectDetail } from "@/lib/api/projects";
 import { ACCESS_META, CLASS_META, CLASS_ORDER, accessOf, classOf, lowersProtection, needsConfirmation } from "./roles";
 import { listChatSessions } from "@/lib/api/sessions";
 import { explain } from "./wizard";
@@ -184,5 +184,38 @@ export function ProtectionSection({ d, csrf, onChanged }: { d: ProjectDetail; cs
       )}
       {msg && <p role="status" className="text-sm" data-testid="protection-note">{msg}</p>}
     </div>
+  );
+}
+
+/** Where new projects are created (release review F1): shown on the Projects page, changeable in place. */
+export function RootEditor({ current }: { current: string }) {
+  const { session } = useAuth();
+  const csrf = session?.csrf_token ?? "";
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(current);
+  const [msg, setMsg] = useState<string | null>(null);
+  const mut = useMutation({
+    mutationFn: () => setProjectsRoot(value.trim(), csrf),
+    onSuccess: (r) => {
+      setOpen(false);
+      setMsg(r.outside.length ? `New projects go to ${r.projects_root}. Already outside it and still working: ${r.outside.join(", ")}.` : `New projects go to ${r.projects_root}.`);
+      void qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+    onError: (e) => setMsg(explain(e)),
+  });
+  return (
+    <span className="inline" data-testid="root-editor">
+      {!open ? (
+        <button type="button" className="ml-2 text-xs underline" onClick={() => { setValue(current); setOpen(true); setMsg(null); }} data-testid="root-change">Change folder</button>
+      ) : (
+        <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); mut.mutate(); }} data-testid="root-form">
+          <input className="min-w-0 flex-1 rounded border bg-background px-2 py-1 font-mono text-xs" value={value} onChange={(e) => setValue(e.target.value)} aria-label="Projects folder" data-testid="root-input" />
+          <Button size="sm" type="submit" disabled={mut.isPending || !value.trim() || value.trim() === current} data-testid="root-save">Save</Button>
+          <Button size="sm" type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+        </form>
+      )}
+      {msg && <span className="mt-1 block text-xs" role="status" data-testid="root-note">{msg}</span>}
+    </span>
   );
 }

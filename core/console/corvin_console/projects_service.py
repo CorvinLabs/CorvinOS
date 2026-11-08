@@ -1037,3 +1037,20 @@ def project_change_file(tenant_id: str, project_id: str, path: str, commit: Opti
         return changes.file_view(root, path, commit)
     except changes.ChangesError as exc:
         raise ProjectsError(str(exc)) from None
+
+
+# ── where projects live (release review F1, ADR-2315 plan E7) ─────────────────────────────────
+
+def set_root(tenant_id: str, path: str) -> dict[str, Any]:
+    """Change the tenant's projects folder. Audit-first; the path itself never goes into the audit. Projects already outside the new
+    folder are named and keep working - nothing is moved or dropped."""
+    try:
+        root = registry.validate_root(tenant_id, path)
+    except registry.ProjectPathError:
+        _audit_refusal(tenant_id, "path_rule")
+        raise
+    _audit(tenant_id, "project.root_changed", outcome="requested")
+    root = registry.set_projects_root(tenant_id, str(root))
+    outside = [e["id"] for e in registry.entries(tenant_id)
+               if root not in registry._resolve_forgiving(Path(str(e.get("path")))).parents]
+    return {"projects_root": str(root), "outside": outside}

@@ -10,7 +10,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Blocks, FolderKanban, Plus, RefreshCw } from "lucide-react";
 import { NewProjectDialog } from "./wizard-dialog";
-import { AdoptSection } from "./manage";
+import { AdoptSection, RootEditor } from "./manage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -99,8 +99,9 @@ export default function ProjectsPage() {
             <FolderKanban className="h-5 w-5" aria-hidden /> Projects
           </h1>
           {projects.data && (
-            <p className="truncate text-sm text-muted-foreground" data-testid="projects-root">
+            <p className="text-sm text-muted-foreground" data-testid="projects-root">
               Projects live under <span className="font-mono">{projects.data.projects_root}</span>
+              <RootEditor current={projects.data.projects_root} />
             </p>
           )}
         </div>

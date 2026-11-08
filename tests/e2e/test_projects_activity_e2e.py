@@ -131,7 +131,7 @@ class ActivityChannel(_Base):
         with self._ctx() as c:
             pid, _root = self._new(c, "Resume probe")
             for i in range(activity.MAX_EVENTS + 50):
-                activity.publish("_default", pid, "tool_use", session_id="s1", name="Read", detail=f"f{i}.py")
+                activity.post_event("_default", pid, "tool_use", session_id="s1", name="Read", detail=f"f{i}.py")
             s = c.own.get(f"{_URL}/{pid}/activity", params={"after": f"{activity.EPOCH}:{activity.MAX_EVENTS + 50}"}).json()
             self.assertEqual((s["events"], s["gap"], s["reset"]), ([], False, False))        # up to date
             g = c.own.get(f"{_URL}/{pid}/activity", params={"after": f"{activity.EPOCH}:5"}).json()
@@ -173,16 +173,16 @@ class ActivityPrivacy(unittest.TestCase):
 
     def test_a_raw_input_dict_handed_to_publish_is_dropped_by_the_closed_field_set(self):
         """Mutation probe from the plan: a producer that passes the raw input must not get it onto the channel."""
-        ev = activity.publish("t-priv2", "p", "tool_use", session_id="s", name="Write", detail="a.py",
+        ev = activity.post_event("t-priv2", "p", "tool_use", session_id="s", name="Write", detail="a.py",
                               input={"file_path": "/x/a.py", "content": self.MARK}, content=self.MARK, command=self.MARK, text=self.MARK)
         dumped = json.dumps(ev)
         self.assertNotIn(self.MARK, dumped)
         self.assertEqual(set(ev), {"seq", "id", "ts", "kind", "session_id", "name", "detail"})
 
     def test_publish_never_raises_into_a_turn(self):
-        self.assertIsNone(activity.publish("t", "p", "not-a-kind"))                 # an unknown kind is refused, quietly
+        self.assertIsNone(activity.post_event("t", "p", "not-a-kind"))                 # an unknown kind is refused, quietly
         for odd in (None, 5, object()):                                              # whatever a producer hands over, no exception escapes
-            activity.publish(odd, "p", "tool_use", name=odd, detail=odd, links=odd)  # type: ignore[arg-type]
+            activity.post_event(odd, "p", "tool_use", name=odd, detail=odd, links=odd)  # type: ignore[arg-type]
 
 
 class TurnLifecycle(unittest.TestCase):

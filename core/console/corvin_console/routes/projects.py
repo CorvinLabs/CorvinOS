@@ -69,6 +69,11 @@ class SettingsBody(BaseModel):
     confirm: bool = False
 
 
+class RootBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(max_length=1000)
+
+
 class AttachBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     session_id: str = Field(min_length=1, max_length=64)
@@ -141,6 +146,11 @@ def create(body: CreateBody, rec: SessCsrf) -> dict:
 @router.post("/adopt", status_code=201)
 def adopt(body: AdoptBody, rec: SessCsrf) -> dict:
     return _call(svc.adopt_project, rec.tenant_id, body.location, project_id=body.project_id, title=body.title)
+
+
+@router.put("/root")
+def set_root(body: RootBody, rec: SessCsrf) -> dict:
+    return _call(svc.set_root, rec.tenant_id, body.path)
 
 
 @router.get("/chat-attachment")

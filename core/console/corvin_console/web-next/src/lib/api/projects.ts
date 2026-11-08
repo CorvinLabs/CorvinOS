@@ -341,3 +341,8 @@ export function getActivity(id: string, after?: string | null, signal?: AbortSig
 export function activityStreamUrl(id: string, after?: string | null): string {
   return `/v1/console/projects/${encodeURIComponent(id)}/activity/stream${after ? `?after=${encodeURIComponent(after)}` : ""}`;
 }
+
+/** Changes where new projects are created. Projects already outside the new folder are named and keep working. */
+export function setProjectsRoot(path: string, csrf: string): Promise<{ projects_root: string; outside: string[] }> {
+  return api("/projects/root", { method: "PUT", body: { path }, csrf });
+}

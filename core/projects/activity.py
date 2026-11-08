@@ -136,7 +136,7 @@ def _apply_to_agents(ch: _Channel, ev: dict[str, Any]) -> None:
     _expire_idle(ch, ev["ts"])
 
 
-def publish(tenant: str, project: str, kind: str, **fields: Any) -> Optional[dict[str, Any]]:
+def post_event(tenant: str, project: str, kind: str, **fields: Any) -> Optional[dict[str, Any]]:
     """Record one event and hand it to every open stream. Safe from any thread; NEVER raises into the caller's turn."""
     try:
         if kind not in KINDS:
@@ -212,7 +212,7 @@ def subscribe(tenant: str, project: str, root_for: Any) -> asyncio.Queue:
         ch.subs.add((loop, q))
         ch.last_touch = time.time()
         if ch.watcher is None or ch.watcher.done():
-            ch.watcher = loop.create_task(_watch(tenant, project, root_for))
+            ch.watcher = loop.create_task(_watch(tenant=tenant, project=project, root_for=root_for))
     return q
 
 
@@ -265,13 +265,13 @@ async def _watch(tenant: str, project: str, root_for: Any) -> None:
                         new = [f for p, f in now.items() if base.get(p) != _key(f)]
                         gone = [] if truncated else [p for p in base if p not in now]       # a cut list would fake "settled" events
                         if len(new) + len(gone) > _MAX_BURST:
-                            publish(tenant, project, "files_burst", count=len(new) + len(gone))
+                            post_event(tenant=tenant, project=project, kind="files_burst", count=len(new) + len(gone))
                         else:
                             for f in new:
-                                publish(tenant, project, "file_changed", path=f["path"], status=f["status"], additions=f.get("additions"),
+                                post_event(tenant=tenant, project=project, kind="file_changed", path=f["path"], status=f["status"], additions=f.get("additions"),
                                         deletions=f.get("deletions"), area=f["area"], links=f.get("links", []))
                             for p in gone:
-                                publish(tenant, project, "file_settled", path=p)
+                                post_event(tenant=tenant, project=project, kind="file_settled", path=p)
                     interval = min(WATCH_MAX_INTERVAL_S, max(WATCH_MIN_INTERVAL_S, took * 5))   # back off on a slow round
         except Exception:  # noqa: BLE001 - a failed round keeps the old baseline and never kills the watcher
             _log.debug("activity watcher round failed", exc_info=True)
@@ -288,25 +288,25 @@ class TurnTracker:
         self.reason = "closed"                # a closed generator cannot be told from a cancel; the label says so
 
     def start(self) -> None:
-        publish(self.tenant, self.project, "turn_started", session_id=self.session_id, title=self.title)
+        post_event(tenant=self.tenant, project=self.project, kind="turn_started", session_id=self.session_id, title=self.title)
 
     def tool(self, name: str, tool_input: Any, *, tool_id: str = "", sub: bool = False) -> None:
-        publish(self.tenant, self.project, "tool_use", session_id=self.session_id, name=str(name or "")[:64],
+        post_event(tenant=self.tenant, project=self.project, kind="tool_use", session_id=self.session_id, name=str(name or "")[:64],
                 detail=describe_tool(name, tool_input), id=tool_id, sub=bool(sub))
 
     def finish(self) -> None:
         if self._finished:
             return
         self._finished = True
-        publish(self.tenant, self.project, "turn_finished", session_id=self.session_id, ok=self.reason == "done", reason=self.reason)
+        post_event(tenant=self.tenant, project=self.project, kind="turn_finished", session_id=self.session_id, ok=self.reason == "done", reason=self.reason)
 
 
 def tracker_for(tenant: str, session_id: str, title: str) -> Optional[TurnTracker]:
     """A tracker if this chat is attached to a project of the tenant, else None. Never raises."""
     try:
         from . import attachment, registry  # noqa: PLC0415
-        pid = attachment.attached(tenant, session_id)
-        if pid and registry.get(tenant, pid):
+        pid = attachment.attached(tenant_id=tenant, sid=session_id)
+        if pid and registry.get(tenant_id=tenant, project_id=pid):
             return TurnTracker(tenant, pid, session_id, title)
     except Exception:  # noqa: BLE001
         _log.debug("activity.tracker_for failed", exc_info=True)

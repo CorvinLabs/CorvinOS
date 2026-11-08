@@ -96,10 +96,35 @@ def projects_root(tenant_id: str) -> Path:
     return Path(raw).expanduser() if isinstance(raw, str) and raw.strip() else Path.home() / "projects"
 
 
+def validate_root(tenant_id: str, path: str) -> Path:
+    """Judge a new projects root. Absolute, no '..', not '/', not in or above the CorvinOS home, no protected component, not a file.
+    Returns the resolved directory (it may not exist yet)."""
+    validate_tenant_id(tenant_id)
+    if not isinstance(path, str) or not path.strip() or "\x00" in path or len(path) > 1000:
+        raise ProjectPathError("the projects folder must be a path")
+    given = Path(path.strip()).expanduser()
+    if not given.is_absolute() or ".." in given.parts:
+        raise ProjectPathError("the projects folder must be an absolute path without '..'")
+    root = _resolve_forgiving(given)
+    if root == Path(root.anchor) or len(root.parts) < 3:
+        raise ProjectPathError("choose a folder below your home or data directory, not a top-level one")
+    home = _resolve_forgiving(corvin_home())
+    if root == home or home in root.parents or root in home.parents:
+        raise ProjectPathError("the projects folder must not be inside, or contain, the CorvinOS home")
+    if any(part in PROTECTED_COMPONENTS for part in root.parts):
+        raise ProjectPathError("the projects folder contains a protected path component")
+    if root.exists() and not root.is_dir():
+        raise ProjectPathError("that path is a file, not a folder")
+    return root
+
+
 def set_projects_root(tenant_id: str, path: str) -> Path:
-    root = Path(path).expanduser()
-    if not root.is_absolute() or ".." in root.parts:
-        raise ProjectPathError("projects_root must be an absolute path without '..'")
+    root = validate_root(tenant_id, path)
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(root, 0o700) if not any(root.iterdir()) else None
+    except OSError:
+        pass
     p = settings_path(tenant_id)
     with _lock(tenant_id):
         p.parent.mkdir(parents=True, exist_ok=True)
