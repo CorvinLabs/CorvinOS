@@ -3141,10 +3141,12 @@ def _attached_project_block(sess: "WebChatSession") -> str:
             return ""
         can = ("You may create and change files in it." if att.get("access") == "write"
                else "It is read-only for you: read it, but do not try to change its files.")
-        return (f"\n\n## Attached project\nThis chat is attached to the project \"{att.get('title', att['project_id'])}\" in the folder "
-                f"{att['add_dir']} (data class: {att.get('classification', 'internal')}). When the user asks you to create, change or look "
-                f"at something \"in the project\", work in that folder and use absolute paths; your own working folder is only for scratch "
-                f"files. {can}\n")
+        root = att["add_dir"]
+        return (f"\n\n## Attached project (important)\nThe user's project \"{att.get('title', att['project_id'])}\" is the folder {root} "
+                f"(data class: {att.get('classification', 'internal')}). That folder is NOT your current working directory. "
+                f"Every file the user asks for \"in the project\", \"here\" or \"in the repo\" MUST be created or changed inside {root}, "
+                f"with the absolute path {root}/<file name>. Never put such a file in your own working directory - the user will not find it. "
+                f"{can}\n")
     except Exception:  # noqa: BLE001 - an attachment problem must never break a turn
         return ""
 
