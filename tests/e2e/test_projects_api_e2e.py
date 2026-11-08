@@ -276,6 +276,10 @@ class ProjectsApiE2E(unittest.TestCase):
             pid = plan["project_id"]
             proj = c.root / pid
             hdr = {"X-CSRF-Token": c.own_csrf}
+            # CLAUDE.md belongs to the claude feature: switching it on writes it (a seed-like first write)
+            self.assertFalse((proj / "CLAUDE.md").exists())
+            self.assertEqual(c.own.put(f"{_URL}/{pid}/features", json={"set": {"claude": True}}, headers=hdr).status_code, 200)
+            self.assertTrue((proj / "CLAUDE.md").is_file())
             self.assertEqual(c.own.post(f"{_URL}/{pid}/repair", json={"dry_run": True}, headers=hdr).json()["pending"], [])
             text = (proj / "CLAUDE.md").read_text(encoding="utf-8")
             mine = "\n\nMy rule: äöü\n"

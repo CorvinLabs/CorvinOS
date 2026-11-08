@@ -39,8 +39,11 @@ class Runner:
         if op.action == "git_init":
             git(root, "init", "-q", "-b", "main")
         elif op.action == "git_commit":
-            git(root, "add", "-A")
-            git(root, "commit", "-q", "-m", op.args["message"])
+            where = root / op.args["dir"] if op.args.get("dir") else root
+            if op.args.get("dir") and not (where / ".git").exists():
+                return                      # the scaffold step (a recorded no-op here) would have created it
+            git(where, "add", "-A")
+            git(where, "commit", "-q", "-m", op.args["message"])
 
 
 class FragmentEngineE2E(unittest.TestCase):
@@ -154,6 +157,23 @@ class FragmentEngineE2E(unittest.TestCase):
         self.apply(self.plan(docs_mode="plain"), Runner())
         self.assertNotIn("\ndocs/\n", (self.root / ".gitignore").read_text())
 
+    def test_claude_md_belongs_to_the_claude_feature_and_the_scaffold_runs_before_any_file(self):
+        off = self.plan(("core", "kb"))
+        self.assertNotIn("CLAUDE.md", [o.path for o in off.writes])
+        on = self.plan(("core", "kb", "claude"))
+        self.assertIn("CLAUDE.md", [o.path for o in on.writes])
+        names = [(o.kind, o.action or o.path) for o in on.ops]
+        first_write = next(i for i, (k, _) in enumerate(names) if k == "write")
+        self.assertLess(names.index(("action", "kb_scaffold")), first_write,
+                        "kb_scaffold must run before any file lands in docs/ (it refuses a non-empty target)")
+        self.assertLess(names.index(("action", "git_init")), names.index(("action", "kb_scaffold")))
+
+    def test_nested_docs_get_their_own_commit_before_the_projects(self):
+        nested = [o for o in self.plan(docs_mode="nested").ops if o.action == "git_commit"]
+        self.assertEqual([o.args.get("dir") for o in nested], ["docs", None])
+        plain = [o for o in self.plan(docs_mode="plain").ops if o.action == "git_commit"]
+        self.assertEqual([o.args.get("dir") for o in plain], [None])
+
     # ── repair keeps what is the user's ────────────────────────────────────
 
     def test_repair_keeps_user_block_and_seed_files_and_rewrites_generated_ones(self):
@@ -180,7 +200,7 @@ class FragmentEngineE2E(unittest.TestCase):
     def test_an_existing_claude_md_that_was_not_generated_is_never_overwritten(self):
         self.root.mkdir()
         (self.root / "CLAUDE.md").write_text("# my own file\n", encoding="utf-8")
-        plan = self.plan(("core", "kb"), mode="repair")
+        plan = self.plan(("core", "kb", "claude"), mode="repair")
         op = next(o for o in plan.writes if o.path == "CLAUDE.md")
         self.assertEqual(op.status, "skip")
         self.assertTrue(any("CLAUDE.md" in w for w in plan.warnings))

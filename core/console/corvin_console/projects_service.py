@@ -98,6 +98,41 @@ def template_source(tenant_id: str) -> Path:
     return src
 
 
+def compute_worker_reachable(tenant_id: str) -> Optional[bool]:
+    """Can the tenant's compute worker be reached on its socket? ``None``: not determinable here.
+    Read-only (one connect with a 1 s timeout, nothing is sent)."""
+    try:
+        from corvin_compute import endpoint  # type: ignore[import-not-found]
+        from corvin_compute.cli import _default_socket_path  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001 - the compute package is optional in this process
+        return None
+    try:
+        sock = endpoint.connect(_default_socket_path(corvin_home(), tenant_id), timeout_s=1.0)
+    except (OSError, ValueError):
+        return False
+    try:
+        sock.close()
+    except OSError:
+        pass
+    return True
+
+
+def external_warnings(tenant_id: str, features: list[str]) -> list[str]:
+    """Prerequisites of a feature that live OUTSIDE the project and that the engine can only partly judge.
+    Warnings, never a refusal: the user may start the worker after creating the project."""
+    out: list[str] = []
+    if "acs" in features:
+        up = compute_worker_reachable(tenant_id)
+        if up is False:
+            out.append("agentic compute: the compute worker of this tenant is not reachable - start it "
+                       f"(on Linux: systemctl --user start corvin-compute@{tenant_id}) before the first run")
+        elif up is None:
+            out.append("agentic compute: the compute worker could not be checked from here")
+        out.append("agentic compute: the engine cannot verify the licence tier; Forge and compute need a tier that "
+                   "allows them - check the first run")
+    return out
+
+
 def kb_init_script() -> Path:
     from .routes import marketplace_resolve  # noqa: PLC0415
 
@@ -204,7 +239,7 @@ def _context(tenant_id: str, project_id: str, title: str, root: Path) -> dict[st
            "paths.python": os.environ.get("CORVIN_PYTHON") or sys.executable,
            "paths.repo": str(kb_projection._REPO_ROOT),
            "paths.corvin_home": str(corvin_home()),
-           "paths.docs": str(root / "docs")}
+           "paths.docs": str(root / "docs"), "paths.pathsep": os.pathsep}
     try:
         ctx["paths.kb_engine"] = str(bound_engine(tenant_id))
     except Conflict:
@@ -283,8 +318,10 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
     _audit(tenant_id, "project.plan_created", project_id=pid, template=f"{tpl.id}@{tpl.version}",
            files=len(plan.writes))
     _store_plan(rec)
+    summary = plan.summary()
+    summary["warnings"] = [*summary["warnings"], *external_warnings(tenant_id, plan.features)]
     return {"plan_id": rec.plan_id, "project_id": pid, "title": title, "template": f"{tpl.id}@{tpl.version}",
-            "docs_mode": mode, "location": str(loc), **plan.summary(), "plugins": plugins,
+            "docs_mode": mode, "location": str(loc), **summary, "plugins": plugins,
             "ready": not plan.conflicts and all(p["state"] == "enabled" for p in plugins),
             "expires_in_s": int(PLAN_TTL_S)}
 
@@ -305,8 +342,9 @@ def _runner(tenant_id: str, root: Path):
             _git(root, "init", "-q")
             _git(root, "symbolic-ref", "HEAD", "refs/heads/main")
         elif op.action == "git_commit":
-            _git(root, "add", "-A")
-            _git(root, "commit", "-q", "-m", op.args.get("message", "project: update"), "--allow-empty")
+            where = root / op.args["dir"] if op.args.get("dir") else root
+            _git(where, "add", "-A")
+            _git(where, "commit", "-q", "-m", op.args.get("message", "project: update"), "--allow-empty")
         elif op.action == "kb_scaffold":
             init = kb_init_script()
             args = [sys.executable, str(init), "--target", str(docs), "--no-engine"]
@@ -338,11 +376,17 @@ def _runner(tenant_id: str, root: Path):
 
 
 def _manifest_for(rec_tenant: str, pid: str, title: str, template: str, version: int, mode: str,
-                  features: list[str], offered: list[str]) -> dict[str, Any]:
+                  features: list[str], offered: list[str], videos: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     on = set(features)
-    return {"schema": manifest.SCHEMA, "id": pid, "title": title, "tenant": rec_tenant,
-            "template": f"{template}@{version}", "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "docs_mode": mode, "features": {f: (f in on) for f in dict.fromkeys([*offered, *features])}}
+    man: dict[str, Any] = {"schema": manifest.SCHEMA, "id": pid, "title": title, "tenant": rec_tenant,
+                           "template": f"{template}@{version}",
+                           "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                           "docs_mode": mode, "features": {f: (f in on) for f in dict.fromkeys([*offered, *features])}}
+    if "videos" in on and videos:
+        man["videos"] = dict(videos)                  # the template's defaults: where videos live, which languages
+    if "directory" in on:
+        man["directory"] = {"peers": []}              # the project's peer allowlist starts empty (nothing is sent)
+    return man
 
 
 def create_project(tenant_id: str, plan_id: str) -> dict[str, Any]:
@@ -373,7 +417,7 @@ def create_project(tenant_id: str, plan_id: str) -> dict[str, Any]:
     try:
         loc.mkdir(parents=True, exist_ok=True)
         man = _manifest_for(tenant_id, rec.project_id, rec.title, tpl.id, tpl.version, rec.docs_mode,
-                            plan.features, list(tpl.offered))
+                            plan.features, list(tpl.offered), tpl.videos)
         manifest.write(loc, man)                                                # the truth first,
         registry.register(tenant_id, rec.project_id, loc, man["template"])      # then the index
         applied = F.apply_plan(plan, loc, {**ctx, "_root": str(loc)}, _runner(tenant_id, loc))
@@ -507,7 +551,9 @@ def set_features(tenant_id: str, project_id: str, changes: dict[str, bool], *, a
     man["features"] = {**man.get("features", {}), **{f: (f in want) for f in dict.fromkeys([*man.get("features", {}), *want, *active])}}
     manifest.write(root, man)
     F.apply_plan(plan, root, {**ctx, "_root": str(root)}, _runner(tenant_id, root))
-    return get_project(tenant_id, project_id)
+    out = get_project(tenant_id, project_id)
+    out["warnings"] = external_warnings(tenant_id, sorted(want)) if "acs" in added else []
+    return out
 
 
 def repair(tenant_id: str, project_id: str, *, dry_run: bool = False) -> dict[str, Any]:
@@ -579,6 +625,10 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
             if not miss else "not enabled: " + ", ".join(m["plugin"] for m in miss))
     except Unavailable as exc:
         add("catalogue", False, str(exc))
+    if "acs" in active:
+        up = compute_worker_reachable(tenant_id)
+        add("compute_worker", up is True, "the compute worker answers on its socket" if up is True
+            else "the compute worker is not reachable" if up is False else "the compute worker could not be checked here")
     if "kb" in active:
         docs = root / "docs"
         if not (docs / "kb" / "_meta").is_dir():

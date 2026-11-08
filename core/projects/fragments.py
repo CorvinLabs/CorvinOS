@@ -17,7 +17,7 @@ needed.
     requires_plugins: [corvin_knowledge]   # tenant plugin ids that must be enabled
     files:                      # kind: seed (written once, never overwritten),
       - {src: files/x.md, dst: docs/README.md, kind: seed}        # generated (engine-owned),
-    claude: files/claude.md     # section of the generated CLAUDE.md          local (git-ignored)
+    claude: files/claude.md     # section of the generated CLAUDE.md (written only while the `claude` feature is on)
     gitignore: [".corvin/local/"]
     mcp: {server: {command: "{{paths.python}}", args: ["-m", "x"], env: {A: "{{paths.corvin_home}}"}}}
     kb: {initiative: "{{project.title}}", epic: "Setup"}     # (kb fragment) scaffold + seed
@@ -45,7 +45,7 @@ ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 FILE_KINDS = ("seed", "generated", "local")
 ACTIONS = frozenset({"git_init", "git_commit", "kb_scaffold", "kb_seed"})
 PLACEHOLDERS = frozenset({"project.id", "project.title", "project.tenant", "paths.python", "paths.repo",
-                          "paths.corvin_home", "paths.docs", "paths.kb_engine"})
+                          "paths.corvin_home", "paths.docs", "paths.kb_engine", "paths.pathsep"})
 _PH_RE = re.compile(r"\{\{\s*([a-z_.]+)\s*\}\}")
 USER_BEGIN, USER_END = "<!-- user:begin -->", "<!-- user:end -->"
 GEN_MARK = "<!-- corvin:generated - edit only between the user markers -->"
@@ -443,13 +443,19 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
         plan.conflicts.append("the directory already exists and is not empty")
 
     for fid in pulled_all:
-        f = cat.fragments[fid]
-        where = f"fragment {fid}"
-        for a in f.actions:
+        for a in cat.fragments[fid].actions:
             if a == "git_init":
                 has_git = (root / ".git").exists()
                 plan.ops.append(Op(kind="action", status="skip" if has_git else "new", action=a, owner=fid,
                                    args={"docs_mode": docs_mode}, reason="already a repository" if has_git else ""))
+    if kb_on:
+        # BEFORE any file: the scaffold step refuses a docs/ that already holds something it did not create
+        scaffolded = (root / "docs" / "kb" / "_meta" / "tenant_kb.json").is_file()
+        plan.ops.append(Op(kind="action", status="skip" if scaffolded else "new", action="kb_scaffold", owner="kb",
+                           args={"docs_mode": docs_mode}, reason="already scaffolded" if scaffolded else ""))
+    for fid in pulled_all:
+        f = cat.fragments[fid]
+        where = f"fragment {fid}"
         for spec in f.files:
             data = (f.root / spec["src"])
             if data.is_symlink() or not data.is_file() or data.stat().st_size > MAX_FILE_BYTES:
@@ -461,7 +467,7 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
                                reason=extra if status == "skip" else ""))
 
     # composed files: CLAUDE.md, .gitignore, MCP block
-    if any(cat.fragments[f].claude for f in pulled_all):
+    if "claude" in pulled_all and any(cat.fragments[f].claude for f in pulled_all):
         existing = _read_text(root / CLAUDE_MD)
         if existing is not None and GEN_MARK not in existing:
             plan.ops.append(Op(kind="write", status="skip", path=CLAUDE_MD, file_kind="generated", owner="engine",
@@ -496,9 +502,6 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
     # host actions, in a fixed order after the files
     if kb_on:
         kbspec = next((cat.fragments[f].kb for f in pulled_all if cat.fragments[f].kb), {})
-        scaffolded = (root / "docs" / "kb" / "_meta" / "tenant_kb.json").is_file()
-        plan.ops.append(Op(kind="action", status="skip" if scaffolded else "new", action="kb_scaffold", owner="kb",
-                           args={"docs_mode": docs_mode}, reason="already scaffolded" if scaffolded else ""))
         seeded = (root / "docs" / "kb" / "initiatives").is_dir() and any((root / "docs" / "kb" / "initiatives").glob("*.md"))
         tasks = [t for fid in pulled_all for t in cat.fragments[fid].seed_tasks]
         plan.ops.append(Op(kind="action", status="skip" if seeded else "new", action="kb_seed", owner="kb",
@@ -507,6 +510,11 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
                                  "tasks": [{"title": substitute(t["title"], ctx, "seed task"),
                                             "dod": substitute(t["dod"], ctx, "seed task")} for t in tasks]},
                            reason="already seeded" if seeded else ""))
+    scaffold_new = any(o.action == "kb_scaffold" and o.status == "new" for o in plan.ops if o.kind == "action")
+    if kb_on and docs_mode == "nested" and (scaffold_new or any(o.kind == "write" and o.path.startswith("docs/")
+                                                              and o.status in ("new", "changed") for o in plan.ops)):
+        plan.ops.append(Op(kind="action", status="new", action="git_commit", owner="engine",
+                           args={"message": "docs: project scaffold", "dir": "docs"}))
     if any(o.action == "git_init" and o.status == "new" for o in plan.ops if o.kind == "action"):
         plan.ops.append(Op(kind="action", status="new", action="git_commit", owner="engine",
                            args={"message": "project: initial scaffold"}))

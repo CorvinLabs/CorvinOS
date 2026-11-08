@@ -4,7 +4,7 @@ A **project** is a directory the user owns, with a `project.yaml`. CorvinOS keep
 Losing the index loses no project. Design: `Corvin-Knowledge` CONCEPT-0126; decisions ADR-2315
 (project object), ADR-2316 (several KBs, scope), ADR-2317 (chat context); plan PLAN-0970.
 Status 2026-11-08: registry, manifest, fragment engine and the API exist (T-0351, T-0352, T-0355); the
-template plugin content (T-0354) and the console (E-052) are the following tasks.
+template catalogue is the first-party plugin `project_templates` (T-0354, T-0356, in Corvin-Marketplace); the console (E-052) is the next task.
 
 ## Where things live
 
@@ -16,9 +16,10 @@ template plugin content (T-0354) and the console (E-052) are the following tasks
 | Atomic writes that never follow a symlink, cross-platform lock | `core/projects/fsutil.py` |
 | Service layer (audit, plugin state, bound engine, plans, create/adopt/toggle/repair/open/health) | `core/console/corvin_console/projects_service.py` |
 | HTTP routes `/v1/console/projects` | `core/console/corvin_console/routes/projects.py` (mounted in `app.py`) |
+| The catalogue (fragments, templates) | `Corvin-Marketplace/plugins/buildin/knowledge_management/project_templates/` (docs in the plugin: `docs/CATALOGUE.md`) |
 | Registry file | `<tenant_home>/projects/registry.json` (0o600, dir 0o700) |
 | Operator's projects root | `<tenant_home>/projects/settings.json` (`projects_root`, default `~/projects`) |
-| Proof | `tests/e2e/test_projects_registry_e2e.py`, `test_projects_fragments_e2e.py`, `test_projects_api_e2e.py` |
+| Proof | `tests/e2e/test_projects_registry_e2e.py`, `test_projects_fragments_e2e.py`, `test_projects_api_e2e.py`, `test_project_templates_catalogue_e2e.py` (the REAL catalogue) |
 
 ## The directory is the truth
 
@@ -62,6 +63,12 @@ Fragments are DATA: no template code runs. The only active steps are the closed 
   `.gitignore` is managed between `# corvin:begin`/`# corvin:end`; lines outside are the user's.
   In `docs_mode: nested` the project's `.gitignore` lists `docs/` (docs is its own repository; a gitlink
   would record no content - the trap the reference project hit).
+* **Order of a create plan:** `git_init`, then `kb_scaffold` BEFORE any file (the scaffold step refuses a
+  `docs/` that already holds something it did not create), then every fragment's files, `kb_seed`
+  (initiative, epic `E-001`, the fragments' `seed_tasks` through the BOUND KB's engine), then the nested
+  `docs/` repository's own commit and finally the project's commit. `CLAUDE.md` is written only while the
+  `claude` feature is on (any active fragment may contribute a section); `.mcp.json` whenever a fragment
+  declares MCP servers (`acs`). A template's `videos:` block and `directory.peers: []` seed the manifest.
 * Machine-local files (`.mcp.json`, `.corvin/local/kb-commands.md`) carry the absolute interpreter and
   engine paths and are regenerated per machine; committed files carry none (a test greps for them).
 * Placeholders are a closed set (`{{project.id}}`, `{{paths.python}}` ...); an unknown or unvalued one
@@ -90,6 +97,11 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 | `POST /{id}/repair` | `{dry_run}`: pending changes with diffs; repair rewrites generated and machine-local files only |
 | `POST /{id}/open` | audit `project.opened`; returns the context and a terminal command (`chat_attachment: false` until ADR-2317's spike) |
 | `DELETE /{id}` | removes the registry entry ONLY; the directory stays |
+
+**External prerequisites are warnings, never a refusal** (`external_warnings`, plan response `warnings`):
+with `acs` the tenant's compute worker is probed read-only on its socket (`corvin_compute.endpoint.connect`,
+1 s, nothing sent; `health` carries a `compute_worker` check) and a licence note says the engine cannot verify the
+tier. A missing tenant PLUGIN, by contrast, is a refusal (409 `plugin_missing`).
 
 **Create flow.** plan -> create: `project.yaml` is written first (the truth), then registered (the
 index), then the fragments are applied; the KB scaffold is the Knowledge Graph plugin's real
