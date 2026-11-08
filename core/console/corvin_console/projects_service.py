@@ -432,18 +432,90 @@ def create_project(tenant_id: str, plan_id: str) -> dict[str, Any]:
     return {"project": get_project(tenant_id, rec.project_id), "written": applied["written"], "actions": applied["actions"]}
 
 
-def adopt_project(tenant_id: str, location: str) -> dict[str, Any]:
+def _detect_adopted(root: Path) -> tuple[str, dict[str, bool]]:
+    """Read-only look at a foreign directory: which docs mode it has and which features it already
+    carries. Only evidence on disk counts - nothing is guessed, nothing is written."""
+    nested = (root / "docs" / ".git").exists()
+    kb = (root / "docs" / "kb" / "_meta").is_dir()
+    return ("nested" if nested else "plain"), ({"kb": True} if kb else {})
+
+
+def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = None,
+                  title: Optional[str] = None) -> dict[str, Any]:
+    """Register a directory. With a ``project.yaml`` it is registered as is. Without one (a
+    repository the user already owns) exactly ONE file is written - ``project.yaml`` - and
+    nothing else in the directory is touched (ADR-2315 Decision 6)."""
     try:
-        loc = registry.validate_location(tenant_id, location, adopt=True)
+        loc = registry.validate_location(tenant_id, location, adopt=True,
+                                         unmanaged=not (Path(location) / manifest.FILE).exists())
     except registry.ProjectPathError:
         _audit_refusal(tenant_id, "path_rule")
         raise
-    man = manifest.load(loc)
-    if registry.get(tenant_id, man["id"]) is not None:
+    if (loc / manifest.FILE).exists():
+        man = manifest.load(loc)
+        if registry.get(tenant_id, man["id"]) is not None:
+            raise Conflict("a project with this id is already registered", "id_taken")
+        _audit(tenant_id, "project.adopted", project_id=man["id"], template=man.get("template"))
+        registry.register(tenant_id, man["id"], loc, man.get("template"))        # writes nothing in the project
+        return get_project(tenant_id, man["id"])
+    ttl = (title or loc.name).strip()
+    if not 0 < len(ttl) <= 120:
+        raise ProjectsError("the title must be 1-120 characters")
+    if project_id is not None and not manifest.PROJECT_ID_RE.match(project_id):
+        raise ProjectsError("the project id must be lowercase kebab-case, 1-28 characters")
+    pid = project_id or _unique_id(tenant_id, slug(loc.name))
+    if registry.get(tenant_id, pid) is not None:
         raise Conflict("a project with this id is already registered", "id_taken")
-    _audit(tenant_id, "project.adopted", project_id=man["id"], template=man.get("template"))
-    registry.register(tenant_id, man["id"], loc, man.get("template"))            # writes nothing in the project
-    return get_project(tenant_id, man["id"])
+    mode, feats = _detect_adopted(loc)
+    data = {"schema": manifest.SCHEMA, "id": pid, "title": ttl, "tenant": tenant_id,
+            "template": "adopted@1", "docs_mode": mode, "features": feats}
+    manifest.validate(data)
+    _audit(tenant_id, "project.adopted", project_id=pid, template="adopted@1", outcome="requested")
+    manifest.write(loc, data)                                                    # the ONLY write
+    registry.register(tenant_id, pid, loc, "adopted@1")
+    return get_project(tenant_id, pid)
+
+
+def rename_project(tenant_id: str, project_id: str, title: str) -> dict[str, Any]:
+    """Change the title in ``project.yaml``. The id (the KB scope label, the registry key) never changes."""
+    root, man = _load_project(tenant_id, project_id)
+    ttl = (title or "").strip()
+    if not 0 < len(ttl) <= 120:
+        raise ProjectsError("the title must be 1-120 characters")
+    _audit(tenant_id, "project.renamed", project_id=project_id)
+    manifest.write(root, {**man, "title": ttl})
+    return get_project(tenant_id, project_id)
+
+
+def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, Any]:
+    """Move the directory to another place under this tenant's projects root and follow it in the
+    index. Same filesystem only (an atomic rename); an existing target is never overwritten."""
+    root, _man = _load_project(tenant_id, project_id)
+    try:
+        dest = registry.validate_location(tenant_id, location)          # create rules: absent or empty
+    except registry.ProjectPathError:
+        _audit_refusal(tenant_id, "path_rule", project_id)
+        raise
+    if dest == root or root in dest.parents:
+        raise Conflict("the target lies inside the project itself", "move_inside")
+    if dest.exists() and any(dest.iterdir()):
+        raise Conflict("the target is not empty", "target_exists")
+    _audit(tenant_id, "project.moved", project_id=project_id, outcome="requested")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            dest.rmdir()                                                # empty by the check above
+        os.rename(root, dest)
+    except OSError as exc:
+        raise Conflict(f"the directory could not be moved ({type(exc).__name__}); nothing changed", "move_failed") from None
+    registry.relocate(tenant_id, project_id, dest)
+    # machine-local files carry the old absolute path (ADR-2315 Decision 5): regenerate them now
+    repaired: Optional[int] = None
+    try:
+        repaired = len(repair(tenant_id, project_id).get("written", []))
+    except (ProjectsError, F.FragmentError):
+        repaired = None                     # the move stands; the doctor will name what is out of sync
+    return {**get_project(tenant_id, project_id), "repaired_files": repaired}
 
 
 def _entry(tenant_id: str, project_id: str) -> dict[str, Any]:

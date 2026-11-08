@@ -223,3 +223,22 @@ Proof: `tests/e2e/test_projects_videos_e2e.py` (4: one run with the eight sectio
 tasks, a fresh `kb check` blocking 0 and the audit sequence; no knowledge base; names and existing folders refused
 before any write; the feature off). Mutation probe: writing a generic sources.md fails the convention test.
 Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed).
+
+
+## Doctor calibration, Adopt, Rename, Move (T-0362)
+
+- **Doctor** (`GET /projects/{id}/health`): a checklist of real checks. Calibrated against nine seeded defects
+  (directory missing, unparseable manifest, wrong id, foreign tenant, a requirement switched off, a hand-edited
+  generated section, `docs/kb` removed, an inconsistent KB entry, a missing tenant plugin) - all found, and a clean project
+  has no failed check (`tests/e2e/test_projects_ops_e2e.py::DoctorCalibration`). A `CLAUDE.md` WITHOUT the generated
+  marker is the user's own file: it is never rewritten and never reported as drift (by design, not a gap).
+- **Adopt** (`POST /projects/adopt`, body `location`, optional `title`, `project_id`): inside the projects root only.
+  A folder with a `project.yaml` is registered as is. A folder without one gets exactly that file - docs mode and the `kb`
+  feature are read from what is on disk, nothing else is written, `.git` included. Proven on a copy of the real
+  `LLM_lie_detector` repository (every file hashed before and after; only `project.yaml` is new).
+- **Rename** (`PUT /projects/{id}/title`): the title in `project.yaml` only; the id (registry key, KB scope label) never changes.
+- **Move** (`POST /projects/{id}/move`, body `location`): a same-disk rename to an absent or empty place under the
+  projects root; never into itself, never over content. The index follows, then repair regenerates the machine-local files
+  (they hold absolute paths); the response carries `repaired_files`. Audit: `project.renamed`, `project.moved`.
+- UI: "Add existing folder" on the list, Rename and Move in the Settings tab (Move needs a second confirming click).
+  Browser proof: `tests/e2e/projects-manage.spec.ts`.

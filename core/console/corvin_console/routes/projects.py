@@ -45,6 +45,18 @@ class CreateBody(BaseModel):
 class AdoptBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     location: str = Field(min_length=1, max_length=1000)
+    project_id: Optional[str] = Field(default=None, max_length=28)
+    title: Optional[str] = Field(default=None, max_length=120)
+
+
+class RenameBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=120)
+
+
+class MoveBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    location: str = Field(min_length=1, max_length=1000)
 
 
 class FeaturesBody(BaseModel):
@@ -107,7 +119,7 @@ def create(body: CreateBody, rec: SessCsrf) -> dict:
 
 @router.post("/adopt", status_code=201)
 def adopt(body: AdoptBody, rec: SessCsrf) -> dict:
-    return _call(svc.adopt_project, rec.tenant_id, body.location)
+    return _call(svc.adopt_project, rec.tenant_id, body.location, project_id=body.project_id, title=body.title)
 
 
 @router.get("/{project_id}")
@@ -141,6 +153,16 @@ def post_repair(project_id: str, body: RepairBody, rec: SessCsrf) -> dict:
 def post_video(project_id: str, body: VideoBody, rec: SessCsrf) -> dict:
     """Creates one video's folder, sources.md and (with the knowledge base on) its epic and tasks (T-0361)."""
     return _call(svc.new_video, rec.tenant_id, project_id, body.name)
+
+
+@router.put("/{project_id}/title")
+def rename(project_id: str, body: RenameBody, rec: SessCsrf) -> dict:
+    return _call(svc.rename_project, rec.tenant_id, project_id, body.title)
+
+
+@router.post("/{project_id}/move")
+def move(project_id: str, body: MoveBody, rec: SessCsrf) -> dict:
+    return _call(svc.move_project, rec.tenant_id, project_id, body.location)
 
 
 @router.post("/{project_id}/open")

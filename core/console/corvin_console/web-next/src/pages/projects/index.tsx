@@ -10,6 +10,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Blocks, FolderKanban, Plus, RefreshCw } from "lucide-react";
 import { NewProjectDialog } from "./wizard-dialog";
+import { AdoptSection } from "./manage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -91,11 +92,12 @@ export default function ProjectsPage() {
             </p>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" onClick={() => setWizardOpen(true)} disabled={templates.data?.available === false}
             data-testid="new-project-button">
             <Plus className="mr-2 h-4 w-4" aria-hidden /> New project
           </Button>
+          <AdoptSection />
           <Button variant="outline" size="sm" onClick={() => { void projects.refetch(); void templates.refetch(); }}
           disabled={projects.isFetching} aria-label="Refresh projects">
           <RefreshCw className={cn("mr-2 h-4 w-4", projects.isFetching && "animate-spin")} aria-hidden /> Refresh

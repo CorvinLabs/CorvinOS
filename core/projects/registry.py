@@ -145,7 +145,7 @@ def _other_tenants_claiming(tenant_id: str, resolved: Path) -> bool:
     return False
 
 
-def validate_location(tenant_id: str, raw: str, *, adopt: bool = False) -> Path:
+def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanaged: bool = False) -> Path:
     """Judge a client-supplied project location. Returns the resolved directory.
 
     ``adopt=False`` (create): the directory must not exist or be empty. ``adopt=True``: it must
@@ -186,7 +186,13 @@ def validate_location(tenant_id: str, raw: str, *, adopt: bool = False) -> Path:
         raise ProjectPathError("the projects root must not be a symlink")
     if _other_tenants_claiming(tenant_id, resolved):
         raise ProjectPathError("this directory already belongs to another tenant")
-    if adopt:
+    if adopt and unmanaged:
+        # a directory that is not a project yet: it must exist and must NOT carry a foreign manifest
+        if not resolved.is_dir():
+            raise ProjectPathError("the directory does not exist")
+        if (resolved / manifest.FILE).exists() or (resolved / manifest.FILE).is_symlink():
+            raise ProjectPathError("the directory already has a project.yaml")
+    elif adopt:
         if not resolved.is_dir():
             raise ProjectPathError("the directory does not exist")
         try:
@@ -272,3 +278,23 @@ def rebuild(tenant_id: str) -> dict[str, Any]:
         except (ProjectPathError, RegistryError):
             skipped.append(man["id"])
     return {"added": added, "kept": len(entries(tenant_id)) - len(added), "skipped": skipped}
+
+
+def relocate(tenant_id: str, project_id: str, new_path: Path) -> dict[str, Any]:
+    """Point an entry at the directory the project now lives in. The index only; moves nothing."""
+    resolved = _resolve_forgiving(new_path)
+    with _lock(tenant_id):
+        data = load(tenant_id)
+        lst = [e for e in data.get("projects", []) if isinstance(e, dict)]
+        if any(e.get("id") != project_id and _resolve_forgiving(Path(str(e.get("path")))) == resolved for e in lst):
+            raise RegistryError("this directory is already registered")
+        hit = None
+        for e in lst:
+            if e.get("id") == project_id:
+                e["path"] = str(resolved)
+                hit = e
+        if hit is None:
+            raise RegistryError("no such project")
+        data["projects"] = lst
+        _save(tenant_id, data)
+    return hit

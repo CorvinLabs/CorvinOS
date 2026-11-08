@@ -190,3 +190,18 @@ export interface NewVideoResult {
 export function createVideo(projectId: string, name: string, csrf: string): Promise<NewVideoResult> {
   return api<NewVideoResult>(`/projects/${encodeURIComponent(projectId)}/videos`, { method: "POST", body: { name }, csrf });
 }
+
+/** Registers an existing folder. A folder without project.yaml gets exactly that one file; nothing else in it is touched. */
+export function adoptProject(body: { location: string; title?: string; project_id?: string }, csrf: string): Promise<ProjectDetail> {
+  return api<ProjectDetail>("/projects/adopt", { method: "POST", body, csrf });
+}
+
+/** Changes the title only; the id never changes. */
+export function renameProject(id: string, title: string, csrf: string): Promise<ProjectDetail> {
+  return api<ProjectDetail>(`/projects/${encodeURIComponent(id)}/title`, { method: "PUT", body: { title }, csrf });
+}
+
+/** Moves the folder under the projects root and follows it in the list; machine-local files are regenerated. */
+export function moveProject(id: string, location: string, csrf: string): Promise<ProjectDetail & { repaired_files: number | null }> {
+  return api(`/projects/${encodeURIComponent(id)}/move`, { method: "POST", body: { location }, csrf });
+}

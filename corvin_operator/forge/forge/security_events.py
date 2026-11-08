@@ -811,6 +811,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "project.plan_created":         "INFO",
     "project.created":              "INFO",
     "project.adopted":              "INFO",
+    "project.renamed":              "INFO",
+    "project.moved":                "WARNING",
     "project.opened":               "INFO",
     "project.feature_toggled":      "INFO",
     "project.repaired":             "INFO",
@@ -3805,7 +3807,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         _et: frozenset({"project_id", "feature", "to", "template", "files", "reason_class", "outcome", "tenant_id"})
         for _et in ("project.plan_created", "project.created", "project.adopted", "project.opened",
                     "project.feature_toggled", "project.repaired", "project.registry_removed", "project.blocked",
-                    "project.video_created")
+                    "project.video_created", "project.renamed", "project.moved")
     },
     "task_item.kb_create": frozenset({
         "kind", "outcome", "kb_id", "actor_kind", "sid_fingerprint", "tenant_id",
