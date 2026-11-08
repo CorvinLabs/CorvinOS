@@ -51,9 +51,9 @@ test.describe.serial("standard plugins on a fresh install", () => {
       registry_id: "video_producer",
       offered: true,
       installed: true,
-      min_version: "1.7.0",
+      min_version: "1.8.0",
     });
-    expect(e.installed_version >= "1.7.0", e.installed_version).toBe(true);
+    expect(e.installed_version >= "1.8.0", e.installed_version).toBe(true);
     // first-party: boot enables it (nothing is asked of the operator)
     await expect.poll(async () => (await vp(page)).enabled, { timeout: 30_000, intervals: [1_000] }).toBe(true);
   });
