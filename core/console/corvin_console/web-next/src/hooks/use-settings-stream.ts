@@ -48,6 +48,17 @@ export function useSettingsStream() {
 
   useEffect(() => {
     const es = new EventSource(SSE_URL, { withCredentials: true });
+    // The stream lives 10 s and then ends; EventSource reconnects. A change made while it was down never arrives as an event, so every
+    // reconnect (not the first open) re-reads all settings queries.
+    let opened = false;
+    es.onopen = () => {
+      if (opened) {
+        for (const keys of new Set(Object.values(DOMAIN_KEYS).flat().map((k) => JSON.stringify(k)))) {
+          qc.invalidateQueries({ queryKey: JSON.parse(keys) as string[] });
+        }
+      }
+      opened = true;
+    };
 
     es.addEventListener("settings.changed", (e: MessageEvent) => {
       try {

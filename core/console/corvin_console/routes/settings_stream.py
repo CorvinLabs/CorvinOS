@@ -48,7 +48,11 @@ router = APIRouter()
 
 _POLL_S = 2.0
 _HEARTBEAT_TICKS = 15       # heartbeat every 15 × 2 s = 30 s
-_MAX_S = 1800.0             # 30 min hard cap per connection
+# A connection lives 10 s and then ends with an `end` event; EventSource reconnects at once (`retry:` below) and the client re-reads every
+# settings query on reconnect, so a change made in the gap is never lost. Uvicorn holds a graceful shutdown for every open stream (the app is
+# not told about the shutdown), so a 30 min lifetime made each restart with an open tab wait its full timeout and cancel the stream.
+_MAX_S = 10.0
+_RETRY_MS = 1000
 
 _BRIDGES = ("discord", "telegram", "whatsapp", "slack", "email", "signal", "teams")
 
@@ -90,7 +94,8 @@ async def _stream(request: Request, tid: str) -> AsyncIterator[bytes]:
     deadline = time.monotonic() + _MAX_S
     tick = 0
 
-    while time.monotonic() < deadline:
+    yield f"retry: {_RETRY_MS}\n\n".encode()
+    while time.monotonic() + _POLL_S <= deadline:
         if await request.is_disconnected():
             break
         await asyncio.sleep(_POLL_S)
@@ -111,6 +116,7 @@ async def _stream(request: Request, tid: str) -> AsyncIterator[bytes]:
 
         if tick % _HEARTBEAT_TICKS == 0:
             yield _fmt("heartbeat", {"ts": time.time()})
+    yield _fmt("end", {"ts": time.time(), "reason": "lifetime"})
 
 
 @router.get("/settings/stream")

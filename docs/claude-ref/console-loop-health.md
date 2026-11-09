@@ -99,3 +99,13 @@ any other program on the port is logged once and left alone. See
 5. `journalctl --user -u corvin-watchdog` — if it says `console unhealthy for 3 probes`
    while `corvin-webui` never logged a crash, the console was slow, not down: find the stall
    (1–3) instead of tuning the watchdog further.
+
+## Long-lived streams end themselves (T-0380)
+
+Uvicorn keeps a graceful shutdown waiting for every open response, and the application is not told that a shutdown started. A stream that
+lives for minutes therefore holds every restart for its full `--timeout-graceful-shutdown` (15 s) and is then cancelled, which the journal
+shows as a traceback and "Cancel 1 running task". Every SSE route lives at most ~10 s and ends with an `end` event; `EventSource`
+reconnects at once (`retry: 1000`). The settings stream (`routes/settings_stream.py`, `_MAX_S = 10`) does the same as the project explorer's
+activity stream; the client (`hooks/use-settings-stream.ts`) re-reads every settings query on each reconnect, so a change made while the
+stream was down is not lost. Measured live 2026-11-09 with an open stream: the restart took 14 s instead of 25 s and the journal had no
+traceback. A new SSE route must not exceed this lifetime. Test: `tests/e2e/test_settings_stream_e2e.py`.
