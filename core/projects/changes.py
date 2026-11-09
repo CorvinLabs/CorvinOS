@@ -33,8 +33,10 @@ def _env() -> dict[str, str]:
     return e
 
 
-_EXEC_KEYS = (re.compile(r"^filter\..+\.(clean|smudge|process)$"), re.compile(r"^diff\..+\.(command|textconv)$"),
-              re.compile(r"^(diff\.external|core\.(pager|sshcommand|askpass|editor|fsmonitor|hookspath)|gpg\..*program)$"))
+_EXEC_KEYS = (re.compile(r"^filter\..+\.(clean|smudge|process)$"),
+              # generic: any key whose NAME says it holds a program (command, cmd, program, hook, helper, pager, editor, textconv, driver,
+              # gitproxy, fsmonitor, askpass ...) is blanked, so a key the list above never heard of is still closed (review rounds 4-5)
+              re.compile(r"(command|cmd|program|hook|hooks|helper|pager|editor|textconv|driver|gitproxy|fsmonitor|askpass|process)$"))
 
 
 _FIXED = (("core.fsmonitor", "false"), ("core.hooksPath", os.devnull), ("diff.ignoreSubmodules", "all"), ("status.submoduleSummary", "false"),
