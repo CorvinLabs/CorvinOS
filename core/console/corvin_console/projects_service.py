@@ -354,8 +354,8 @@ def _git(root: Path, *args: str) -> None:
     _need_git()
     try:
         r = subprocess.run(["git", "-C", str(root), "-c", "user.name=CorvinOS", "-c", "user.email=corvin@localhost",
-                            "-c", f"core.hooksPath={os.devnull}", "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false", *changes.neutral_git_args(Path(root)), *args],
-                           capture_output=True, text=True, env=kb_projection._env("operator"), encoding="utf-8",
+                            "-c", "commit.gpgsign=false", *changes.neutral_git_args(Path(root)), *args],
+                           capture_output=True, text=True, env=changes.neutral_git_env(Path(root), kb_projection._env("operator")), encoding="utf-8",
                            errors="replace", timeout=120)
     except OSError as exc:
         raise Conflict(f"git could not be run ({type(exc).__name__})", "git_missing") from None

@@ -37,28 +37,60 @@ _EXEC_KEYS = (re.compile(r"^filter\..+\.(clean|smudge|process)$"), re.compile(r"
               re.compile(r"^(diff\.external|core\.(pager|sshcommand|askpass|editor|fsmonitor|hookspath)|gpg\..*program)$"))
 
 
+_FIXED = (("core.fsmonitor", "false"), ("core.hooksPath", os.devnull), ("diff.ignoreSubmodules", "all"), ("status.submoduleSummary", "false"),
+          ("submodule.recurse", "false"), ("diff.external", ""), ("core.pager", ""), ("core.sshCommand", ""), ("core.askPass", ""))
+
+
 def neutral_git_args(repo: Path) -> list[str]:
-    """``-c`` overrides that switch off every command a repository's own configuration could make git run (filter and diff drivers, an
-    external diff, a pager ...). A folder the user adopted may carry any ``.git/config``; reading its state must never execute it
-    (release review round 2). Content filters become the identity (``cat``), everything else an empty command."""
-    out: list[str] = ["-c", "core.fsmonitor=false"]          # a fixed override: needs no config read to take effect
-    try:
-        r = subprocess.run(["git", "-C", str(repo), "config", "--list", "--includes", "-z"], capture_output=True, timeout=10, env=_env())
-        entries = [e for e in r.stdout.decode("utf-8", errors="replace").split("\0") if "\n" in e]
-    except (OSError, subprocess.TimeoutExpired):
-        entries = []
-    for e in entries:
-        key = e.split("\n", 1)[0].lower()
-        if any(p.match(key) for p in _EXEC_KEYS):
-            real = e.split("\n", 1)[0]
-            out += ["-c", f"{real}={'cat' if real.lower().endswith(('.clean', '.smudge')) else ''}"]
+    """Fixed ``-c`` overrides every git call on an adopted folder carries: no fsmonitor, no hooks, submodules are never descended into
+    (a nested repository's own config would otherwise run its filters - review round 4). The repository's own EXEC keys are
+    neutralised by ``neutral_git_env``."""
+    out: list[str] = []
+    for k, v in _FIXED:
+        out += ["-c", f"{k}={v}"]
     return out
 
 
+def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
+    """``base`` plus ``GIT_CONFIG_COUNT/KEY_n/VALUE_n`` entries (command scope, they outrank every config file) that switch off every
+    command the repository's own configuration - including include.path targets and config.worktree - could make git run: filter and
+    diff drivers become the identity / nothing. Key and value travel separately, so a driver NAME containing ``=`` cannot split a
+    ``-c key=value`` argument into something else (review round 4). A repository whose config cannot be read keeps only the fixed set."""
+    items: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def collect(r: Path, depth: int) -> None:
+        # git descends into a committed nested repository (add -A, status, diff) and reads ITS config too, so the keys of every gitlink
+        # are neutralised as well; the command-scope entries below apply to those child processes (review round 4)
+        try:
+            lst = subprocess.run(["git", "-C", str(r), "config", "--list", "--includes", "-z"], capture_output=True, timeout=10, env=base)
+            entries = [e for e in lst.stdout.decode("utf-8", errors="replace").split("\0") if "\n" in e]
+            subs = subprocess.run(["git", "-C", str(r), "ls-files", "--stage", "-z"], capture_output=True, timeout=20, env=base) if depth < 3 else None
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        for e in entries:
+            key = e.split("\n", 1)[0]
+            if any(p.match(key.lower()) for p in _EXEC_KEYS) and not key.lower().endswith(".hookspath") and key not in seen:
+                seen.add(key)
+                items.append((key, "cat" if key.lower().endswith((".clean", ".smudge")) else ""))
+        for rec in (subs.stdout.decode("utf-8", errors="replace").split("\0") if subs else []):
+            if rec.startswith("160000 ") and "\t" in rec:
+                child = r / rec.split("\t", 1)[1]
+                if child.is_dir() and not child.is_symlink():
+                    collect(child, depth + 1)
+
+    collect(Path(repo), 0)
+    env = dict(base)
+    env["GIT_CONFIG_COUNT"] = str(len(items))
+    for n, (k, v) in enumerate(items):
+        env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"] = k, v
+    return env
+
+
 def _git(repo: Path, *args: str, check: bool = True, timeout: int = _GIT_TIMEOUT) -> str:
-    r = subprocess.run(["git", "--no-pager", "-C", str(repo), "-c", "core.quotepath=false", "-c", "core.fsmonitor=false",
+    r = subprocess.run(["git", "--no-pager", "-C", str(repo), "-c", "core.quotepath=false",
                         *neutral_git_args(repo), *args],
-                       capture_output=True, timeout=timeout, env=_env())
+                       capture_output=True, timeout=timeout, env=neutral_git_env(repo, _env()))
     if check and r.returncode != 0:
         raise ChangesError("git could not read the repository")
     return r.stdout.decode("utf-8", errors="replace")

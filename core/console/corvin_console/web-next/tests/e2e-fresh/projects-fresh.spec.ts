@@ -40,6 +40,16 @@ test.describe.serial("projects on a fresh install", () => {
       ["data_science", "knowledge", "legal", "marketing", "product", "research", "sales", "software", "video"]);
   });
 
+  test("Corvin itself is the first, built-in tile and cannot be changed", async ({ page }) => {
+    await login(page);
+    const l = (await (await page.request.get(`${API}/projects`)).json()).projects as { id: string; builtin?: boolean; state: string }[];
+    expect(l[0].id).toBe("corvin");
+    expect(l[0].builtin).toBe(true);
+    expect(["ok", "pending"]).toContain(l[0].state);               // pending until the tenant's knowledge base exists
+    await page.goto("/console/app/projects", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-testid="project-card"][data-project-id="corvin"]')).toBeVisible({ timeout: 45_000 });
+  });
+
   test("the operator chooses the projects folder, then creates a project from a role card", async ({ page }) => {
     test.setTimeout(180_000);
     await login(page);

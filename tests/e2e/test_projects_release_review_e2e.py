@@ -180,6 +180,43 @@ class ReleaseReview(_Base):
             self.assertTrue(b["builtin"])
             self.assertEqual((b["state"], b["title"]), ("pending", "Corvin"), b)
 
+    def test_r4_1_a_nested_repos_own_config_and_a_filter_name_with_equals_never_run(self):
+        """Round 4: a committed nested repository's config and a driver name containing '=' escaped the round-3 overrides."""
+        with self._ctx() as c:
+            outer = c.root / "hostile-nested"
+            sub = outer / "sub"
+            sub.mkdir(parents=True)
+            mark_sub, mark_eq = self.tmp / "PWN_sub", self.tmp / "PWN_eq"
+            _git(sub, "init", "-q")
+            (sub / ".gitattributes").write_text("*.txt filter=y\n")
+            (sub / "a.txt").write_text("one\n")
+            _git(sub, "add", "-A")
+            _git(sub, "commit", "-qm", "s")
+            _git(sub, "config", "filter.y.clean", f"sh -c 'touch {mark_sub}; cat'")
+            _git(outer, "init", "-q")
+            (outer / ".gitattributes").write_text("*.txt filter=x=y\n")
+            _git(outer, "config", "filter.x=y.clean", f"sh -c 'touch {mark_eq}; cat'")
+            (outer / "b.txt").write_text("one\n")
+            _git(outer, "-c", "filter.x=y.clean=cat", "add", "-A")
+            _git(outer, "-c", "filter.x=y.clean=cat", "commit", "-qm", "o")
+            for m in (mark_sub, mark_eq):
+                m.unlink(missing_ok=True)
+            (sub / "a.txt").write_text("two\n")
+            (outer / "b.txt").write_text("two\n")
+            pid = c.own.post(f"{_URL}/adopt", json={"location": str(outer)}, headers=self._h(c)).json()["id"]
+            ch = c.own.get(f"{_URL}/{pid}/changes").json()
+            c.own.get(f"{_URL}/{pid}/changes/file", params={"path": "b.txt"})
+            self.assertIn("b.txt", [f["path"] for f in ch["files"]])
+            self.assertFalse(mark_sub.exists(), "a nested repository's own filter ran in the console")
+            self.assertFalse(mark_eq.exists(), "a driver name containing '=' escaped the override")
+            from core.console.corvin_console import projects_service as svc
+            (outer / "b.txt").write_text("three\n")
+            try:
+                svc._git(outer, "add", "-A")
+            except Exception:  # noqa: BLE001 - only the marker matters here
+                pass
+            self.assertFalse(mark_sub.exists() or mark_eq.exists(), "the commit path ran a repository command")
+
     def test_r2b4_without_git_a_repair_or_feature_change_is_a_clear_refusal_and_project_yaml_is_unchanged(self):
         import shutil as _sh
         with self._ctx() as c:
