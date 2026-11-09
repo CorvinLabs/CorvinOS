@@ -280,6 +280,15 @@ class ReleaseReview(_Base):
                 changes.commit_files(repo, "d" * 40)
             except Exception:  # noqa: BLE001 - only the markers matter
                 pass
+            # the commit path (docs repo commits) used another env without the lazy-fetch guard (round 7): a missing parent triggers a fetch
+            _git(repo, "config", "remote.origin.url", f"ext::sh -c touch% {mark_b}")
+            (repo / ".git" / "MERGE_HEAD").write_text("e" * 40 + "\n")
+            from core.console.corvin_console import projects_service as svc
+            for args in (("add", "-A"), ("commit", "-qm", "x", "--allow-empty")):
+                try:
+                    svc._git(repo, *args)
+                except Exception:  # noqa: BLE001 - only the markers matter
+                    pass
             self.assertFalse(mark_a.exists(), "git fetched through the repository's uploadpack program")
             self.assertFalse(mark_b.exists(), "git ran an ext:: transport named in the repository's config")
 

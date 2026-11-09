@@ -87,6 +87,10 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
 
     collect(Path(repo), 0)
     env = dict(base)
+    # no transport at all, whatever protocol.<name>.allow the repository sets (a per-protocol key outranks protocol.allow; this variable
+    # outranks both), and no lazy fetch on any path - the commit path's env did not carry it before (review round 7)
+    env["GIT_ALLOW_PROTOCOL"] = "none"
+    env["GIT_NO_LAZY_FETCH"] = "1"
     env["GIT_CONFIG_COUNT"] = str(len(items))
     for n, (k, v) in enumerate(items):
         env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"] = k, v
