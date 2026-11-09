@@ -101,6 +101,12 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
     # outranks both), and no lazy fetch on any path - the commit path's env did not carry it before (review round 7)
     env["GIT_ALLOW_PROTOCOL"] = "none"
     env["GIT_NO_LAZY_FETCH"] = "1"
+    # The same entries in GIT_CONFIG_PARAMETERS (the older channel `-c` uses): a program that sets GIT_CONFIG_COUNT for itself and so
+    # replaces the entries above - the knowledge-base engine does when it commits - still inherits these (review round 11)
+    def _sq(t: str) -> str:
+        return "'" + t.replace("'", "'\\''") + "'"
+    extra = " ".join(f"{_sq(k)}={_sq(v)}" for k, v in items if "'" not in k and "=" not in k)
+    env["GIT_CONFIG_PARAMETERS"] = (env.get("GIT_CONFIG_PARAMETERS", "") + " " + extra).strip()
     env["GIT_CONFIG_COUNT"] = str(len(items))
     for n, (k, v) in enumerate(items):
         env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"] = k, v

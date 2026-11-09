@@ -1050,6 +1050,9 @@ def create_item(tenant_id: str, *, kind: str, title: str, parent_id: Optional[st
         except KbIndexCorrupt:
             service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "refused"})
             raise KbTransitionRefused(f"board writes are paused: {index_repair_hint(repo)}") from None
+        except ValueError as exc:         # the guard could not read the folder's git configuration (changes.ChangesError)
+            service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "refused"})
+            raise KbTransitionRefused(f"board writes are paused: {str(exc)[:200]}") from None
         if pending:
             service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "refused"})
             raise KbTransitionRefused(f"board writes are paused: uncommitted knowledge-base edits {pending[:5]}")

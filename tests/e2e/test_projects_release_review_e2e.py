@@ -584,3 +584,28 @@ class NeutralisedKeys(unittest.TestCase):
             with self.assertRaises(changes.ChangesError):
                 changes.working_changes(chain[0])
             self.assertFalse(mark.exists(), "a filter in a submodule nested four levels deep ran")
+
+    def test_r11_1_an_engine_that_replaces_git_config_count_keeps_the_guard(self):
+        """Round 11: kb.py sets GIT_CONFIG_COUNT=1 (splitIndex) when it commits, which dropped every guard entry carried in the COUNT channel."""
+        import tempfile
+        from core.projects import changes
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d) / "docs"
+            repo.mkdir()
+            _git(repo, "init", "-q")
+            mark = Path(d) / "PWN_count"
+            (repo / ".gitattributes").write_text("*.txt filter=x\n")
+            (repo / "a.txt").write_text("one\n")
+            _git(repo, "-c", "filter.x.clean=cat", "add", "-A")
+            _git(repo, "-c", "filter.x.clean=cat", "commit", "-qm", "b")
+            _git(repo, "config", "filter.x.clean", f"sh -c 'touch {mark}; cat'")
+            (repo / "a.txt").write_text("two\n")
+            eng = Path(d) / "engine.py"
+            eng.write_text("import os, subprocess, sys\nenv = dict(os.environ, GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='core.splitIndex',\n"
+                           "           GIT_CONFIG_VALUE_0='false')\nsubprocess.run(['git', '-C', sys.argv[2], 'status', '--porcelain'], env=env, capture_output=True)\n")
+            plain = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            subprocess.run([sys.executable, str(eng), "--repo", str(repo)], capture_output=True, env=plain)
+            self.assertTrue(mark.exists(), "the control must run the filter, otherwise this test proves nothing")
+            mark.unlink()
+            subprocess.run([sys.executable, str(eng), "--repo", str(repo)], capture_output=True, env=changes.neutral_git_env(repo, plain))
+            self.assertFalse(mark.exists(), "an engine replacing GIT_CONFIG_COUNT dropped the guard")
