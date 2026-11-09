@@ -1,7 +1,10 @@
 /** The scope decisions (pages/projects/scope.ts). A wrong label here puts two local "T-0001"s on one board. */
 import { describe, expect, it } from "vitest";
 import type { ProjectSummary } from "@/lib/api/projects";
-import { graphScopes, mergeGraphs, parseScope, qualify, scopeLabel, scopeParam, selectableProjects } from "@/pages/projects/scope";
+import {
+  graphScopes, mergeGraphs, parseScope, projectUnavailableReason, qualify, resolveScope, scopeLabel, scopeOptions, scopeParam,
+  selectableProjects,
+} from "@/pages/projects/scope";
 
 const p = (over: Partial<ProjectSummary>): ProjectSummary => ({ id: "alpha", path: "/p", template: "t@1", state: "ok", kb: true, ...over });
 
@@ -38,7 +41,8 @@ describe("labels", () => {
   it("scope labels for the selector", () => {
     expect(scopeLabel({ kind: "project", id: "alpha" }, { alpha: "Plumbline" })).toBe("Plumbline");
     expect(scopeLabel({ kind: "project", id: "beta" }, {})).toBe("beta");
-    expect(scopeLabel({ kind: "both" }, {})).toBe("Corvin + projects");
+    expect(scopeLabel({ kind: "both" }, {})).toBe("All knowledge bases");
+    expect(scopeLabel({ kind: "all" }, {})).toBe("All knowledge bases");
   });
 });
 
@@ -64,5 +68,51 @@ describe("a 'both' view", () => {
     ]);
     expect(merged.entities).toHaveLength(1);
     expect(merged.relations).toEqual([{ from: "u", to: "u" }]);
+  });
+});
+
+describe("the switcher lists every project, and says why one cannot be chosen", () => {
+  const list = [
+    p({ id: "corvin", builtin: true, title: "Corvin" }),
+    p({ id: "alpha", title: "Plumbline", features: { kb: true } }),
+    p({ id: "demo", kb: false, features: { kb: false } }),
+    p({ id: "fresh", kb: false, features: { kb: true } }),
+    p({ id: "gone", state: "missing", reason: "directory /p/gone does not exist" }),
+    p({ id: "bad", state: "invalid" }),
+  ];
+  it("names the reason a project is not selectable", () => {
+    expect(projectUnavailableReason(list[1])).toBeNull();
+    expect(projectUnavailableReason(list[2])).toBe("no knowledge base - switch it on in Settings");
+    expect(projectUnavailableReason(list[3])).toBe("knowledge base not created yet");
+    expect(projectUnavailableReason(list[4])).toBe("folder missing: directory /p/gone does not exist");
+    expect(projectUnavailableReason(list[5])).toBe("invalid project.yaml");
+  });
+  it("the same entries on both pages: All, Corvin, then every project (disabled ones with their reason)", () => {
+    const o = scopeOptions(list);
+    expect(o.map((x) => x.value)).toEqual(["all", "bound", "project:alpha", "project:demo", "project:fresh", "project:gone", "project:bad"]);
+    expect(o.map((x) => x.label).slice(0, 3)).toEqual(["All knowledge bases", "Corvin", "Plumbline"]);
+    expect(o.filter((x) => x.disabled).map((x) => x.projectId)).toEqual(["demo", "fresh", "gone", "bad"]);
+    const demo = o.find((x) => x.projectId === "demo")!;
+    expect(demo.label).toBe("demo (no knowledge base - switch it on in Settings)");
+    expect(demo.fixHref).toBe("/app/projects/demo?tab=settings");
+    expect(o.find((x) => x.projectId === "gone")!.fixHref).toBe("/app/projects/gone");
+    expect(selectableProjects(list).map((x) => x.id)).toEqual(["alpha"]);
+  });
+  it("reads ?scope= per page: defaults, the former 'both', unknown and unavailable projects", () => {
+    expect(resolveScope(null, list, "tasks")).toEqual({ scope: { kind: "all" }, note: null, pending: false });
+    expect(resolveScope(null, list, "graph")).toEqual({ scope: { kind: "bound" }, note: null, pending: false });
+    expect(resolveScope("both", list, "graph").scope).toEqual({ kind: "all" });
+    expect(resolveScope("project:alpha", list, "graph").scope).toEqual({ kind: "project", id: "alpha" });
+    expect(resolveScope("project:corvin", list, "tasks").scope).toEqual({ kind: "bound" });
+    const ghost = resolveScope("project:ghost", list, "tasks");
+    expect(ghost.scope).toEqual({ kind: "all" });
+    expect(ghost.note).toBe('There is no project "ghost". Showing All knowledge bases instead.');
+    const demo = resolveScope("project:demo", list, "graph");
+    expect(demo.scope).toEqual({ kind: "bound" });
+    expect(demo.note).toBe("demo cannot be shown: no knowledge base - switch it on in Settings. Showing Corvin instead.");
+  });
+  it("a shared project link waits for the project list instead of showing the default first", () => {
+    expect(resolveScope("project:alpha", undefined, "tasks")).toEqual({ scope: { kind: "project", id: "alpha" }, note: null, pending: true });
+    expect(resolveScope("bound", undefined, "tasks").pending).toBe(false);
   });
 });

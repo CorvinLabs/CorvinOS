@@ -224,6 +224,8 @@ export interface KbProjectionStatus {
   items?: number;
   drift_total?: number;
   checked_at?: number;
+  /** One projection state per project knowledge base (ADR-2316), keyed by project id. */
+  projects?: Record<string, { state?: string; error?: string; reason?: string; graph_error?: string }>;
 }
 
 export function getKbStatus(signal?: AbortSignal): Promise<KbProjectionStatus> {

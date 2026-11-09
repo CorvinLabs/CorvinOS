@@ -186,25 +186,46 @@ the feature-off switch), `tests/unit/projects-inspector.test.ts` (13).
 missing; the open part is a Playwright run of every tab against a real created project (the stubs answer the shape). Proof so far: `tests/unit/projects-inspector.test.ts` (9, incl. a mutation
 probe on the dependants confirmation), `tests/e2e/projects-inspector.spec.ts` (6, served bundle, network stubbed).
 
-## Scope of the Tasks board and the Knowledge Graph (T-0360)
+## Scope of the Tasks board and the Knowledge Graph (T-0360, switcher 2026-11-09)
 
-Both pages read one URL parameter, `?scope=`: `all` (Tasks only, the default there), `bound` (the tenant's own
-knowledge base), `project:<id>` (one project's knowledge base), `both` (Knowledge Graph only: the bound knowledge base
-and every selectable project joined). Unknown project ids fall back to the default rather than showing an empty board.
-Pure decisions in `pages/projects/scope.ts` (9 unit tests incl. a mutation probe on the qualification).
+Both pages show ONE switcher (`ScopeSelect` in `pages/projects/scope-select.tsx`, placed under the page title,
+above every number it governs) with the same entries in the same order: **All knowledge bases** (`all`), **Corvin**
+(`bound`, the tenant's own knowledge base), then **every** registered project (`project:<id>`). A project that
+cannot be shown is listed DISABLED with its reason (`projectUnavailableReason`: "no knowledge base - switch it on in
+Settings", "knowledge base not created yet", "folder missing: ...", "invalid project.yaml", "still being created"),
+and a line under the select ("Not available here: ...") links to where it is fixed (the project's Settings tab, or
+its page when the folder is missing/invalid). The choice is the URL (`?scope=`), so a reload and a shared link keep
+it. Defaults: `all` on Tasks, `bound` on the Knowledge Graph (`DEFAULT_SCOPE`). `both` (the graph's former word for
+the joined view) is read as `all`; `project:corvin` is `bound`. An unknown or unavailable project id falls back to
+the page default and SAYS so (`scope-note`: 'There is no project "x". Showing ... instead.'). While the project list
+is still loading, a `project:<id>` link waits for it instead of showing the default first (`resolveScope` → `pending`).
+Pure decisions in `pages/projects/scope.ts` (`tests/unit/projects-scope.test.ts`, 13 tests).
 
 - **Tasks:** `getTaskItems(signal, false, scope)` passes the parameter to `GET /task-tracking/items`; the scope survives
-  every change of view (the page rebuilds its query string, so `setQuery` carries it over explicitly).
+  every change of view (the page rebuilds its query string, so `setQuery` carries it over explicitly). The server
+  counts `summary` over the SCOPED list, so the header ("<scope>: N items · M active initiatives") and the KPI tiles
+  ("Counts for <scope> ...") never mix scopes. With a project chosen, the bound KB's banners (projection state, human
+  queue) are hidden and the project's own projection state is shown instead (`/kb/status` → `projects[<id>]`); the
+  Runs section says it is install-wide ("not filtered by knowledge base").
 - **Knowledge Graph:** one request per knowledge base (`/graph` or `/graph?project=<id>`), joined by `mergeGraphs`:
   a project's labels are qualified (`alpha/T-0001`), two equal local ids stay separate nodes, relations never cross
-  knowledge bases, so the two graphs form two islands. A node's document is read with its own project
-  (`/doc/{key}?project=<id>`). The query key carries the project ids: a direct link is parsed before the project list
-  has arrived, and the graph must load again once it has (found by a screenshot; the test now covers a late list).
+  knowledge bases, so the graphs form islands. A node's document is read with its own project
+  (`/doc/{key}?project=<id>`). Each answer carries `repo_path` and `graph_state` (`ok`/`built`/`empty`/`missing`/
+  `error` + `graph_error`); the stats line shows "<scope> · Repository: <that path>" (or "N knowledge bases"), an
+  empty project KB says so with its own path, and a graph that could not be built is named in a banner. Pull/Push/Sync
+  are shown only for Corvin (they act on the bound checkout). The project ids are part of the query key only for the
+  joined view, which waits for the project list (elsewhere their arrival discarded a loaded graph: "0 nodes" for a moment).
+- **Project graphs are built by the console** (`kb_projection.ensure_project_graph`/`index_project_graph`): on a read
+  whose `kb/graph` is missing or older than the KB's sources (`graph_stale`, bounded scan), and after a projector pass
+  that exported a changed project KB — always with the bound engine, off the event loop (`asyncio.to_thread`), one
+  lock per KB folder (`graph_lock`). A folder whose git does not ignore `kb/graph/` is refused with that reason.
 - **Card moves** still use the existing board path (`kbTransition` → `/kb-transition`); the server resolves the
   project from the card's label (proven over HTTP in `tests/e2e/test_project_kb_writes_e2e.py`).
 
-Proof: `tests/e2e/projects-scope.spec.ts` (3 browser tests on the served bundle, endpoints stubbed, incl. the direct
-link with a delayed project list). Screenshot checked: two islands, qualified labels, "4 of 4 nodes shown".
+Proof: `tests/e2e/projects-scope.spec.ts` (6 browser tests on the served bundle, endpoints stubbed),
+`tests/e2e/test_project_graph_scope_e2e.py` (2, real routes: on-demand build, staleness, empty KB, refused folder,
+projector build, scoped summary), `tests/e2e/projects-scope-live.spec.ts` (keep-live: both pages on the running
+console, both themes, 1280/375 px, screenshots in `/tmp/scope-switch`).
 
 ## New video (T-0361)
 

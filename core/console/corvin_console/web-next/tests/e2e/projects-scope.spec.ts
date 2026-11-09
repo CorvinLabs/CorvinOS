@@ -3,7 +3,7 @@
  * stubbed at the network boundary. The stubs answer exactly as the real routes do for ?scope= and ?project=
  * (CorvinOS tests/e2e/test_project_scope_api_e2e.py proves the real answers). What this proves:
  *   - the Tasks board asks for the chosen knowledge base and shows only its cards; the scope survives a view change;
- *   - the Knowledge Graph "Corvin + projects" view joins both knowledge bases, qualifies a project's labels, and
+ *   - the Knowledge Graph "All knowledge bases" view joins both knowledge bases, qualifies a project's labels, and
  *     two equal local ids (T-0001 in each) stay distinct.
  * The card move (/kb-transition) is the existing board path; its server side is proven in test_project_kb_writes_e2e.py.
  */
@@ -11,6 +11,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 const PROJECTS = { projects_root: "/home/u/projects", projects: [
   { id: "alpha", path: "/home/u/projects/alpha", template: "video-engineering@1", state: "ok", title: "Plumbline", kb: true, active: ["core", "kb"] },
+  { id: "demo", path: "/home/u/projects/demo", template: "blank@1", state: "ok", kb: false, features: { kb: false }, active: ["core"] },
 ] };
 
 function item(id: string, title: string, project: string | null) {
@@ -30,7 +31,10 @@ async function stub(page: Page) {
   await page.route(/\/v1\/console\/task-tracking\/items/, (r) => {
     const scope = new URL(r.request().url()).searchParams.get("scope");
     const items = scope === "project:alpha" ? [ALPHA] : scope === "bound" ? [BOUND] : [BOUND, ALPHA];
-    return r.fulfill({ json: { items, server_time: new Date().toISOString(), summary: {}, import_available: false } });
+    // the real route counts the summary over the scoped list (test_project_graph_scope_e2e.py)
+    const summary = { open: items.length, in_progress: 0, blocked: 0, complete: 0, archived: 0, total: items.length, overdue: 0,
+      approvals_pending: 0, done_7d: 0, initiatives_active: 0 };
+    return r.fulfill({ json: { items, server_time: new Date().toISOString(), summary, import_available: false } });
   });
   await page.route(/\/v1\/console\/task-tracking\/kb\/status/, (r) => r.fulfill({ json: { state: "ok", enabled: true, projects: {} } }));
   await page.route(/\/v1\/console\/plugins\/corvin-knowledge\/config/, (r) => r.fulfill({ json: { repo_path: "/k", remote_url: "", auto_sync_on_query: true, consistency_level: "warn" } }));
@@ -39,7 +43,8 @@ async function stub(page: Page) {
     const entity = project
       ? { id: "uid-alpha", label: "T-0001", file: "a.md", type: "decision", title: "Project decision", status: "accepted", tags: [] }
       : { id: "uid-bound", label: "T-0001", file: "b.md", type: "decision", title: "Bound decision", status: "accepted", tags: [] };
-    return r.fulfill({ json: { entities: [entity], relations: [], duplicate_rows: 0 } });
+    return r.fulfill({ json: { entities: [entity], relations: [], duplicate_rows: 0, graph_state: "ok", graph_error: null,
+      repo_path: project ? "/home/u/projects/alpha/docs" : "/k" } });
   });
 }
 
@@ -61,11 +66,11 @@ test("the Tasks board shows the chosen knowledge base and keeps the scope when t
   await expect(page.getByText("bound task")).toHaveCount(0);
 });
 
-test("the Knowledge Graph 'Corvin + projects' view joins both knowledge bases with qualified labels", async ({ page }) => {
+test("the Knowledge Graph 'All knowledge bases' view joins both knowledge bases with qualified labels", async ({ page }) => {
   await stub(page);
   await page.goto("/console/app/corvin-knowledge");
-  await page.getByTestId("scope-select").selectOption("both");
-  await expect(page).toHaveURL(/scope=both/);
+  await page.getByTestId("scope-select").selectOption("all");
+  await expect(page).toHaveURL(/scope=all/);
   await page.getByTestId("knowledge-search-input").fill("decision");
   const hits = page.getByTestId("knowledge-search-hits");
   await expect(hits).toContainText("alpha/T-0001");
@@ -83,4 +88,44 @@ test("a direct link to the joined view loads both knowledge bases, even when the
   await page.getByTestId("knowledge-search-input").fill("decision");
   await expect(page.getByTestId("knowledge-search-hits")).toContainText("alpha/T-0001");
   await expect(page.getByTestId("knowledge-search-hits")).toContainText("T-0001");
+});
+
+test("a project without a knowledge base is listed disabled with its reason, on both pages", async ({ page }) => {
+  await stub(page);
+  for (const url of ["/console/app/initiatives", "/console/app/corvin-knowledge"]) {
+    await page.goto(url);
+    const demo = page.getByTestId("scope-select").locator('option[value="project:demo"]');
+    await expect(demo).toHaveCount(1);
+    await expect(demo).toHaveAttribute("disabled", "");
+    await expect(demo).toHaveText("demo (no knowledge base - switch it on in Settings)");
+    await expect(page.getByTestId("scope-unavailable")).toContainText("demo");
+    await expect(page.getByTestId("scope-unavailable").getByRole("link", { name: "demo" })).toHaveAttribute("href", /\/app\/projects\/demo\?tab=settings/);
+    await expect(page.getByTestId("scope-select").locator("option")).toHaveText(["All knowledge bases", "Corvin", "Plumbline", "demo (no knowledge base - switch it on in Settings)"]);
+  }
+});
+
+test("an unknown or unavailable ?scope= falls back to the page default and says why", async ({ page }) => {
+  await stub(page);
+  await page.goto("/console/app/initiatives?scope=project:ghost");
+  await expect(page.getByTestId("scope-note")).toHaveText('There is no project "ghost". Showing All knowledge bases instead.');
+  await expect(page.getByTestId("scope-select")).toHaveValue("all");
+  await page.goto("/console/app/corvin-knowledge?scope=project:demo");
+  await expect(page.getByTestId("scope-note")).toContainText("demo cannot be shown: no knowledge base");
+  await expect(page.getByTestId("scope-select")).toHaveValue("bound");
+});
+
+test("the counters and the repository line name the chosen knowledge base", async ({ page }) => {
+  await stub(page);
+  await page.goto("/console/app/initiatives?scope=project:alpha");
+  await expect(page.getByTestId("tasks-scope-counts")).toHaveText("Plumbline: 1 items · 0 active initiatives");
+  await expect(page.getByTestId("kpi-scope-note")).toContainText("Counts for Plumbline");
+  await expect(page.getByTestId("kpi-open")).toContainText("1");
+  await page.getByTestId("scope-select").selectOption("all");
+  await expect(page.getByTestId("tasks-scope-counts")).toHaveText("All knowledge bases: 2 items · 0 active initiatives");
+  await page.goto("/console/app/corvin-knowledge?scope=project:alpha");
+  await expect(page.getByTestId("knowledge-repo")).toContainText("Plumbline · Repository: /home/u/projects/alpha/docs");
+  await page.reload();
+  await expect(page.getByTestId("knowledge-repo")).toContainText("/home/u/projects/alpha/docs");
+  await page.getByTestId("scope-select").selectOption("bound");
+  await expect(page.getByTestId("knowledge-repo")).toContainText("Corvin · Repository: /k");
 });

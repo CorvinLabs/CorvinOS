@@ -34,7 +34,7 @@ import {
 import { cn } from "@/lib/utils";
 import { listProjects } from "@/lib/api/projects";
 import { ScopeSelect } from "@/pages/projects/scope-select";
-import { parseScope, scopeParam, selectableProjects, type Scope } from "@/pages/projects/scope";
+import { listedProjects, resolveScope, scopeLabel, scopeParam } from "@/pages/projects/scope";
 import { RunningNow, SourceNotes, TaskTable, TypeChips } from "./activity-parts";
 import { CreateDialog } from "./create-dialog";
 import { DetailDrawer } from "./detail-drawer";
@@ -142,9 +142,11 @@ export default function TasksPage() {
   // other change (setQuery rebuilds the whole query string, so it is carried over explicitly below).
   const scopeRaw = params.get("scope");
   const projectsQ = useQuery({ queryKey: ["projects", "list"], queryFn: ({ signal }) => listProjects(signal), retry: false });
-  const pickable = selectableProjects(projectsQ.data?.projects);
-  const scope: Scope = parseScope(scopeRaw, pickable.map((p) => p.id), { kind: "all" });
+  const projectList = projectsQ.isLoading ? undefined : (projectsQ.data?.projects ?? []);
+  const { scope, note: scopeNote, pending: scopePending } = resolveScope(scopeRaw, projectList, "tasks");
   const scopeKey = scope.kind === "all" ? "" : scopeParam(scope);
+  // the name every number on the page is qualified with: the counters and the list come from this scope only
+  const scopeName = scopeLabel(scope, Object.fromEntries(listedProjects(projectList).map((p) => [p.id, p.title || p.id])));
   const setScope = (raw: string) => setParams((p) => { const n = new URLSearchParams(p); if (raw === "all") n.delete("scope"); else n.set("scope", raw); return n; }, { replace: true });
 
   const setQuery = useCallback((patch: { view?: View; item?: string | null; filters?: Filters }) => {
@@ -169,6 +171,7 @@ export default function TasksPage() {
       return b;
     },
     ...LIVE_QUERY,
+    enabled: !scopePending,   // a shared ?scope=project:<id> waits for the project list instead of showing All first
     retry: (n, err) => !(err instanceof ApiError && err.status === 404) && n < 2,
     retryDelay: 1_000,
   });
@@ -309,7 +312,7 @@ export default function TasksPage() {
           <h1 className="text-xl font-semibold">Tasks</h1>
           <p className="text-sm text-muted-foreground">
             Initiatives, epics and tasks from the task store
-            {summary && <> · {items.length} items · {summary.initiatives_active} active initiatives</>}
+            {summary && <> · <span data-testid="tasks-scope-counts"><span className="font-medium text-foreground">{scopeName}</span>: {items.length} items · {summary.initiatives_active} active initiatives</span></>}
           </p>
           <FreshnessLine updatedAt={q.dataUpdatedAt} failing={q.isError} fetching={q.isFetching} />
         </div>
@@ -329,6 +332,11 @@ export default function TasksPage() {
         </p>
       )}
 
+      {/* the knowledge base comes first: every count and card below belongs to it */}
+      <div className="max-w-md">
+        <ScopeSelect value={scopeKey || "all"} projects={projectList} note={scopeNote} onChange={setScope} />
+      </div>
+
       {notAvailable && (
         <Card><CardContent className="py-6 text-sm text-muted-foreground">The task store is not available on this build.</CardContent></Card>
       )}
@@ -338,7 +346,7 @@ export default function TasksPage() {
           <Button size="sm" variant="ghost" onClick={() => q.refetch()}><RefreshCw className="mr-1 h-3.5 w-3.5" />Retry</Button>
         </CardContent></Card>
       )}
-      {q.isLoading && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading tasks…</p>}
+      {q.isPending && !q.isError && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading tasks…</p>}
 
       {q.data && (
         <>
@@ -353,7 +361,9 @@ export default function TasksPage() {
               active={isKpi({ approvalsOnly: true, kinds: [] })} onClick={() => kpiFilter({ approvalsOnly: true, kinds: [] })} />
             <Kpi testId="kpi-done" label="Completed (7 days)" value={summary?.done_7d} active={isKpi({ doneRecently: true })} onClick={() => kpiFilter({ doneRecently: true })} />
           </div>
-          <p className="text-xs text-muted-foreground">Counts cover work items (tasks, subtasks, issues, proposals); initiatives, epics and stories are containers.</p>
+          <p className="text-xs text-muted-foreground" data-testid="kpi-scope-note">
+            Counts for <span className="font-medium text-foreground">{scopeName}</span> cover work items (tasks, subtasks, issues, proposals); initiatives, epics and stories are containers.
+          </p>
 
           {summary && summary.approvals_pending > 0 && !filters.approvalsOnly && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
@@ -367,11 +377,6 @@ export default function TasksPage() {
             <RunningNow runs={runningNow} onOpen={() => { setRunTypes(new Set<TaskType>()); setQuery({ view: "activity" }); }} />
           )}
 
-          <div className="flex flex-wrap items-end gap-3">
-            <ScopeSelect value={scopeKey || "all"} label="Knowledge base" onChange={setScope}
-              options={[{ value: "all", label: "All" }, { value: "bound", label: "Corvin" },
-                ...pickable.map((p) => ({ value: `project:${p.id}`, label: p.title ?? p.id }))]} />
-          </div>
           <div className="flex flex-wrap items-center gap-2 border-b pb-2" role="tablist" aria-label="View">
             {VIEWS.map((v) => (
               <button key={v.id} type="button" role="tab" aria-selected={view === v.id} aria-controls="tasks-view-panel" data-testid={`view-${v.id}`}
@@ -419,7 +424,18 @@ export default function TasksPage() {
           )}
 
           {boardError && <p role="alert" className="text-xs text-destructive">{boardError}</p>}
-          {kbQ.data?.enabled && kbQ.data.state !== "ok" && kbQ.data.state !== "idle" && (
+          {scope.kind === "project" && (() => {
+            const ps = kbQ.data?.projects?.[scope.id];
+            if (!ps || !ps.state || ps.state === "ok" || ps.state === "idle") return null;
+            return (
+              <p role="status" data-testid="kb-project-banner" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+                {ps.state === "blocked" ? `The knowledge base of ${scopeName} is inconsistent - the board shows its last consistent state. Run "kb check" in it.`
+                  : ps.state === "held" ? `Uncommitted edits in the knowledge base of ${scopeName} - the board keeps its last consistent state until they are committed.`
+                  : `Knowledge-base sync of ${scopeName}: ${ps.state}${ps.error ? ` - ${ps.error}` : ps.reason ? ` - ${ps.reason}` : ""}`}
+              </p>
+            );
+          })()}
+          {scope.kind !== "project" && kbQ.data?.enabled && kbQ.data.state !== "ok" && kbQ.data.state !== "idle" && (
             <p role="status" data-testid="kb-projection-banner"
               className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
               {kbQ.data.state === "blocked"
@@ -440,7 +456,7 @@ export default function TasksPage() {
             </p>
           )}
 
-          {kbQ.data?.enabled && queueBanner && (
+          {scope.kind !== "project" && kbQ.data?.enabled && queueBanner && (
             <section data-testid="human-queue-banner" aria-label="Human queue"
               className={`rounded-md border px-3 py-2 text-xs ${queueBanner.paused
                 ? "border-destructive/40 bg-destructive/10" : "border-amber-500/40 bg-amber-500/10"}`}>
@@ -454,7 +470,8 @@ export default function TasksPage() {
           {(view === "tree" || view === "timeline" || (items.length === 0 && workViews && view !== "graph")) && runs.length > 0 && (
             <section className="space-y-2" data-testid="work-runs" aria-label="Runs">
               <h2 className="text-sm font-semibold">Runs <span className="font-normal text-muted-foreground">
-                — {runs.filter(isActiveRun).length} active, finished in the last 24 h · chat turns, background tasks, A2A, agent sessions …</span></h2>
+                — {runs.filter(isActiveRun).length} active, finished in the last 24 h · chat turns, background tasks, A2A, agent sessions …
+                {scope.kind !== "all" && " · every run on this install, not filtered by knowledge base"}</span></h2>
               {runsTruncated && (
                 <p className="text-xs text-muted-foreground" data-testid="runs-truncated">
                   Showing the latest {WORK_RUNS_FETCH} finished runs — older runs of the last 24 h are listed in Activity.

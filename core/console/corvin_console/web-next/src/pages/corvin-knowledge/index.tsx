@@ -26,13 +26,19 @@ import { GraphCanvas } from "./GraphCanvas";
 import { DocumentPane } from "./DocumentPane";
 import { listProjects } from "@/lib/api/projects";
 import { ScopeSelect } from "@/pages/projects/scope-select";
-import { graphScopes, mergeGraphs, parseScope, scopeParam, selectableProjects, type Scope } from "@/pages/projects/scope";
+import { graphScopes, listedProjects, mergeGraphs, resolveScope, scopeLabel, scopeParam, selectableProjects } from "@/pages/projects/scope";
 import { buildLinkIndex } from "./link-resolver";
 import { neighbourhood, newestDecisionKey, searchNodes } from "./graph-model";
 
 export interface KnowledgeEntity { id: string; label?: string; file?: string; type: string; title: string; status: string; tags: string[]; /** the project whose knowledge base holds the node (ADR-2316); null/absent = the bound KB */ scope?: string | null }
 export interface KnowledgeRelation { from_id: string; to_id: string; relation: string }
 export interface KnowledgeGraph { entities: KnowledgeEntity[]; relations: KnowledgeRelation[] }
+/** One knowledge base's answer: where it was read from and what state its graph is in. */
+export interface KnowledgeGraphPart {
+  projectId: string | null; repoPath: string; entities: number; relations: number;
+  state: "ok" | "built" | "empty" | "missing" | "error"; error: string | null;
+}
+interface GraphResponse extends KnowledgeGraph { repo_path?: string; graph_state?: KnowledgeGraphPart["state"]; graph_error?: string | null }
 export interface KnowledgeConfig {
   repo_path: string; remote_url: string; auto_sync_on_query: boolean; consistency_level: "strict" | "warn" | "ignore";
 }
@@ -85,22 +91,30 @@ export function CorvinKnowledgePage() {
   // view joins them (labels qualified with the project id, islands never joined by an invented edge).
   const [scopeParams, setScopeParams] = useSearchParams();
   const projectsQ = useQuery({ queryKey: ["projects", "list"], queryFn: ({ signal }) => listProjects(signal), retry: false });
-  const pickable = selectableProjects(projectsQ.data?.projects);
-  const scope: Scope = parseScope(scopeParams.get("scope"), pickable.map((p) => p.id), { kind: "bound" });
+  const projectList = projectsQ.isLoading ? undefined : (projectsQ.data?.projects ?? []);
+  const pickable = selectableProjects(projectList);
+  const { scope, note: scopeNote, pending: scopePending } = resolveScope(scopeParams.get("scope"), projectList, "graph");
   const scopeKey = scopeParam(scope);
+  const titles = useMemo(() => Object.fromEntries(listedProjects(projectList).map((p) => [p.id, p.title || p.id])), [projectList]);
+  const scopeName = scopeLabel(scope, titles);
   const setScope = (raw: string) => setScopeParams((p) => { const n = new URLSearchParams(p); if (raw === "bound") n.delete("scope"); else n.set("scope", raw); n.delete("node"); return n; }, { replace: true });
   const graph = useQuery({
-    // the project ids are part of the key: a direct link (?scope=both) is parsed before the project list
-    // has arrived, and the graph must load again once it has (a key without them kept the bound graph only)
-    queryKey: [...KEY_GRAPH, scopeKey, pickable.map((p) => p.id).join(",")],
+    // A shared ?scope=project:<id> waits for the project list instead of showing Corvin first, and the joined view
+    // waits for it too (it fetches one graph per project). The project ids are part of the key only for the joined
+    // view: anywhere else their arrival would throw away a loaded graph and show "0 nodes" for a moment.
+    enabled: !scopePending && !(scope.kind === "all" && projectList === undefined),
+    queryKey: [...KEY_GRAPH, scopeKey, scope.kind === "all" ? pickable.map((p) => p.id).join(",") : ""],
     queryFn: async ({ signal }) => {
       const ids = graphScopes(scope, pickable.map((p) => p.id));
       const parts = await Promise.all(ids.map(async (pid) => {
-        const g = await api<KnowledgeGraph>(`${BASE_PATH}/graph${pid ? `?project=${encodeURIComponent(pid)}` : ""}`, { signal });
-        return { projectId: pid ?? null, entities: g.entities.map((e) => ({ ...e, label: e.label ?? e.id })), relations: g.relations };
+        // a project graph that is missing or stale is built by the server first (kb index), which can take a moment
+        const g = await api<GraphResponse>(`${BASE_PATH}/graph${pid ? `?project=${encodeURIComponent(pid)}` : ""}`, { signal, timeoutMs: 90_000 });
+        const info: KnowledgeGraphPart = { projectId: pid ?? null, repoPath: g.repo_path ?? "", entities: g.entities.length,
+          relations: g.relations.length, state: g.graph_state ?? (g.entities.length ? "ok" : "empty"), error: g.graph_error ?? null };
+        return { projectId: pid ?? null, entities: g.entities.map((e) => ({ ...e, label: e.label ?? e.id })), relations: g.relations, info };
       }));
       const merged = mergeGraphs(parts);
-      return { ...parts[0], entities: merged.entities, relations: merged.relations } as unknown as KnowledgeGraph;
+      return { entities: merged.entities, relations: merged.relations, parts: parts.map((p) => p.info) } as KnowledgeGraph & { parts: KnowledgeGraphPart[] };
     },
     retry: false,
   });
@@ -178,6 +192,11 @@ export function CorvinKnowledgePage() {
     return [...STATUS_ORDER.filter((s) => seen.includes(s)), ...seen.filter((s) => !(STATUS_ORDER as readonly string[]).includes(s)).sort()];
   }, [entities]);
   const counts = statuses.map((s) => [s, entities.filter((e) => e.status === s).length] as const);
+  // where the numbers come from: the chosen knowledge base(s), never the Settings path when a project is shown
+  const parts = graph.data?.parts ?? [];
+  const single = parts.length === 1 ? parts[0] : null;
+  const repoLine = single ? single.repoPath : parts.length > 1 ? `${parts.length} knowledge bases` : "—";
+  const failedParts = parts.filter((p) => p.state === "error");
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6" data-testid="corvin-knowledge-panel">
@@ -189,21 +208,31 @@ export function CorvinKnowledgePage() {
         <p className="text-muted-foreground">{MARKER_KNOWLEDGE}</p>
       </div>
 
+      {/* the knowledge base comes first: every number below belongs to it */}
+      <div className="max-w-md"><ScopeSelect value={scopeKey} projects={projectList} note={scopeNote} onChange={setScope} /></div>
+
       <Card>
         <CardContent className="py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-          <span><span className="text-muted-foreground">Entities:</span> <span className="font-mono tabular-nums">{graph.isLoading ? "—" : graph.isError ? "unavailable" : entities.length}</span></span>
-          <span><span className="text-muted-foreground">Relations:</span> <span className="font-mono tabular-nums">{graph.isLoading ? "—" : graph.isError ? "unavailable" : graph.data?.relations.length ?? 0}</span></span>
+          <span><span className="text-muted-foreground">Entities:</span> <span className="font-mono tabular-nums">{graph.isPending ? "—" : graph.isError ? "unavailable" : entities.length}</span></span>
+          <span><span className="text-muted-foreground">Relations:</span> <span className="font-mono tabular-nums">{graph.isPending ? "—" : graph.isError ? "unavailable" : graph.data?.relations.length ?? 0}</span></span>
           {counts.map(([s, n]) => <span key={s} className="text-xs text-muted-foreground">{s} <span className="font-mono tabular-nums text-foreground">{n}</span></span>)}
-          <span className="ml-auto text-xs text-muted-foreground">Repository: <span className="font-mono">{config.data?.repo_path ?? "—"}</span></span>
-          <div className="flex gap-2">
+          <span className="ml-auto text-xs text-muted-foreground" data-testid="knowledge-repo">
+            <span className="text-foreground font-medium">{scopeName}</span> · Repository: <span className={single ? "font-mono break-all" : undefined} title={parts.map((p) => p.repoPath).join("\n")}>{graph.isPending ? "—" : repoLine}</span>
+          </span>
+          {scope.kind === "bound" && <div className="flex gap-2">
             {(["pull", "push", "both"] as const).map((t) => (
               <Button key={t} size="sm" variant="outline" disabled={sync.isPending || !csrf} onClick={() => sync.mutate(t)}>
                 {sync.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} {t === "both" ? "Sync" : t === "pull" ? "Pull" : "Push"}
               </Button>
             ))}
-          </div>
+          </div>}
         </CardContent>
       </Card>
+      {failedParts.map((p) => (
+        <p key={p.projectId ?? "bound"} role="status" data-testid="knowledge-build-error" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+          The graph of {p.projectId ? (titles[p.projectId] ?? p.projectId) : "Corvin"} could not be built: {p.error ?? "unknown error"}
+        </p>
+      ))}
       {msg && <p className="text-xs text-muted-foreground" data-testid="knowledge-msg">{msg}</p>}
 
       <Tabs defaultValue="graph">
@@ -234,9 +263,6 @@ export function CorvinKnowledgePage() {
                 </ul>
               )}
             </label>
-            <ScopeSelect value={scopeKey} label="Knowledge base" onChange={setScope}
-              options={[{ value: "bound", label: "Corvin" }, { value: "both", label: "Corvin + projects" },
-                ...pickable.map((p) => ({ value: `project:${p.id}`, label: p.title ?? p.id }))]} />
             <div className="flex rounded-md border border-border" role="group" aria-label="View">
               {(["focus", "all"] as const).map((m) => (
                 <Button key={m} size="sm" variant={mode === m ? "accent" : "ghost"} aria-pressed={mode === m} onClick={() => { setMode(m); setLayoutChoice(null); }}>{m === "focus" ? "Focus" : "All"}</Button>
@@ -265,13 +291,22 @@ export function CorvinKnowledgePage() {
             <span className="text-xs text-muted-foreground" data-testid="knowledge-summary">{shown.entities.length} of {entities.length} nodes shown</span>
           </div>
 
-          {graph.isLoading ? (
+          {graph.isPending ? (
             <div className="py-16 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
           ) : graph.isError ? (
             <Card className="border-destructive/30 bg-destructive/10"><CardContent className="py-6 flex items-center gap-2 text-destructive text-sm"><AlertCircle size={18} /> The graph could not be loaded.</CardContent></Card>
           ) : entities.length === 0 ? (
-            <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg" data-testid="knowledge-empty">
-              No entities at <span className="font-mono">{config.data?.repo_path ?? "the configured path"}</span>/kb/graph. Point the repository path at a Corvin-Knowledge checkout under Settings, run `kb index` there, or pull it.
+            <div className="py-10 px-4 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg" data-testid="knowledge-empty">
+              {scope.kind === "project" ? (
+                single?.state === "error"
+                  ? <>The graph of <span className="font-medium text-foreground">{scopeName}</span> could not be built, so there is nothing to show.</>
+                  : <>The knowledge base of <span className="font-medium text-foreground">{scopeName}</span> holds no decisions, concepts or tasks yet
+                      {" "}(<span className="font-mono break-all">{single?.repoPath ?? ""}</span>). Add some from the project&apos;s chat or with &quot;kb new&quot;; the graph follows.</>
+              ) : scope.kind === "all" ? (
+                <>None of the knowledge bases holds an entity yet.</>
+              ) : (
+                <>No entities at <span className="font-mono break-all">{single?.repoPath || config.data?.repo_path || "the configured path"}</span>/kb/graph. Point the repository path at a Corvin-Knowledge checkout under Settings, run `kb index` there, or pull it.</>
+              )}
             </div>
           ) : shown.entities.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">No node matches.</div>
