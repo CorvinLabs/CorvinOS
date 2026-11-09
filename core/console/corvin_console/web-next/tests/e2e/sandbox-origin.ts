@@ -53,6 +53,8 @@ export const LIVE_ONLY_SPEC_GLOBS: string[] = [
   '**/nordtech-command-center.spec.ts',
   '**/panel-datahub-unified.spec.ts',
   '**/peer-live-status-symbols.spec.ts',
+  '**/projects-explorer-live.spec.ts',
+  '**/projects-screens-live.spec.ts',
   '**/skill-forge-live.spec.ts',
   '**/skill-forge.spec.ts',
   '**/tasks-live.spec.ts',
@@ -78,6 +80,8 @@ export const LIVE_HEADER_NOT_LIVE: Record<string, string> = {
   'compliance-audit.spec.ts': '"live event feed" names a UI card',
   'forge-tab-order.spec.ts': '"facts that live in different places" (verb)',
   'plugins.spec.ts': 'header says it runs "without needing a live" console',
+  'projects-explorer.spec.ts': 'a header sentence points at the live spec (projects-explorer-live); this one stubs the project endpoints and a fake EventSource',
+  'projects-fresh.spec.ts': 'runs on its own empty CORVIN_HOME through playwright.fresh-install.config.ts (a backend exported from the working tree), not on the live console',
   '98-live-chain-detector.spec.ts': 'feeds a synthetic "live chain" to the detector on the isolated forge-system backend',
   '99-isolation-proof.spec.ts': 'proves the LIVE install is untouched, from the isolated forge-system backend',
 };
