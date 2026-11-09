@@ -17,6 +17,7 @@ console from the gateway process on the next restart.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -301,12 +302,35 @@ def _scoped_config(tenant_id: str, project: Optional[str]) -> Dict[str, Any]:
     raise HTTPException(status_code=404, detail="no such project")
 
 
+def graph_payload(tenant_id: str, project: Optional[str]) -> Dict[str, Any]:
+    """The graph of one knowledge base, with the path it was read from and its state:
+    ``ok`` · ``built`` (a project graph that was missing or stale, indexed just now) · ``empty``
+    (the knowledge base holds no entity) · ``missing`` (the bound KB was never indexed) ·
+    ``error`` (+ ``graph_error``; a project graph that could not be built). Blocking: file reads
+    and, for a project, possibly a ``kb index`` subprocess — call it off the event loop."""
+    config = _scoped_config(tenant_id, project)
+    repo = Path(config["repo_path"]).expanduser()
+    state, error = "ok", None
+    if project is not None and project != "corvin":
+        with kb_projection.graph_lock(repo):
+            res = kb_projection.ensure_project_graph(tenant_id, repo)
+            state, error = res["state"], res.get("error")
+            data = load_graph_data(config)
+    else:
+        data = load_graph_data(config)
+        if not (repo / "kb" / "graph" / "entities.jsonl").is_file():
+            state = "missing"
+    if state in ("ok", "built") and not data["entities"]:
+        state = "empty"
+    return {**data, "project": project, "repo_path": str(repo), "graph_state": state, "graph_error": error}
+
+
 @router.get("/graph")
 async def get_graph(session: Any = Depends(require_session),
                     project: Optional[str] = Query(default=None, max_length=28)) -> Dict[str, Any]:
     tenant_id = getattr(session, "tenant_id", "_default")
-    data = load_graph_data(_scoped_config(tenant_id, project))
-    return {**data, "project": project}
+    # off the event loop: a project graph may need a `kb index` run first (console loop health)
+    return await asyncio.to_thread(graph_payload, tenant_id, project)
 
 
 _DOC_MAX_BYTES = 512 * 1024

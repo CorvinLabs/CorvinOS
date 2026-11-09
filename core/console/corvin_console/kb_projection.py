@@ -551,8 +551,9 @@ def _sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
 # registry.json`` only indexes it. A project with the ``kb`` feature has its KB in ``docs/``.
 # Each one is projected as its own SCOPE (``core.task_tracking.projection``): its cards carry
 # ``prj-<id>``, and its orphan pass never sees another KB's cards. Read-only on the project:
-# export only — no heal, no index, nothing committed into the user's repository — and always
-# with the bound KB's engine (no code from the project directory runs here). The registry
+# export, plus the git-ignored ``kb/graph`` index (see "project knowledge graphs" below) — no
+# heal, nothing committed into the user's repository — and always with the bound KB's engine
+# (no code from the project directory runs here). The registry
 # WRITER arrives with ADR-2315 (T-0351); until then a missing registry is "no projects".
 
 MAX_PROJECT_KBS = 16          # per tick; more projects are visited round-robin
@@ -674,8 +675,14 @@ def _sync_one_project(tenant_id: str, scope: str, repo: Path, engine: Path,
         return {**{k: v for k, v in prev.items() if k != "error"}, "state": "held", "fingerprint": fp,
                 "pending_uncommitted": pending[:20], "checked_at": now, "payload": prev.get("payload")}
     res = projection.apply(tenant_id, payload)
-    return {**res, "fingerprint": fp, "checked_at": now, "payload": payload, "items": len(payload["items"]),
-            "drift_total": prev.get("drift_total", 0)}
+    out = {**res, "fingerprint": fp, "checked_at": now, "payload": payload, "items": len(payload["items"]),
+           "drift_total": prev.get("drift_total", 0)}
+    # the project's kb/graph (Knowledge Graph panel) follows a changed KB, like the bound KB's does
+    with graph_lock(repo):
+        g = index_project_graph(repo, engine)
+    if g.get("state") == "error":
+        out["graph_error"] = g.get("error")
+    return out
 
 
 def sync_projects(tenant_id: str, *, busy: bool = False) -> dict[str, Any]:
@@ -744,6 +751,120 @@ def _write_target(tenant_id: str, scope: Optional[str]) -> tuple[Path, Optional[
         if pid == scope:
             return docs, bound / "scripts" / "kb.py"
     raise KbTransitionRefused(f"project {scope!r} is not registered with the kb feature on for this tenant")
+
+
+# --- project knowledge graphs ----------------------------------------------------------
+#
+# A project KB's ``kb/graph`` (what the Knowledge Graph panel reads) is derived output: ``kb.py index``
+# writes two JSONL files, nothing is committed, and the KB scaffold git-ignores ``kb/graph/``. It is
+# built by the bound KB's engine (no code from the project directory runs) after a projector pass
+# that exported a changed project KB, and on demand when the panel asks for a graph that is missing
+# or older than the KB's sources. A folder whose git does NOT ignore ``kb/graph/`` is refused rather
+# than left with untracked files the user could commit by accident.
+
+GRAPH_INDEX_TIMEOUT_S = 60
+GRAPH_SCAN_MAX = 5000          # directory entries looked at by the staleness check; beyond it: not stale
+_graph_locks: dict[str, threading.Lock] = {}
+_graph_locks_guard = threading.Lock()
+
+
+def graph_lock(repo: Path) -> threading.Lock:
+    """One lock per KB folder: an index run and a reader of the same graph never interleave
+    (``kb.py index`` rewrites the files in place)."""
+    key = str(repo)
+    with _graph_locks_guard:
+        lock = _graph_locks.get(key)
+        if lock is None:
+            lock = _graph_locks[key] = threading.Lock()
+        return lock
+
+
+def _source_dirs(repo: Path) -> list[Path]:
+    """The entity directories ``kb/_meta/sources.yaml`` names (local sources only)."""
+    try:
+        import yaml  # noqa: PLC0415
+
+        cfg = yaml.safe_load((repo / "kb" / "_meta" / "sources.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 -- unreadable: the index run reports the real error
+        return []
+    out: list[Path] = []
+    for s in cfg.get("sources") or []:
+        if not isinstance(s, dict) or s.get("ref") or not isinstance(s.get("dirs"), dict):
+            continue
+        root = repo / str(s.get("root") or ".")
+        out += [root / str(d) for d in s["dirs"]]
+    return out
+
+
+def graph_stale(repo: Path) -> bool:
+    """True when ``kb/graph`` is missing, or a source file or directory changed after it was built.
+    Bounded (``GRAPH_SCAN_MAX`` entries): a larger KB is left to the projector."""
+    g = repo / "kb" / "graph"
+    try:
+        built = min((g / "entities.jsonl").stat().st_mtime_ns, (g / "relations.jsonl").stat().st_mtime_ns)
+    except OSError:
+        return True
+    try:
+        if (repo / "kb" / "_meta" / "sources.yaml").stat().st_mtime_ns > built:
+            return True
+    except OSError:
+        return True
+    seen = 0
+    for d in _source_dirs(repo):
+        try:
+            if d.stat().st_mtime_ns > built:        # a file was added, removed or renamed
+                return True
+            it = os.scandir(d)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                seen += 1
+                if seen > GRAPH_SCAN_MAX:
+                    return False
+                try:
+                    if e.name.endswith(".md") and e.is_file(follow_symlinks=False) and e.stat().st_mtime_ns > built:
+                        return True
+                except OSError:
+                    continue
+    return False
+
+
+def _graph_ignored(repo: Path) -> bool:
+    """Whether git ignores ``kb/graph`` in this folder. Not a git working tree: nothing to pollute."""
+    try:
+        r = subprocess.run(["git", "-C", str(repo), "check-ignore", "-q", "kb/graph/entities.jsonl"],
+                           capture_output=True, text=True, timeout=30, env=_guarded_env(repo, "sync:kb", True),
+                           encoding="utf-8", errors="replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode != 1
+
+
+def index_project_graph(repo: Path, engine: Path) -> dict[str, Any]:
+    """Run ``kb.py index`` on a PROJECT KB with the bound engine. The caller holds ``graph_lock(repo)``."""
+    if not _graph_ignored(repo):
+        return {"state": "error", "error": (f"kb/graph is not ignored by git in {repo}; add 'kb/graph/' to its "
+                                            ".gitignore so the generated graph is never committed")}
+    try:
+        rc, res = _run(repo, "index", engine=engine, timeout=GRAPH_INDEX_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return {"state": "error", "error": f"kb index did not finish within {GRAPH_INDEX_TIMEOUT_S} s"}
+    if rc != 0 or "entities" not in res:
+        return {"state": "error", "error": str(res.get("error") or res.get("raw") or f"kb index rc={rc}")[:300]}
+    return {"state": "built", "entities": res.get("entities"), "relations": res.get("relations")}
+
+
+def ensure_project_graph(tenant_id: str, repo: Path) -> dict[str, Any]:
+    """Build a project KB's graph when it is missing or stale. *repo* must come from
+    ``project_kbs(tenant_id)`` (never from a request). The caller holds ``graph_lock(repo)``.
+    ``{"state": "ok"}`` (current), ``"built"`` (just indexed) or ``"error"`` (+ ``error``)."""
+    if not graph_stale(repo):
+        return {"state": "ok"}
+    bound = kb_repo(tenant_id)
+    if bound is None or not _is_kb(bound):
+        return {"state": "error", "error": "no bound knowledge base whose engine could index this project"}
+    return index_project_graph(repo, bound / "scripts" / "kb.py")
 
 
 def sync_project(tenant_id: str, scope: str) -> dict[str, Any]:

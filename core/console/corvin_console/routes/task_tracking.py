@@ -177,6 +177,8 @@ def get_items(
     if want is not ...:
         body["items"] = [it for it in body["items"] if it["project"] == want]
         body["scope"] = scope
+        # the counters describe the list they come with: a scoped list gets a scoped summary
+        body["summary"] = service.summary(body["items"], service.parse_ts(body["server_time"]) or time.time())
     _attach_evidence(body["items"], _evidence_index(rec.tenant_id, time.time()))
     _attach_live_runs(rec.tenant_id, body["items"])
     # Offer the import only on a store that never held anything: once items

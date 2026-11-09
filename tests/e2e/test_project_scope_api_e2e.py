@@ -8,8 +8,8 @@ Through the real console routes with real sessions for two tenants. What must ho
 * ``GET /task-tracking/items?scope=project:alpha`` lists only alpha's cards, each with
   ``project: "alpha"``; ``scope=bound`` lists only cards without a project; a bad scope is 422;
 * another tenant asking for ``alpha`` (graph, doc, items) gets 404 — never a hint it exists.
-Note: the projector does not index project KBs (read-only on the project); the graph files are
-produced here by an explicit ``kb index``, as a user or an agent would.
+Note: the graph files are produced here by an explicit ``kb index``, as a user or an agent would (the projector
+and the graph API build them too: ``test_project_graph_scope_e2e.py``).
 """
 from __future__ import annotations
 

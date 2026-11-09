@@ -97,7 +97,7 @@
   <text class="s" x="36" y="608">KB unchanged → diff; drift → re-applied (drift_healed) · red KB → blocked, one record · uncommitted edit → held</text>
   <text class="s" x="36" y="628">console PATCH/DELETE of status/parent/kind/title on kb: items → 409 kb_owned · board drag → kb-transition → kb task (state machine)</text>
   <text class="s" x="36" y="648">every 10 min: kb guidance run · kb sweep --create-tasks (G6 drift → regression task) · SkillForge bridge (guidance → skill → kb guidance ack)</text>
-  <text class="s" x="36" y="668">project KBs (registry, kb on) → own scope prj-&lt;id&gt; · kb export only, bound engine · red/error stays in its scope · skipped when saturated</text>
+  <text class="s" x="36" y="668">project KBs (registry, kb on) → own scope prj-&lt;id&gt; · kb export + git-ignored kb index, bound engine · red/error stays in its scope · skipped when saturated</text>
   <text class="l" x="36" y="696">kb_projection.py · core/task_tracking/projection.py · actor sync:kb · task_item.projection_applied / _blocked / kb_transition</text>
 
   <path class="ln" d="M610,540 L610,345 L592,330" marker-end="url(#a)"/>

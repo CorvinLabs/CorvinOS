@@ -186,7 +186,7 @@ label `kb`. One way only: nothing reads a status back into the KB.
   `prj-*` label itself), and `projection.kb_items/diff/apply` only see their own scope — so one
   KB's orphan pass never archives another KB's cards. The payload carries `scope`; the audit
   records `task_item.projection_applied/_blocked` carry it too (allowlisted). Read-only on the
-  project: `kb export` only (no heal, no index, nothing committed into the user's repo), always
+  project: `kb export` plus the git-ignored `kb index` (no heal, nothing committed into the user's repo), always
   run by the **bound KB's engine** with `--repo` — no code from a project directory executes. A
   red or failing project is `blocked`/`error` for its scope only; at most `MAX_PROJECT_KBS` (16)
   per tick, round-robin; skipped while `loop_health.host_saturated()`. State per project in
@@ -203,10 +203,13 @@ label `kb`. One way only: nothing reads a status back into the KB.
   emitted unregistered until 2026-11-08 and is now in `EVENT_SEVERITY` + `_EVENT_ALLOWLIST`.
   **Reads** (T-0349): every item of `GET /items` carries `project` (id or null) so a client can
   qualify the local KB id (`alpha/T-0001`); `?scope=bound` / `?scope=project:<id>` narrows the
-  list; a project not registered for the caller's tenant is 404. The projector does NOT run
-  `kb index` on a project KB (read-only), so a project's Knowledge Graph shows its last
-  committed `kb/graph/`. Proof: `tests/e2e/test_project_kb_writes_e2e.py`,
-  `tests/e2e/test_project_scope_api_e2e.py`.
+  list, and the response's `summary` is then counted over that scoped list (the board's counters
+  follow the switcher); a project not registered for the caller's tenant is 404. A project's
+  `kb/graph/` (git-ignored, derived) is built with the bound engine after a projector pass that
+  exported a changed project KB, and on demand by the Knowledge Graph API when it is missing or
+  stale (`kb_projection.ensure_project_graph`; refused when git does not ignore `kb/graph/`).
+  Proof: `tests/e2e/test_project_kb_writes_e2e.py`, `tests/e2e/test_project_scope_api_e2e.py`,
+  `tests/e2e/test_project_graph_scope_e2e.py`.
   **`docs_mode=plain`** (a project KB in `docs/` of the project's own git root, measured in NOTE-0017):
   the engine works there, and since T-0365 the uncommitted-edit check strips the git-root prefix
   (`git rev-parse --show-prefix`), because porcelain paths are root-relative (`docs/kb/tasks/…`);
