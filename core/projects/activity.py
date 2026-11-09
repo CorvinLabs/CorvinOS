@@ -307,7 +307,8 @@ def tracker_for(tenant: str, session_id: str, title: str) -> Optional[TurnTracke
     try:
         from . import attachment, registry  # noqa: PLC0415
         pid = attachment.attached(tenant_id=tenant, sid=session_id)
-        if pid and registry.get(tenant_id=tenant, project_id=pid):
+        from . import builtin  # noqa: PLC0415
+        if pid and (builtin.is_builtin(pid) or registry.get(tenant_id=tenant, project_id=pid)):
             return TurnTracker(tenant, pid, session_id, title)
     except Exception:  # noqa: BLE001
         _log.debug("activity.tracker_for failed", exc_info=True)

@@ -293,7 +293,7 @@ def _scoped_config(tenant_id: str, project: Optional[str]) -> Dict[str, Any]:
     tenant's project registry (``kb_projection.project_kbs``), never from the request; an id
     that is not registered for this tenant is 404."""
     config = effective_config(tenant_id)
-    if project is None:
+    if project is None or project == "corvin":      # the built-in Corvin project IS the tenant's own graph (CONCEPT-0129)
         return config
     for pid, docs in kb_projection.project_kbs(tenant_id):
         if pid == project:

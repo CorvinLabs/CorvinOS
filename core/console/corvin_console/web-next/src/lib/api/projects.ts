@@ -27,6 +27,8 @@ export interface ProjectSummary {
   active?: string[];
   /** docs/kb exists. */
   kb?: boolean;
+  /** Corvin itself: a built-in project that can only be looked at (CONCEPT-0129). */
+  builtin?: boolean;
   role?: Role | "";
   classification?: DataClass;
   assistant_access?: Access;

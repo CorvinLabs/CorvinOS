@@ -534,6 +534,7 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
 
 
 def rename_project(tenant_id: str, project_id: str, title: str) -> dict[str, Any]:
+    _refuse_builtin(project_id)
     """Change the title in ``project.yaml``. The id (the KB scope label, the registry key) never changes."""
     root, man = _load_project(tenant_id, project_id)
     ttl = (title or "").strip()
@@ -545,6 +546,7 @@ def rename_project(tenant_id: str, project_id: str, title: str) -> dict[str, Any
 
 
 def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, Any]:
+    _refuse_builtin(project_id)
     """Move the directory to another place under this tenant's projects root and follow it in the
     index. Same filesystem only (an atomic rename); an existing target is never overwritten."""
     root, _man = _load_project(tenant_id, project_id)
@@ -589,7 +591,17 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
     return {**get_project(tenant_id, project_id), "repaired_files": repaired}
 
 
+def _refuse_builtin(project_id: str) -> None:
+    """Corvin itself is a project that nobody can change here (CONCEPT-0129)."""
+    from core.projects import builtin  # noqa: PLC0415
+    if builtin.is_builtin(project_id):
+        raise Conflict("Corvin is built in: it cannot be removed, renamed, moved or reconfigured", "builtin")
+
+
 def _entry(tenant_id: str, project_id: str) -> dict[str, Any]:
+    from core.projects import builtin  # noqa: PLC0415
+    if builtin.is_builtin(project_id):
+        return builtin.entry(tenant_id)
     e = registry.get(tenant_id, project_id) if manifest.PROJECT_ID_RE.match(project_id or "") else None
     if e is None:
         raise NotFound("no such project")
@@ -597,6 +609,16 @@ def _entry(tenant_id: str, project_id: str) -> dict[str, Any]:
 
 
 def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
+    if e.get("builtin"):
+        from core.projects import builtin  # noqa: PLC0415
+        root = Path(str(e.get("path") or ""))
+        man = builtin.manifest(tenant_id)
+        base = {"id": builtin.ID, "path": str(root), "template": "builtin@1", "added_at": None, "builtin": True}
+        if not str(e.get("path") or "") or not root.is_dir():
+            return {**base, "state": "missing", "reason": "Corvin's knowledge base has not been created yet; it appears after the Knowledge Graph plugin is enabled"}
+        return {**base, "state": "ok", "title": builtin.TITLE, "docs_mode": "plain", "features": dict(man["features"]),
+                "active": [f for f, on in man["features"].items() if on], "role": "", "classification": "internal",
+                "assistant_access": "read", "kb": True}
     root = Path(str(e.get("path")))
     out: dict[str, Any] = {"id": e["id"], "path": str(root), "template": e.get("template") or "", "added_at": e.get("added_at")}
     try:
@@ -618,9 +640,14 @@ def _protection_of(tenant_id: str, project_id: str, man: dict[str, Any]) -> dict
             "assistant_access": prot.get("assistant_access") or manifest.DEFAULT_ACCESS}
 
 
+def _builtin_first(tenant_id: str) -> dict[str, Any]:
+    from core.projects import builtin  # noqa: PLC0415
+    return _summary(tenant_id, builtin.entry(tenant_id))
+
+
 def list_projects(tenant_id: str) -> dict[str, Any]:
     return {"projects_root": str(registry.projects_root(tenant_id)),
-            "projects": [_summary(tenant_id, e) for e in registry.entries(tenant_id)]}
+            "projects": [_builtin_first(tenant_id), *[_summary(tenant_id, e) for e in registry.entries(tenant_id)]]}
 
 
 def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
@@ -628,6 +655,8 @@ def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
     out = _summary(tenant_id, e)
     if out["state"] != "ok":
         return out
+    if e.get("builtin"):
+        return {**out, "directory_peers": [], "catalogue": {"available": False, "reason": "Corvin is built in; its features are fixed"}}
     try:
         man = manifest.load(Path(str(e["path"])))
         out["directory_peers"] = [str(x) for x in ((man.get("directory") or {}).get("peers") or [])]
@@ -652,6 +681,11 @@ def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
 def _load_project(tenant_id: str, project_id: str) -> tuple[Path, dict[str, Any]]:
     e = _entry(tenant_id, project_id)
     root = Path(str(e["path"]))
+    if e.get("builtin"):                                    # Corvin itself: synthesised, never read from a project.yaml
+        from core.projects import builtin  # noqa: PLC0415
+        if not str(e["path"]) or not root.is_dir():
+            raise Conflict("Corvin's knowledge base has not been created yet", "builtin_missing")
+        return root, builtin.manifest(tenant_id)
     try:
         man = manifest.load(root)
     except manifest.ManifestError as exc:
@@ -663,6 +697,7 @@ def _load_project(tenant_id: str, project_id: str) -> tuple[Path, dict[str, Any]
 
 def set_features(tenant_id: str, project_id: str, changes: dict[str, bool], *, accept_dependencies: bool = False,
                  cascade: bool = False) -> dict[str, Any]:
+    _refuse_builtin(project_id)
     root, man = _load_project(tenant_id, project_id)
     cat = catalogue(tenant_id)
     unknown = [f for f in changes if f not in cat.fragments]
@@ -723,6 +758,7 @@ def set_features(tenant_id: str, project_id: str, changes: dict[str, bool], *, a
 
 
 def repair(tenant_id: str, project_id: str, *, dry_run: bool = False) -> dict[str, Any]:
+    _refuse_builtin(project_id)
     root, man = _load_project(tenant_id, project_id)
     cat = catalogue(tenant_id)
     ctx = _context(tenant_id, project_id, man.get("title", project_id), root)
@@ -754,6 +790,7 @@ def open_project(tenant_id: str, project_id: str) -> dict[str, Any]:
 
 
 def remove_from_registry(tenant_id: str, project_id: str) -> dict[str, Any]:
+    _refuse_builtin(project_id)
     _entry(tenant_id, project_id)
     _audit(tenant_id, "project.registry_removed", project_id=project_id)
     registry.unregister(tenant_id, project_id)
@@ -766,6 +803,20 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
     """A checklist of REAL checks, each with its evidence - never a score (ADR-2315 D8)."""
     e = _entry(tenant_id, project_id)
     root = Path(str(e["path"]))
+    if e.get("builtin"):                                    # Corvin itself: its knowledge base exists and is consistent
+        out: list[dict[str, Any]] = []
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        ok_dir = bool(str(e["path"])) and root.is_dir()
+        out.append({"id": "path_exists", "ok": ok_dir, "detail": "Corvin's knowledge base exists" if ok_dir else "not created yet", "at": now})
+        if ok_dir:
+            try:
+                rc, res = kb_projection._run(root, "check", actor="operator", engine=bound_engine(tenant_id), timeout=90)
+                blocking = res.get("blocking") if isinstance(res, dict) else None
+                out.append({"id": "kb_check", "ok": rc == 0 and blocking == 0, "detail": f"kb check: blocking {blocking}" if blocking is not None
+                            else f"kb check failed: {str(res)[:120]}", "at": now})
+            except (Conflict, subprocess.TimeoutExpired) as exc:
+                out.append({"id": "kb_check", "ok": False, "detail": str(exc)[:160], "at": now})
+        return {"project_id": project_id, "ok": all(c["ok"] for c in out), "checks": out}
     checks: list[dict[str, Any]] = []
 
     def add(cid: str, ok: bool, detail: str) -> None:
@@ -854,6 +905,7 @@ def _kb_initiative(root: Path) -> Optional[str]:
 
 
 def new_video(tenant_id: str, project_id: str, name: str) -> dict[str, Any]:
+    _refuse_builtin(project_id)
     """Create one video's folder (source/, build/, sources.md), a row in the project's videos/INDEX.md and,
     when the knowledge base is on, the epic VIDEO-<name> with the narration and render tasks per language.
     Audit-first. Nothing is overwritten: an existing folder is refused."""
@@ -1063,7 +1115,8 @@ def chat_attachment(tenant_id: str, session_id: str) -> dict[str, Any]:
     from core.projects import attachment  # noqa: PLC0415
     _require_chat(tenant_id, session_id)
     pid = attachment.attached(tenant_id, session_id)
-    e = registry.get(tenant_id, pid) if pid else None
+    from core.projects import builtin  # noqa: PLC0415
+    e = (builtin.entry(tenant_id) if builtin.is_builtin(pid) else registry.get(tenant_id, pid)) if pid else None
     if not e:
         return {"session_id": session_id, "project_id": None, "title": None, "withheld": None}
     summ = _summary(tenant_id, e)
@@ -1098,6 +1151,7 @@ def _class_refusal(tenant_id: str, classification: str) -> Optional[str]:
 
 def set_settings(tenant_id: str, project_id: str, *, classification: Optional[str] = None,
                  assistant_access: Optional[str] = None, confirm: bool = False) -> dict[str, Any]:
+    _refuse_builtin(project_id)
     """Change the project's data class and/or the assistant's access. Raising access to ``write`` and
     LOWERING the class need ``confirm`` (the UI's confirming click); everything else applies at once."""
     root, man = _load_project(tenant_id, project_id)

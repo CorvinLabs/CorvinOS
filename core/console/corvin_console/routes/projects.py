@@ -218,6 +218,9 @@ async def _activity_stream(request: Request, tenant_id: str, project_id: str, cu
     """One short stream: snapshot first, live events, a heartbeat, an ``end`` event, then the response closes (``activity.STREAM_LIFETIME_S``,
     because uvicorn waits for an open response at shutdown and the app is never told). The browser reconnects with ``Last-Event-ID``."""
     def _root():
+        if project_id == "corvin":                    # built in: the tenant's own knowledge base (CONCEPT-0129)
+            from core.projects import builtin  # noqa: PLC0415
+            return builtin.entry(tenant_id).get("path") or None
         e = registry.get(tenant_id, project_id)
         return e.get("path") if e else None
 
@@ -251,7 +254,7 @@ async def _activity_stream(request: Request, tenant_id: str, project_id: str, cu
             elif time.monotonic() - last_beat >= 5.0:
                 last_beat = time.monotonic()
                 yield ": ping\n\n"
-            if tick % 3 == 0 and registry.get(tenant_id, project_id) is None:
+            if tick % 3 == 0 and project_id != "corvin" and registry.get(tenant_id, project_id) is None:
                 reason = "project_removed"
                 break
         yield _sse("end", {"reason": reason})

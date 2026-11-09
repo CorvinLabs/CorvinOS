@@ -71,8 +71,8 @@ export function emptyState(cat: TemplateCatalogue | undefined): { headline: stri
   };
 }
 
-/** Sort: the ones that need attention first, then by title. */
+/** Sort: Corvin itself first, then the ones that need attention, then by title. */
 export function sortProjects(list: ProjectSummary[]): ProjectSummary[] {
-  const rank = (p: ProjectSummary) => (p.state === "ok" ? 1 : 0);
+  const rank = (p: ProjectSummary) => (p.builtin ? -1 : p.state === "ok" ? 1 : 0);
   return [...list].sort((a, b) => rank(a) - rank(b) || (a.title ?? a.id).localeCompare(b.title ?? b.id));
 }

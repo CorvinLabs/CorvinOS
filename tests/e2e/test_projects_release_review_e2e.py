@@ -245,7 +245,7 @@ class ReleaseReview(_Base):
             self.assertEqual(r.status_code, 409, r.text)
             self.assertEqual(r.json()["detail"]["reason_class"], "git_missing")
             self.assertFalse((c.root / "no-git").exists())
-            self.assertEqual(c.own.get(_URL).json()["projects"], [])
+            self.assertEqual([p for p in c.own.get(_URL).json()["projects"] if not p.get("builtin")], [])
 
     def test_r5_the_protection_lives_in_tenant_state_and_project_yaml_edits_do_not_lower_it(self):
         from core.projects import attachment

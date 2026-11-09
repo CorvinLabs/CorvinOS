@@ -129,7 +129,7 @@ class ProjectsApiE2E(unittest.TestCase):
             self.assertNotIn("docs/", _git(proj, "ls-files"))
             # registry + reads
             lst = c.own.get(_URL).json()
-            self.assertEqual([x["id"] for x in lst["projects"]], ["lie-detector-videos"])
+            self.assertEqual([x["id"] for x in lst["projects"] if not x.get("builtin")], ["lie-detector-videos"])
             got = c.own.get(f"{_URL}/lie-detector-videos").json()
             self.assertEqual(got["state"], "ok")
             self.assertEqual(sorted(got["active"]), ["core", "kb", "tasks", "videos"])
@@ -163,7 +163,7 @@ class ProjectsApiE2E(unittest.TestCase):
             self.assertEqual(r.status_code, 409, r.text)
             self.assertEqual(r.json()["detail"]["reason_class"], "plugin_missing")
             self.assertEqual(list(c.root.iterdir()), [])
-            self.assertEqual(c.own.get(_URL).json()["projects"], [])
+            self.assertEqual([p for p in c.own.get(_URL).json()["projects"] if not p.get("builtin")], [])
 
     # ── tenant isolation, CSRF, audit ──────────────────────────────────────
 
@@ -172,7 +172,7 @@ class ProjectsApiE2E(unittest.TestCase):
             plan, r = self._create(c)
             self.assertEqual(r.status_code, 201, r.text)
             pid = plan["project_id"]
-            self.assertEqual(c.other.get(_URL).json()["projects"], [])
+            self.assertEqual([p for p in c.other.get(_URL).json()["projects"] if not p.get("builtin")], [])
             for method, url in (("get", f"{_URL}/{pid}"), ("get", f"{_URL}/{pid}/health"),
                                 ("delete", f"{_URL}/{pid}"), ("post", f"{_URL}/{pid}/open"),
                                 ("post", f"{_URL}/{pid}/repair"), ("put", f"{_URL}/{pid}/features")):
@@ -324,7 +324,7 @@ class ProjectsApiE2E(unittest.TestCase):
         with self._ctx() as c:
             plan, _ = self._create(c)
             shutil.rmtree(c.root / plan["project_id"])
-            row = c.own.get(_URL).json()["projects"][0]
+            row = [p for p in c.own.get(_URL).json()["projects"] if not p.get("builtin")][0]
             self.assertEqual(row["state"], "missing")
             self.assertEqual(c.own.get(f"{_URL}/{plan['project_id']}/health").json()["ok"], False)
 

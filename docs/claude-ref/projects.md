@@ -346,3 +346,14 @@ board items), **Activity** (newest first, All / Tools / Files, repeated tool row
   `tests/e2e/projects-explorer-live.spec.ts` (nothing stubbed: a real turn typed in the browser, the real stream; Write frame -> visible row, Enter -> Working card under 5 s),
   unit tests `projects-activity`. Note: Starlette's `TestClient` buffers a whole response, so receipt latency is measured over a real socket (`httpx` against the running console) instead.
 - **Not covered, stated**: chats of other surfaces, ACS/worker runs (not linked to projects), persistence, per-user filtering, steering from the explorer.
+
+
+## Corvin itself as a built-in project (CONCEPT-0129)
+
+`core/projects/builtin.py`: `id: corvin` (reserved) stands for the tenant's OWN knowledge base (`kb_projection.kb_repo(tenant)`: the operator's bound repository, else
+`<tenant_home>/knowledge`). Synthesised on every read - no `project.yaml`, no registry entry. It is first in `GET /projects` (`builtin: true`), has a real
+`kb check` in its health, and its structure, change view, explorer, board scope (`project:corvin` = the tenant's own board) and graph scope work like any project's.
+Every mutation (remove, rename, move, settings, features, repair, new video) answers 409 `builtin`; class `internal`, assistant access read-only; attaching it to a chat
+uses the same gates, deny rules and per-turn judgement. A tenant without a knowledge base gets state `missing` with the reason - never another tenant's repository.
+UI: a "Built in" card at the top of the Projects page (the "no project of your own yet" hint stays), an inspector with Overview/Structure/Docs/Knowledge/Tasks and a
+Settings tab that only offers attaching it to a chat, an entry in the chat menu. Proof: `tests/e2e/test_projects_builtin_e2e.py`, `web-next/tests/e2e/projects-builtin.spec.ts`.

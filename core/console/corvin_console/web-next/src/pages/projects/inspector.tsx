@@ -57,7 +57,9 @@ export default function ProjectInspectorPage() {
       <BackLink />
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="truncate text-xl font-semibold" data-testid="inspector-title">{d.title ?? d.id}</h1>
+          <h1 className="flex items-center gap-2 truncate text-xl font-semibold" data-testid="inspector-title">{d.title ?? d.id}
+            {d.builtin && <span className="rounded-full border px-2 py-0.5 text-[11px] font-normal text-muted-foreground" data-testid="inspector-builtin">Built in</span>}
+          </h1>
           <p className="truncate font-mono text-xs text-muted-foreground" title={d.path}>{d.path}</p>
           {d.state === "ok" && (
             <div className="mt-1 flex flex-wrap items-center gap-1.5" data-testid="inspector-protection">
@@ -82,7 +84,7 @@ export default function ProjectInspectorPage() {
       {ready && (
         <>
           <nav role="tablist" aria-label="Project sections" className="flex flex-wrap gap-1 border-b">
-            {TABS.map((t) => (
+            {(d.builtin ? TABS.filter((t) => BUILTIN_TABS.includes(t.id)) : TABS).map((t) => (
               <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} data-testid={`tab-${t.id}`}
                 onClick={() => setTab(t.id)}
                 className={cn("-mb-px border-b-2 px-3 py-2 text-sm", tab === t.id ? "border-primary font-medium" : "border-transparent text-muted-foreground")}>
@@ -284,6 +286,9 @@ function ConflictBox({ c, onAccept, onCancel, pending }: {
   );
 }
 
+/** Corvin itself has no features to switch, no folder to move and nothing to remove: it can be looked at and attached to a chat. */
+const BUILTIN_TABS: Tab[] = ["overview", "structure", "docs", "knowledge", "tasks", "settings"];
+
 function SettingsTab({ d, csrf }: { d: ProjectDetail; csrf: string }) {
   const [preview, setPreview] = useState<{ pending: { path: string; status: string; diff: string }[] } | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -304,6 +309,17 @@ function SettingsTab({ d, csrf }: { d: ProjectDetail; csrf: string }) {
     onSuccess: (r) => setOpened(r.command),
     onError: (e) => setNote(explain(e)),
   });
+  if (d.builtin) {
+    return (
+      <section className="space-y-6" aria-label="Settings" data-testid="settings-tab">
+        <p className="text-sm text-muted-foreground" data-testid="builtin-note">
+          Corvin is built in. It is Corvin's own knowledge base, board and graph: it cannot be removed, renamed, moved or reconfigured, and
+          the assistant can only read it. You can attach it to a chat below.
+        </p>
+        <AttachSection d={d} csrf={csrf} />
+      </section>
+    );
+  }
   return (
     <section className="space-y-6" aria-label="Settings" data-testid="settings-tab">
       <div className="space-y-2">

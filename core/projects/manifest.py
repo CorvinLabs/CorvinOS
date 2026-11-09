@@ -22,7 +22,7 @@ FEATURE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 TEMPLATE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}@[0-9]{1,4}$")
 DOCS_MODES = ("nested", "plain")
 #: ids that collide with fixed routes under /projects (release review R9)
-RESERVED_IDS = frozenset({"templates", "root", "chat-attachment", "detach", "adopt", "plan", "settings", "activity"})
+RESERVED_IDS = frozenset({"corvin", "templates", "root", "chat-attachment", "detach", "adopt", "plan", "settings", "activity"})
 ROLES = ("software", "data_science", "marketing", "product", "sales", "legal", "video", "research", "knowledge")
 CLASSES = ("public", "internal", "confidential", "secret")      # the L34 vocabulary, lowest to highest
 ACCESS = ("read", "write")

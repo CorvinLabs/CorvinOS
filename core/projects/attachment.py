@@ -126,8 +126,9 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
     if not att:
         return None
     pid = att["project_id"]
-    entry = registry.get(tenant_id, pid)
-    if not entry:
+    from . import builtin  # noqa: PLC0415
+    entry = builtin.entry(tenant_id) if builtin.is_builtin(pid) else registry.get(tenant_id, pid)
+    if not entry or not entry.get("path"):
         return None
     root = Path(str(entry.get("path")))
     if not att.get("path") or os.path.abspath(att["path"]) != os.path.abspath(root):
@@ -135,11 +136,11 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
     try:
         if not root.is_dir() or root.is_symlink():
             return None
-        man = manifest.load(root)
+        man = builtin.manifest(tenant_id) if builtin.is_builtin(pid) else manifest.load(root)
         if man.get("tenant") != tenant_id or man.get("id") != pid:
             return None
         # the protection is TENANT state (the registry), not only project.yaml: the assistant can edit files in the project (review R5)
-        prot = registry.protection(tenant_id, pid) or {}
+        prot = (None if builtin.is_builtin(pid) else registry.protection(tenant_id, pid)) or {}
         cls = prot.get("classification") or manifest.DEFAULT_CLASS          # never from the assistant-editable project.yaml
         access = prot.get("assistant_access") or manifest.DEFAULT_ACCESS
         if class_allows is not None:

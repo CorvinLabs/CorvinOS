@@ -81,3 +81,16 @@ describe("sorting", () => {
     expect(l.map((p) => p.id)).toEqual(["m", "a", "b"]);
   });
 });
+
+import { selectableProjects } from "@/pages/projects/scope";
+describe("the built-in Corvin project (CONCEPT-0129)", () => {
+  const mk = (id: string, over: Record<string, unknown> = {}) => ({ id, path: "/p/" + id, template: "x@1", state: "ok", title: id, kb: true, ...over }) as never;
+  it("is always first, even before a project that needs attention", () => {
+    const list = [mk("zeta"), mk("alpha", { state: "missing" }), mk("corvin", { builtin: true, title: "Corvin" })];
+    expect(sortProjects(list).map((p) => p.id)).toEqual(["corvin", "alpha", "zeta"]);
+  });
+  it("is not a second scope entry: the 'bound' scope is Corvin", () => {
+    const list = [mk("corvin", { builtin: true }), mk("alpha")];
+    expect(selectableProjects(list).map((p) => p.id)).toEqual(["alpha"]);
+  });
+});

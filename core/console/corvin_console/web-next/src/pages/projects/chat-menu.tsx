@@ -99,7 +99,7 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
                   disabled={choose.isPending} onChange={() => choose.mutate(p.id)} />
                 <span className="min-w-0 flex-1 space-y-1">
                   <span className="block truncate font-medium">{p.title ?? p.id}</span>
-                  {roleLabel(p.role) && <span className="block text-xs text-muted-foreground">{roleLabel(p.role)}</span>}
+                  {(p.builtin || roleLabel(p.role)) && <span className="block text-xs text-muted-foreground">{p.builtin ? "Built in - Corvin's own knowledge" : roleLabel(p.role)}</span>}
                   <span className="flex flex-wrap gap-1"><ClassBadge cls={classOf(p)} /><AccessBadge access={accessOf(p)} /></span>
                 </span>
               </label>

@@ -10,7 +10,8 @@ export type Scope = { kind: "all" } | { kind: "bound" } | { kind: "project"; id:
 
 /** Projects the scope selector may offer: ok and with the knowledge base on. */
 export function selectableProjects(list: ProjectSummary[] | undefined): ProjectSummary[] {
-  return (list ?? []).filter((p) => p.state === "ok" && p.kb === true);
+  // the built-in Corvin project IS the "bound" scope (labelled "Corvin"), so it is not a second entry
+  return (list ?? []).filter((p) => p.state === "ok" && p.kb === true && !p.builtin);
 }
 
 /** Reads ?scope=. An unknown project id falls back to the default rather than showing nothing silently. */
