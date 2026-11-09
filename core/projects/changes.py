@@ -29,19 +29,22 @@ class ChangesError(ValueError):
 
 def _env() -> dict[str, str]:
     e = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    e.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "LC_ALL": "C"})
+    e.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "LC_ALL": "C",
+              "GIT_NO_LAZY_FETCH": "1"})          # git >= 2.44; protocol.allow=never below is the guard for older gits)
     return e
 
 
 _EXEC_KEYS = (re.compile(r"^filter\..+\.(clean|smudge|process)$"),
               # generic: any key whose NAME says it holds a program (command, cmd, program, hook, helper, pager, editor, textconv, driver,
               # gitproxy, fsmonitor, askpass ...) is blanked, so a key the list above never heard of is still closed (review rounds 4-5)
-              re.compile(r"(command|cmd|program|hook|hooks|helper|pager|editor|textconv|driver|gitproxy|fsmonitor|askpass|process)$"))
+              re.compile(r"(command|cmd|program|hook|hooks|helper|pager|editor|textconv|driver|gitproxy|fsmonitor|askpass|process|uploadpack|receivepack|vcs)$"))
 
 
 _FIXED = (("core.fsmonitor", "false"), ("core.hooksPath", os.devnull), ("diff.ignoreSubmodules", "all"), ("status.submoduleSummary", "false"),
           ("submodule.recurse", "false"), ("diff.external", ""), ("core.pager", ""), ("core.sshCommand", ""), ("core.askPass", ""),
-          ("gc.auto", "0"), ("maintenance.auto", "false"), ("gc.recentObjectsHook", ""))
+          ("gc.auto", "0"), ("maintenance.auto", "false"), ("gc.recentObjectsHook", ""),
+          # a partial clone fetches a missing object ON DEMAND from a remote the repository names (uploadpack / ext:: URL): no transport (review round 6)
+          ("protocol.allow", "never"))
 
 
 def neutral_git_args(repo: Path) -> list[str]:
@@ -135,7 +138,7 @@ def _area(path: str) -> str:
 
 
 def _has_head(repo: Path) -> bool:
-    return subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "-q", "HEAD"], capture_output=True,
+    return subprocess.run(["git", "-C", str(repo), *neutral_git_args(repo), "rev-parse", "--verify", "-q", "HEAD"], capture_output=True,
                           timeout=_GIT_TIMEOUT, env=_env()).returncode == 0
 
 
@@ -221,7 +224,7 @@ def commit_files(root: Path, sha: str) -> list[dict[str, Any]]:
     if not _SHA_RE.match(sha or ""):
         raise ChangesError("invalid commit")
     for prefix, repo in repos(root):
-        if subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True,
+        if subprocess.run(["git", "-C", str(repo), *neutral_git_args(repo), "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True,
                           timeout=_GIT_TIMEOUT, env=_env()).returncode != 0:
             continue
         files = []

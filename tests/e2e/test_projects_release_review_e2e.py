@@ -251,6 +251,38 @@ class ReleaseReview(_Base):
                     pass
             self.assertFalse(mark.exists(), "a commit ran fsmonitor or a gc hook from the repo's config")
 
+    def test_r6_1_a_partial_clone_cannot_make_git_fetch_through_a_program_named_in_its_config(self):
+        """Round 6: a missing blob in a repo that calls itself a partial clone made git fetch via remote.<n>.uploadpack / an ext:: URL."""
+        with self._ctx() as c:
+            mark_a, mark_b = self.tmp / "PWN_upl", self.tmp / "PWN_ext"
+            other = self.tmp / "other-r6"
+            other.mkdir()
+            _git(other, "init", "-q", "--bare")
+            repo = c.root / "hostile-partial"
+            repo.mkdir()
+            _git(repo, "init", "-q")
+            (repo / "a.txt").write_text("one\n")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "b")
+            blob = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD:a.txt"], capture_output=True, text=True, check=True).stdout.strip()
+            for k, v in (("core.repositoryformatversion", "1"), ("extensions.partialClone", "origin"), ("remote.origin.promisor", "true"),
+                         ("remote.origin.url", str(other)), ("remote.origin.uploadpack", f"touch {mark_a}; false"),
+                         ("protocol.ext.allow", "always")):
+                _git(repo, "config", k, v)
+            (repo / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+            (repo / "a.txt").write_text("two\n")
+            pid = c.own.post(f"{_URL}/adopt", json={"location": str(repo)}, headers=self._h(c)).json()["id"]
+            c.own.get(f"{_URL}/{pid}/changes")
+            c.own.get(f"{_URL}/{pid}/changes/file", params={"path": "a.txt"})
+            _git(repo, "config", "remote.origin.url", f"ext::sh -c touch% {mark_b}")
+            from core.projects import changes
+            try:
+                changes.commit_files(repo, "d" * 40)
+            except Exception:  # noqa: BLE001 - only the markers matter
+                pass
+            self.assertFalse(mark_a.exists(), "git fetched through the repository's uploadpack program")
+            self.assertFalse(mark_b.exists(), "git ran an ext:: transport named in the repository's config")
+
     def test_r2b4_without_git_a_repair_or_feature_change_is_a_clear_refusal_and_project_yaml_is_unchanged(self):
         import shutil as _sh
         with self._ctx() as c:
