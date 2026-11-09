@@ -75,7 +75,7 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
         # are neutralised as well; the command-scope entries below apply to those child processes (review round 4)
         try:
             lst = subprocess.run(["git", "-C", str(r), *neutral_git_args(r), "config", "--list", "--includes", "-z"], capture_output=True, timeout=10, env=base)
-            entries = [e for e in lst.stdout.decode("utf-8", errors="replace").split("\0") if "\n" in e]
+            entries = [e for e in lst.stdout.decode("utf-8", errors="surrogateescape").split("\0") if "\n" in e]
             subs = subprocess.run(["git", "-C", str(r), *neutral_git_args(r), "ls-files", "--stage", "-z"], capture_output=True, timeout=20, env=base)
         except (OSError, subprocess.TimeoutExpired):
             # fail closed: a call that cannot be guarded is not made (an unreadable config must never mean an unguarded run - round 9)
@@ -85,7 +85,7 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
             if any(p.search(key.lower()) for p in _EXEC_KEYS) and not key.lower().endswith(".hookspath") and key.lower() not in _FIXED_NAMES and key not in seen:
                 seen.add(key)
                 items.append((key, "cat" if key.lower().endswith((".clean", ".smudge")) else ""))
-        for rec in (subs.stdout.decode("utf-8", errors="replace").split("\0") if subs else []):
+        for rec in (subs.stdout.decode("utf-8", errors="surrogateescape").split("\0") if subs else []):
             if rec.startswith("160000 ") and "\t" in rec:
                 if depth >= 3:        # deeper than the scan reads: refuse rather than run unguarded (review round 10)
                     raise ChangesError("the repository nests submodules deeper than the console will read")

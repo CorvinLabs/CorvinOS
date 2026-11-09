@@ -626,3 +626,28 @@ class NeutralisedKeys(unittest.TestCase):
             mark.unlink()
             subprocess.run([sys.executable, str(eng), "--repo", str(repo)], capture_output=True, env=changes.neutral_git_env(repo, plain))
             self.assertFalse(mark.exists(), "an engine replacing GIT_CONFIG_COUNT dropped the guard")
+
+
+class NonUtf8Keys(unittest.TestCase):
+    def test_r13_1_a_driver_name_that_is_not_utf8_is_still_neutralised(self):
+        """Round 13: git's bytes were decoded with errors=replace, so the blanked key was not the key git reads (review round 13)."""
+        import tempfile
+        from core.projects import changes
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d) / "r"
+            repo.mkdir()
+            _git(repo, "init", "-q")
+            (repo / "f.txt").write_text("one\n")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "b")
+            mark = Path(d) / "PWN_nonutf8"
+            cfg = repo / ".git" / "config"
+            cfg.write_bytes(cfg.read_bytes() + b"[filter \"\xff\"]\n\tclean = touch " + str(mark).encode() + b"; cat\n")
+            (repo / ".git" / "info").mkdir(exist_ok=True)
+            (repo / ".git" / "info" / "attributes").write_bytes(b"* filter=\xff\n")
+            (repo / "f.txt").write_text("two-two\n")
+            subprocess.run(["git", "-C", str(repo), "diff", "--numstat", "HEAD"], capture_output=True)   # control: unguarded
+            self.assertTrue(mark.exists(), "the control must run the non-UTF-8 filter, otherwise this test proves nothing")
+            mark.unlink()
+            changes.working_changes(repo)
+            self.assertFalse(mark.exists(), "a non-UTF-8 driver name escaped the neutralisation")
