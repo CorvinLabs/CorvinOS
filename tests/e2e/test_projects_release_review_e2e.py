@@ -651,3 +651,33 @@ class NonUtf8Keys(unittest.TestCase):
             mark.unlink()
             changes.working_changes(repo)
             self.assertFalse(mark.exists(), "a non-UTF-8 driver name escaped the neutralisation")
+
+
+class SubmoduleGuard(unittest.TestCase):
+    def test_r14b_1_the_scan_follows_a_core_worktree_redirect_into_the_child(self):
+        """Round 14b: with core.worktree redirecting the worktree, gitlink paths are relative to THAT worktree; the scan joined them to the
+        folder it was given and never reached the child. Deterministic: the scan must list the child's filter key."""
+        import tempfile
+        from core.projects import changes
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            hostile = base / "m" / "sub"
+            hostile.parent.mkdir(parents=True)
+            hostile.mkdir()
+            _git(hostile, "init", "-q")
+            (hostile / "x.md").write_text("one\n")
+            _git(hostile, "add", "-A")
+            _git(hostile, "commit", "-qm", "h")
+            _git(hostile, "config", "filter.ev.clean", "cat")
+            gitdir = base / "gd"
+            subprocess.run(["git", "init", "-q", "--separate-git-dir", str(gitdir), str(base / "m")], capture_output=True, check=True)
+            P = base / "P"
+            P.mkdir()
+            (P / ".git").write_text(f"gitdir: {gitdir}\n")
+            _git(base / "m", "config", "core.worktree", str(base / "m"))
+            head = subprocess.run(["git", "-C", str(hostile), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+            subprocess.run(["git", "--git-dir", str(gitdir), "--work-tree", str(base / "m"), "update-index", "--add", "--cacheinfo",
+                            f"160000,{head},sub"], capture_output=True)
+            env = changes.neutral_git_env(P, changes._env())
+            keys = {env[f"GIT_CONFIG_KEY_{i}"].lower() for i in range(int(env.get("GIT_CONFIG_COUNT", "0")))}
+            self.assertIn("filter.ev.clean", keys, "the child repository's own filter was not in the scan: its config would run")

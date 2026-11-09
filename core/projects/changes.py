@@ -89,8 +89,14 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
             if rec.startswith("160000 ") and "\t" in rec:
                 if depth >= 3:        # deeper than the scan reads: refuse rather than run unguarded (review round 10)
                     raise ChangesError("the repository nests submodules deeper than the console will read")
-                child = r / rec.split("\t", 1)[1]
-                if child.is_dir() and not child.is_symlink():
+                # the gitlink path is relative to the TOPLEVEL of the worktree git actually uses (core.worktree may redirect it), and a
+                # symlink there is refused, never skipped: skipping left the child's own config unguarded (review round 14b)
+                top = subprocess.run(["git", "-C", str(r), *neutral_git_args(r), "rev-parse", "--show-toplevel"], capture_output=True,
+                                     timeout=10, env=base).stdout.decode("utf-8", errors="surrogateescape").strip() or str(r)
+                child = Path(top) / rec.split("\t", 1)[1]
+                if child.is_symlink():
+                    raise ChangesError("a submodule path is a symbolic link; the console refuses it")
+                if child.is_dir():
                     collect(child, depth + 1)
 
     collect(Path(repo), 0)

@@ -348,7 +348,7 @@ def _uncommitted_work(repo: Path, guard: bool = False) -> list[str]:
     """Work-item files edited but not committed. Export reads the working tree, so such an
     edit would reach the board without the state machine (a hand-set `status: done`).
     Raises ``KbIndexCorrupt`` when git cannot read the index."""
-    r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-uall", "--",
+    r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-uall", "--ignore-submodules=all", "--",
                         "kb/initiatives", "kb/epics", "kb/tasks"],
                        capture_output=True, text=True, env=_guarded_env(repo, "sync:kb", guard), encoding="utf-8", errors="replace")
     if r.returncode != 0 and _INDEX_CORRUPT.search(r.stderr or ""):
