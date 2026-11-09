@@ -133,7 +133,8 @@ class ReleaseReview(_Base):
             self.assertFalse(m2.exists(), "a diff driver from the repo's config ran in the console")
 
     def test_r3_1_included_and_worktree_git_config_never_runs_in_the_change_view(self):
-        """Round 3: include.path targets and config.worktree are read by git but were not neutralised."""
+        """Round 3: include.path targets and config.worktree are read by git but were not neutralised. The file is tracked and modified, so a
+        clean filter really is consulted; an unguarded control proves the marker CAN appear (review round 12: the first version never ran it)."""
         with self._ctx() as c:
             for kind in ("include", "worktree"):
                 repo = c.root / f"hostile-{kind}"
@@ -142,16 +143,23 @@ class ReleaseReview(_Base):
                 mark = self.tmp / f"PWN_{kind}"
                 cmd = f"sh -c 'touch {mark}; cat'"
                 (repo / ".gitattributes").write_text("*.txt filter=x\n")
+                (repo / "a.txt").write_text("one\n")
+                _git(repo, "-c", "filter.x.clean=cat", "add", "-A")
+                _git(repo, "-c", "filter.x.clean=cat", "commit", "-qm", "b")
                 if kind == "include":
                     inc = self.tmp / f"evil_{kind}.cfg"
-                    inc.write_text(f'[filter "x"]\n\tclean = {cmd}\n')
+                    inc.write_text(f'[filter "x"]\n\tclean = "{cmd}"\n')        # quoted: an unquoted ';' starts a comment in a config file
                     _git(repo, "config", "include.path", str(inc))
                 else:
                     _git(repo, "config", "extensions.worktreeConfig", "true")
                     _git(repo, "config", "--worktree", "filter.x.clean", cmd)
-                (repo / "a.txt").write_text("one\n")
+                (repo / "a.txt").write_text("two-two-two\n")      # a different size, or git's stat cache never consults the filter
+                subprocess.run(["git", "-C", str(repo), "diff", "--numstat", "HEAD"], capture_output=True)    # control: unguarded; diff hashes the file
+                self.assertTrue(mark.exists(), f"the control must run the {kind} filter, otherwise this test proves nothing")
+                mark.unlink()
                 pid = c.own.post(f"{_URL}/adopt", json={"location": str(repo)}, headers=self._h(c)).json()["id"]
-                c.own.get(f"{_URL}/{pid}/changes")
+                ch = c.own.get(f"{_URL}/{pid}/changes")
+                self.assertEqual(ch.status_code, 200, ch.text)
                 c.own.get(f"{_URL}/{pid}/changes/file", params={"path": "a.txt"})
                 self.assertFalse(mark.exists(), f"a filter from a {kind} config ran in the console")
 
@@ -600,6 +608,15 @@ class NeutralisedKeys(unittest.TestCase):
             _git(repo, "-c", "filter.x.clean=cat", "commit", "-qm", "b")
             _git(repo, "config", "filter.x.clean", f"sh -c 'touch {mark}; cat'")
             (repo / "a.txt").write_text("two\n")
+            # a driver whose NAME contains '=' (and one with a quote) must be carried too, in the channel an engine cannot replace
+            (repo / ".git" / "info").mkdir(exist_ok=True)
+            (repo / ".git" / "info" / "attributes").write_text("*.dat filter=a=b\n*.bin filter=q'x\n")
+            for name in ("a=b", "q'x"):
+                _git(repo, "config", f"filter.{name}.clean", f"sh -c 'touch {mark}; cat'")
+            for fn in ("c.dat", "d.bin"):
+                (repo / fn).write_text("one\n")
+                _git(repo, "-c", "filter.a=b.clean=cat", "-c", "filter.q'x.clean=cat", "add", fn)
+                (repo / fn).write_text("two\n")
             eng = Path(d) / "engine.py"
             eng.write_text("import os, subprocess, sys\nenv = dict(os.environ, GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='core.splitIndex',\n"
                            "           GIT_CONFIG_VALUE_0='false')\nsubprocess.run(['git', '-C', sys.argv[2], 'status', '--porcelain'], env=env, capture_output=True)\n")

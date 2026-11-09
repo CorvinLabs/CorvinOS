@@ -105,7 +105,7 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
     # replaces the entries above - the knowledge-base engine does when it commits - still inherits these (review round 11)
     def _sq(t: str) -> str:
         return "'" + t.replace("'", "'\\''") + "'"
-    extra = " ".join(f"{_sq(k)}={_sq(v)}" for k, v in items if "'" not in k and "=" not in k)
+    extra = " ".join(f"{_sq(k)}={_sq(v)}" for k, v in items)
     env["GIT_CONFIG_PARAMETERS"] = (env.get("GIT_CONFIG_PARAMETERS", "") + " " + extra).strip()
     env["GIT_CONFIG_COUNT"] = str(len(items))
     for n, (k, v) in enumerate(items):
