@@ -44,7 +44,12 @@ _FIXED = (("core.fsmonitor", "false"), ("core.hooksPath", os.devnull), ("diff.ig
           ("submodule.recurse", "false"), ("diff.external", ""), ("core.pager", ""), ("core.sshCommand", ""), ("core.askPass", ""),
           ("gc.auto", "0"), ("maintenance.auto", "false"), ("gc.recentObjectsHook", ""),
           # a partial clone fetches a missing object ON DEMAND from a remote the repository names (uploadpack / ext:: URL): no transport (review round 6)
-          ("protocol.allow", "never"))
+          ("protocol.allow", "never"),
+          # git log/show start gpg for a signed commit when this is on (round 9)
+          ("log.showSignature", "false"), ("commit.gpgSign", "false"))
+
+
+_FIXED_NAMES = frozenset(k.lower() for k, _ in _FIXED)       # the scan lists its own -c overrides too; they must not be blanked again
 
 
 def neutral_git_args(repo: Path) -> list[str]:
@@ -73,10 +78,11 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
             entries = [e for e in lst.stdout.decode("utf-8", errors="replace").split("\0") if "\n" in e]
             subs = subprocess.run(["git", "-C", str(r), *neutral_git_args(r), "ls-files", "--stage", "-z"], capture_output=True, timeout=20, env=base) if depth < 3 else None
         except (OSError, subprocess.TimeoutExpired):
-            return
+            # fail closed: a call that cannot be guarded is not made (an unreadable config must never mean an unguarded run - round 9)
+            raise ChangesError("the repository's configuration could not be read in time") from None
         for e in entries:
             key = e.split("\n", 1)[0]
-            if any(p.search(key.lower()) for p in _EXEC_KEYS) and not key.lower().endswith(".hookspath") and key not in seen:
+            if any(p.search(key.lower()) for p in _EXEC_KEYS) and not key.lower().endswith(".hookspath") and key.lower() not in _FIXED_NAMES and key not in seen:
                 seen.add(key)
                 items.append((key, "cat" if key.lower().endswith((".clean", ".smudge")) else ""))
         for rec in (subs.stdout.decode("utf-8", errors="replace").split("\0") if subs else []):
@@ -86,6 +92,8 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
                     collect(child, depth + 1)
 
     collect(Path(repo), 0)
+    # the fixed set travels in the environment too, so a program that runs git for us (the knowledge-base engine) is guarded the same way
+    items = list(_FIXED) + items
     env = dict(base)
     # no transport at all, whatever protocol.<name>.allow the repository sets (a per-protocol key outranks protocol.allow; this variable
     # outranks both), and no lazy fetch on any path - the commit path's env did not carry it before (review round 7)

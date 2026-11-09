@@ -358,11 +358,14 @@ def _uncommitted_work(repo: Path) -> list[str]:
 
 
 def _run(repo: Path, *args: str, actor: str = "sync:kb", timeout: int = 120,
-         engine: Optional[Path] = None) -> tuple[int, Any]:
+         engine: Optional[Path] = None, guard_git: bool = False) -> tuple[int, Any]:
     """Run ``kb.py --repo <repo> <args>``. *engine* (a ``kb.py`` path) defaults to the repo's own
     copy; a PROJECT knowledge base is always run by the bound KB's engine instead (ADR-2316
     Decision 8): no code from a project directory is executed by the console."""
     env = _env(actor)
+    if guard_git:       # a PROJECT folder's own git config must not run anything through the engine's git calls (review round 9)
+        from core.projects import changes  # noqa: PLC0415
+        env = changes.neutral_git_env(repo, env)
     script = engine if engine is not None else repo / "scripts" / "kb.py"
     r = subprocess.run([sys.executable, str(script), "--repo", str(repo), *args],
                        capture_output=True, text=True, timeout=timeout, env=env, encoding="utf-8", errors="replace")

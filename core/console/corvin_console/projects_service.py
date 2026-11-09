@@ -357,6 +357,8 @@ def _git(root: Path, *args: str) -> None:
                             "-c", "commit.gpgsign=false", *changes.neutral_git_args(Path(root)), *args],
                            capture_output=True, text=True, env=changes.neutral_git_env(Path(root), kb_projection._env("operator")), encoding="utf-8",
                            errors="replace", timeout=120)
+    except changes.ChangesError as exc:
+        raise Conflict(str(exc), "git_unguarded") from None
     except OSError as exc:
         raise Conflict(f"git could not be run ({type(exc).__name__})", "git_missing") from None
     if r.returncode != 0:
@@ -404,7 +406,7 @@ def _runner(tenant_id: str, root: Path):
             engine = bound_engine(tenant_id)
 
             def kb(*a: str) -> dict[str, Any]:
-                rc, out = kb_projection._run(docs, *a, "--actor=operator", actor="operator", engine=engine)
+                rc, out = kb_projection._run(docs, *a, "--actor=operator", actor="operator", engine=engine, guard_git=True)
                 if rc != 0 or not isinstance(out, dict):
                     raise ProjectsError(f"kb {a[0]} {a[1] if len(a) > 1 else ''} failed: {str(out)[:200]}")
                 return out
@@ -864,7 +866,7 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
             add("kb_check", False, "docs/kb is missing")
         else:
             try:
-                rc, out = kb_projection._run(docs, "check", actor="operator", engine=bound_engine(tenant_id), timeout=90)
+                rc, out = kb_projection._run(docs, "check", actor="operator", engine=bound_engine(tenant_id), timeout=90, guard_git=True)
                 blocking = out.get("blocking") if isinstance(out, dict) else None
                 add("kb_check", rc == 0 and blocking == 0, f"kb check: blocking {blocking}" if blocking is not None
                     else f"kb check failed: {str(out)[:120]}")

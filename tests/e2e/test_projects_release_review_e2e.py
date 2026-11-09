@@ -105,7 +105,7 @@ class ReleaseReview(_Base):
             self.assertEqual((repo / ".mcp.json").read_text(), evil)
 
     def test_r2b3_the_change_view_never_runs_commands_from_the_repos_git_config(self):
-        """Round 2: filter/diff drivers and log signatures in .git/config must not execute in the console."""
+        """Round 2: a clean filter in .git/config must not execute in the console (diff drivers are also neutralised, but every diff call passes --no-ext-diff --no-textconv, so those markers are belt-and-braces)."""
         with self._ctx() as c:
             repo = c.root / "hostile-git"
             repo.mkdir()
@@ -233,10 +233,10 @@ class ReleaseReview(_Base):
             for k, v in (("core.fsmonitor", str(evil)), ("gc.auto", "1"), ("gc.autoDetach", "false"), ("gc.pruneExpire", "now"),
                          ("gc.recentObjectsHook", str(evil))):
                 _git(repo, "config", k, v)
+            d = repo / ".git" / "objects" / "17"        # git's gc.auto estimate counts loose objects in this one directory only
+            d.mkdir(exist_ok=True)
             for i in range(3):
-                d = repo / ".git" / "objects" / f"1{i}"
-                d.mkdir(exist_ok=True)
-                (d / ("0" * 38)).write_bytes(b"x")
+                (d / (f"{i:02d}" + "0" * 36)).write_bytes(b"x")
             mark.unlink(missing_ok=True)
             (repo / "a.txt").write_text("two\n")
             pid = c.own.post(f"{_URL}/adopt", json={"location": str(repo)}, headers=self._h(c)).json()["id"]
@@ -507,3 +507,33 @@ class NeutralisedKeys(unittest.TestCase):
                     self.assertIn(k.lower(), got, f"{k} was not blanked")
             self.assertEqual(got["filter.f.clean"], "cat")
             self.assertEqual(env["GIT_ALLOW_PROTOCOL"], "none")
+
+    def test_r9_1_the_engine_that_runs_git_for_the_console_is_guarded_and_an_unreadable_config_refuses(self):
+        import tempfile
+        from core.console.corvin_console import kb_projection
+        from core.projects import changes
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d) / "docs"
+            repo.mkdir()
+            _git(repo, "init", "-q")
+            mark = Path(d) / "PWN_kb"
+            (repo / ".gitattributes").write_text("*.txt filter=x\n")
+            _git(repo, "config", "filter.x.clean", f"sh -c 'touch {mark}; cat'")
+            (repo / "a.txt").write_text("one\n")
+            _git(repo, "-c", "filter.x.clean=cat", "add", "-A")
+            _git(repo, "-c", "filter.x.clean=cat", "commit", "-qm", "b")
+            (repo / "a.txt").write_text("two\n")        # a tracked, modified file: status must run the clean filter to compare it
+            engine = Path(d) / "engine.py"       # stands in for kb.py: it runs git in the repo it is given, like the real engine does
+            engine.write_text("import subprocess, sys\nsubprocess.run(['git', '-C', sys.argv[2], 'status', '--porcelain'], capture_output=True)\n"
+                              "print('{}')\n")
+            kb_projection._run(repo, "check", actor="operator", engine=engine, guard_git=True)
+            self.assertFalse(mark.exists(), "the engine's git ran the folder's clean filter")
+            kb_projection._run(repo, "check", actor="operator", engine=engine)      # control: unguarded, the marker appears
+            self.assertTrue(mark.exists(), "the control must run the filter, otherwise this test proves nothing")
+            with mock.patch.object(changes.subprocess, "run", side_effect=subprocess.TimeoutExpired("git", 10)):
+                with self.assertRaises(changes.ChangesError):
+                    changes.neutral_git_env(repo, {})
+            env = changes.neutral_git_env(repo, changes._env())
+            got = {env[f"GIT_CONFIG_KEY_{i}"]: env[f"GIT_CONFIG_VALUE_{i}"] for i in range(int(env["GIT_CONFIG_COUNT"]))}
+            self.assertEqual(got["log.showSignature"], "false")
+            self.assertEqual(got["core.fsmonitor"], "false")
