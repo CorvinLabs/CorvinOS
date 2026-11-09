@@ -41,9 +41,9 @@ def neutral_git_args(repo: Path) -> list[str]:
     """``-c`` overrides that switch off every command a repository's own configuration could make git run (filter and diff drivers, an
     external diff, a pager ...). A folder the user adopted may carry any ``.git/config``; reading its state must never execute it
     (release review round 2). Content filters become the identity (``cat``), everything else an empty command."""
-    out: list[str] = []
+    out: list[str] = ["-c", "core.fsmonitor=false"]          # a fixed override: needs no config read to take effect
     try:
-        r = subprocess.run(["git", "-C", str(repo), "config", "--local", "--list", "-z"], capture_output=True, timeout=10, env=_env())
+        r = subprocess.run(["git", "-C", str(repo), "config", "--list", "--includes", "-z"], capture_output=True, timeout=10, env=_env())
         entries = [e for e in r.stdout.decode("utf-8", errors="replace").split("\0") if "\n" in e]
     except (OSError, subprocess.TimeoutExpired):
         entries = []

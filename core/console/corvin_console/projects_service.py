@@ -354,7 +354,7 @@ def _git(root: Path, *args: str) -> None:
     _need_git()
     try:
         r = subprocess.run(["git", "-C", str(root), "-c", "user.name=CorvinOS", "-c", "user.email=corvin@localhost",
-                            "-c", f"core.hooksPath={os.devnull}", "-c", "commit.gpgsign=false", *changes.neutral_git_args(Path(root)), *args],
+                            "-c", f"core.hooksPath={os.devnull}", "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false", *changes.neutral_git_args(Path(root)), *args],
                            capture_output=True, text=True, env=kb_projection._env("operator"), encoding="utf-8",
                            errors="replace", timeout=120)
     except OSError as exc:
@@ -615,7 +615,9 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
         man = builtin.manifest(tenant_id)
         base = {"id": builtin.ID, "path": str(root), "template": "builtin@1", "added_at": None, "builtin": True}
         if not str(e.get("path") or "") or not root.is_dir():
-            return {**base, "state": "missing", "reason": "Corvin's knowledge base has not been created yet; it appears after the Knowledge Graph plugin is enabled"}
+            return {**base, "state": "pending", "title": builtin.TITLE, "docs_mode": "plain", "features": {}, "active": [], "role": "",
+                    "classification": "internal", "assistant_access": "read", "kb": False,
+                    "reason": "Corvin's knowledge base has not been created yet; it appears after the Knowledge Graph plugin is enabled"}
         return {**base, "state": "ok", "title": builtin.TITLE, "docs_mode": "plain", "features": dict(man["features"]),
                 "active": [f for f, on in man["features"].items() if on], "role": "", "classification": "internal",
                 "assistant_access": "read", "kb": True}
@@ -636,7 +638,7 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
 def _protection_of(tenant_id: str, project_id: str, man: dict[str, Any]) -> dict[str, str]:
     """The tenant's own record wins; project.yaml is a copy the assistant could have edited (release review R5)."""
     prot = registry.protection(tenant_id, project_id) or {}
-    return {"classification": prot.get("classification") or manifest.DEFAULT_CLASS,          # never from project.yaml
+    return {"classification": prot.get("classification") or manifest.legacy_class(man),     # only ever raised by project.yaml
             "assistant_access": prot.get("assistant_access") or manifest.DEFAULT_ACCESS}
 
 

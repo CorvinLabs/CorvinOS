@@ -253,7 +253,7 @@ async def _watch(tenant: str, project: str, root_for: Any) -> None:
                 with _lock:
                     ch.state = "paused"
             else:
-                root = root_for()
+                root = await asyncio.to_thread(root_for)          # may read the plugin registry / stat the KB: never on the loop
                 if root is not None:
                     t0 = time.monotonic()
                     files, truncated = await asyncio.to_thread(changes.working_changes_ex, Path(root), count_lines=False, timeout=WATCH_GIT_TIMEOUT_S)

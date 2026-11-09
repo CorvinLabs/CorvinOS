@@ -122,5 +122,12 @@ def classification_of(data: dict[str, Any]) -> str:
     return data.get("classification") or DEFAULT_CLASS
 
 
+def legacy_class(data: dict[str, Any]) -> str:
+    """Class for a registry entry with no protection record (written before the record existed): the stricter of the default and what
+    project.yaml says. project.yaml can only RAISE the class here, never lower it (release review round 3)."""
+    c = data.get("classification")
+    return c if c in CLASSES and CLASSES.index(c) > CLASSES.index(DEFAULT_CLASS) else DEFAULT_CLASS
+
+
 def access_of(data: dict[str, Any]) -> str:
     return data.get("assistant_access") or DEFAULT_ACCESS

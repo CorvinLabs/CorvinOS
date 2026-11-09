@@ -254,7 +254,7 @@ async def _activity_stream(request: Request, tenant_id: str, project_id: str, cu
             elif time.monotonic() - last_beat >= 5.0:
                 last_beat = time.monotonic()
                 yield ": ping\n\n"
-            if tick % 3 == 0 and project_id != "corvin" and registry.get(tenant_id, project_id) is None:
+            if tick % 3 == 0 and project_id != "corvin" and await asyncio.to_thread(registry.get, tenant_id, project_id) is None:
                 reason = "project_removed"
                 break
         yield _sse("end", {"reason": reason})
@@ -271,7 +271,7 @@ def project_activity(project_id: str, rec: Sess, after: Optional[str] = None) ->
 
 @router.get("/{project_id}/activity/stream")
 async def project_activity_stream(project_id: str, request: Request, rec: Sess, after: Optional[str] = None) -> StreamingResponse:
-    _call(_activity_root, rec.tenant_id, project_id)
+    await asyncio.to_thread(_call, _activity_root, rec.tenant_id, project_id)
     cursor = request.headers.get("last-event-id") or after
     if activity.stream_count(rec.tenant_id) >= activity.MAX_STREAMS_PER_TENANT:       # a real HTTP status (EventSource cannot show one)
         raise HTTPException(status_code=429, detail={"message": "too many open explorers; close one and try again", "reason_class": "stream_limit"})

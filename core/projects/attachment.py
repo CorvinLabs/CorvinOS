@@ -141,7 +141,7 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
             return None
         # the protection is TENANT state (the registry), not only project.yaml: the assistant can edit files in the project (review R5)
         prot = (None if builtin.is_builtin(pid) else registry.protection(tenant_id, pid)) or {}
-        cls = prot.get("classification") or manifest.DEFAULT_CLASS          # never from the assistant-editable project.yaml
+        cls = prot.get("classification") or (manifest.DEFAULT_CLASS if builtin.is_builtin(pid) else manifest.legacy_class(man))
         access = prot.get("assistant_access") or manifest.DEFAULT_ACCESS
         if class_allows is not None:
             try:

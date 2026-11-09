@@ -132,6 +132,54 @@ class ReleaseReview(_Base):
             self.assertFalse(m1.exists(), "a clean filter from the repo's config ran in the console")
             self.assertFalse(m2.exists(), "a diff driver from the repo's config ran in the console")
 
+    def test_r3_1_included_and_worktree_git_config_never_runs_in_the_change_view(self):
+        """Round 3: include.path targets and config.worktree are read by git but were not neutralised."""
+        with self._ctx() as c:
+            for kind in ("include", "worktree"):
+                repo = c.root / f"hostile-{kind}"
+                repo.mkdir()
+                _git(repo, "init", "-q")
+                mark = self.tmp / f"PWN_{kind}"
+                cmd = f"sh -c 'touch {mark}; cat'"
+                (repo / ".gitattributes").write_text("*.txt filter=x\n")
+                if kind == "include":
+                    inc = self.tmp / f"evil_{kind}.cfg"
+                    inc.write_text(f'[filter "x"]\n\tclean = {cmd}\n')
+                    _git(repo, "config", "include.path", str(inc))
+                else:
+                    _git(repo, "config", "extensions.worktreeConfig", "true")
+                    _git(repo, "config", "--worktree", "filter.x.clean", cmd)
+                (repo / "a.txt").write_text("one\n")
+                pid = c.own.post(f"{_URL}/adopt", json={"location": str(repo)}, headers=self._h(c)).json()["id"]
+                c.own.get(f"{_URL}/{pid}/changes")
+                c.own.get(f"{_URL}/{pid}/changes/file", params={"path": "a.txt"})
+                self.assertFalse(mark.exists(), f"a filter from a {kind} config ran in the console")
+
+    def test_r3_2_a_legacy_entry_keeps_the_stricter_class_from_project_yaml(self):
+        from core.projects import registry
+        with self._ctx() as c:
+            repo = c.root / "legacy-secret"
+            repo.mkdir()
+            import yaml
+            (repo / "project.yaml").write_text(yaml.safe_dump({"schema": 1, "id": "legacy-secret", "title": "x", "tenant": "_default",
+                                                               "classification": "secret", "assistant_access": "write", "features": {}}))
+            self.assertEqual(c.own.post(f"{_URL}/adopt", json={"location": str(repo)}, headers=self._h(c)).status_code, 201)
+            data = json.loads(registry.registry_path("_default").read_text())
+            for e in data["projects"]:
+                e.pop("protection", None)
+            registry.registry_path("_default").write_text(json.dumps(data))
+            got = c.own.get(f"{_URL}/legacy-secret").json()
+            self.assertEqual((got["classification"], got["assistant_access"]), ("secret", "read"),
+                             "an entry from before the protection record must not drop below what project.yaml says; access is never taken from it")
+
+    def test_r3_4_the_built_in_tile_without_a_knowledge_base_is_pending_not_an_error(self):
+        with self._ctx() as c:
+            with mock.patch("core.projects.builtin.repo", return_value=None):
+                lst = c.own.get(_URL).json()["projects"]
+            b = lst[0]
+            self.assertTrue(b["builtin"])
+            self.assertEqual((b["state"], b["title"]), ("pending", "Corvin"), b)
+
     def test_r2b4_without_git_a_repair_or_feature_change_is_a_clear_refusal_and_project_yaml_is_unchanged(self):
         import shutil as _sh
         with self._ctx() as c:

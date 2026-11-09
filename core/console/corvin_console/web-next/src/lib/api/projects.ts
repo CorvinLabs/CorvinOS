@@ -6,7 +6,7 @@
  */
 import { api } from "./client";
 
-export type ProjectState = "ok" | "missing" | "invalid";
+export type ProjectState = "ok" | "missing" | "invalid" | "pending";
 export type Role = "software" | "data_science" | "marketing" | "product" | "sales" | "legal" | "video" | "research" | "knowledge";
 export type DataClass = "public" | "internal" | "confidential" | "secret";
 export type Access = "read" | "write";
