@@ -306,7 +306,7 @@ class WatcherUnderLoad(unittest.TestCase):
     """While an agent works on the project the user is watching: the watcher must keep going even when ``host_saturated()`` is true;
     with nobody working it yields to the busy host (optional work)."""
 
-    def _run(self, saturated: bool, working: bool, wait_s: float = 4.5):
+    def _run(self, saturated: bool, working: bool, wait_s: float = 4.5, just_finished: bool = False, expired: bool = False):
         import asyncio
         import tempfile
         from unittest import mock
@@ -315,10 +315,15 @@ class WatcherUnderLoad(unittest.TestCase):
         (d / "a.txt").write_text("a")
         _git(d, "add", "-A")
         _git(d, "commit", "-qm", "base")
-        tenant, pid = "t-load", f"p-load-{int(saturated)}{int(working)}"
-        if working:
+        tenant, pid = "t-load", f"p-load-{int(saturated)}{int(working)}{int(just_finished)}{int(expired)}"
+        if working or just_finished:
             tr = activity.TurnTracker(tenant, pid, "chat-1", "Work")
             tr.start()
+            if just_finished:
+                tr.finish()                                              # the agent is idle again; its last write may still be on disk unseen
+                if expired:
+                    with activity._lock:
+                        activity._channels[(tenant, pid)].last_work -= activity.WATCH_GRACE_S + 60
 
         async def go():
             q = activity.subscribe(tenant, pid, lambda: str(d))
@@ -334,6 +339,14 @@ class WatcherUnderLoad(unittest.TestCase):
 
     def test_a_working_agent_keeps_the_watcher_going_on_a_saturated_host(self):
         self.assertEqual([e["path"] for e in self._run(saturated=True, working=True)], ["new.txt"])
+
+    def test_the_last_write_of_a_turn_is_seen_on_a_saturated_host_inside_the_grace_window(self):
+        """Measured live 2026-11-09: the turn's last write lands just before it ends, the host is busiest then, the watcher paused, and the file
+        appeared only with the next turn."""
+        self.assertEqual([e["path"] for e in self._run(saturated=True, working=False, just_finished=True)], ["new.txt"])
+
+    def test_after_the_grace_window_an_idle_project_yields_again(self):
+        self.assertEqual(self._run(saturated=True, working=False, just_finished=True, expired=True), [])
 
     def test_an_idle_project_yields_to_a_saturated_host(self):
         self.assertEqual(self._run(saturated=True, working=False), [])

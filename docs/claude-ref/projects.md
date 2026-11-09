@@ -337,6 +337,8 @@ board items), **Activity** (newest first, All / Tools / Files, repeated tool row
   (30 min lifetime, T-0380) -> 15.3 s and a forced cancel. Every restart of the live console shows that forced cancel today; the explorer is not the cause.
 - **Watcher and a busy host**: optional work yields to `loop_health.host_saturated()` - EXCEPT while an agent works on the project (found live: starting a real turn
   stalls the loop 2 s, which marked the host saturated for 120 s and paused file watching exactly while the user watched). Idle + saturated -> paused, the panel says so.
+  The watcher also keeps looking for `WATCH_GRACE_S` (20 s) after the last turn/tool event, saturated or not: the last write of a turn lands just before the turn ends,
+  the host is busiest then, and without the grace window the file appeared only with the NEXT turn (measured live 2026-11-09, one run in five; 6/6 after the fix).
 - **The assistant is told where the project is** (`chat_runtime._attached_project_block`): the attached project is NOT its working directory; files for it belong in
   the project folder, by absolute path. Without that sentence "create a file in the project" landed in the chat's own folder (found by the live explorer test; the explorer
   showed the tool call and, correctly, no file change).

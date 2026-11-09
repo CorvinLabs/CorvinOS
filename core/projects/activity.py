@@ -29,6 +29,10 @@ STREAM_LIFETIME_S = 10.0                    # uvicorn force-cancels in-flight re
 WATCH_MIN_INTERVAL_S = 3.0
 WATCH_MAX_INTERVAL_S = 30.0
 WATCH_GIT_TIMEOUT_S = 8
+# After the last sign of work (a turn started, a tool ran, a turn finished) the watcher keeps looking for this long even while the host is
+# saturated. The last write of a turn lands just before the turn ends, and a turn's end (the CLI exiting) is exactly when the host is busiest:
+# the watcher then paused and the file showed up only with the NEXT turn (measured live 2026-11-09, one run in five).
+WATCH_GRACE_S = 20.0
 IDLE_AGENT_TTL_S = 1800.0
 PRUNE_AFTER_S = 86400.0
 _MAX_BURST = 40
@@ -78,6 +82,7 @@ class _Channel:
         self.watcher: Optional[asyncio.Task] = None
         self.files: Optional[dict[str, tuple]] = None     # baseline of the last look; survives watcher restarts
         self.state = "off"                                # off | running | paused
+        self.last_work = 0.0                              # monotonic time of the last turn/tool event
         self.last_touch = time.time()
 
 
@@ -146,6 +151,8 @@ def post_event(tenant: str, project: str, kind: str, **fields: Any) -> Optional[
             ch = _chan(tenant, project)
             ch.seq += 1
             ch.last_touch = time.time()
+            if kind in ("turn_started", "tool_use", "turn_finished"):
+                ch.last_work = time.monotonic()
             ev = {"seq": ch.seq, "id": f"{EPOCH}:{ch.seq}", "ts": ch.last_touch, "kind": kind, **_clean({k: v for k, v in fields.items() if k != "id"})}
             if kind == "tool_use" and isinstance(fields.get("id"), str):
                 ev["tool_id"] = fields["id"][:64]
@@ -249,7 +256,11 @@ async def _watch(tenant: str, project: str, root_for: Any) -> None:
             # Optional work yields to a busy host - EXCEPT while an agent works on this project: that is exactly when the user watches, and
             # starting a real turn is itself what stalls the loop and marks the host saturated (found live, 2026-11-08). One git status in a
             # worker thread every few seconds is the cost.
-            if loop_health is not None and loop_health.host_saturated() and not working:
+            if working:
+                with _lock:
+                    ch.last_work = time.monotonic()
+            recent = (time.monotonic() - ch.last_work) < WATCH_GRACE_S
+            if loop_health is not None and loop_health.host_saturated() and not working and not recent:
                 with _lock:
                     ch.state = "paused"
             else:

@@ -41,7 +41,8 @@ test("a real turn typed in the browser shows up live in the explorer, in order, 
 
   const composer = page.getByTestId("chat-composer-textarea");
   await composer.click();
-  await composer.fill(`Create a file named ${name} in the project containing one friendly line that includes the code ${secret}. Then reply DONE.`);
+  // the absolute path: this test measures the explorer, not whether the model obeys "in the project" (it sometimes writes into its own folder)
+  await composer.fill(`Create the file ${target} containing one friendly line that includes the code ${secret}. Then reply DONE.`);
   const sentAt = Date.now();
   await composer.press("Enter");
 
@@ -58,7 +59,8 @@ test("a real turn typed in the browser shows up live in the explorer, in order, 
   await expect(fileRow).toBeVisible({ timeout: 30_000 });
   await expect(fileRow).toContainText("New file");
   // 3. the turn finishes: the working card goes idle and a "Finished" row is added
-  await expect(page.locator('[data-testid="explorer-agent"][data-state="idle"]')).toContainText("finished", { timeout: 120_000 });
+  // other chats attached to the same project show their own (idle) cards too: it is enough that one card reads "finished"
+  await expect(page.locator('[data-testid="explorer-agent"][data-state="idle"]').filter({ hasText: "finished" }).first()).toBeVisible({ timeout: 120_000 });
   await expect(page.locator('[data-testid="explorer-row"][data-kind="turn"]', { hasText: "Finished" }).first()).toBeVisible();
 
   // measured: the turn's own tool_use frame -> the visible row
