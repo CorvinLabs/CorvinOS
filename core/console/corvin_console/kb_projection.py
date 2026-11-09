@@ -334,20 +334,30 @@ def index_repair_hint(repo: Path) -> str:
             f"`mv {g / 'index'} {g / 'index.bad'}` and `git -C {repo} reset -q`.")
 
 
-def _uncommitted_work(repo: Path) -> list[str]:
+def _guarded_env(repo: Path, actor: str, guard: bool) -> dict[str, str]:
+    """The env for a git call on a repository. A PROJECT knowledge base lives in a folder the user adopted: its own git config must not
+    run anything (review round 10), so the neutral env applies; the tenant's own KB is the operator's and is left as it was."""
+    env = _env(actor)
+    if guard:
+        from core.projects import changes  # noqa: PLC0415
+        env = changes.neutral_git_env(repo, env)
+    return env
+
+
+def _uncommitted_work(repo: Path, guard: bool = False) -> list[str]:
     """Work-item files edited but not committed. Export reads the working tree, so such an
     edit would reach the board without the state machine (a hand-set `status: done`).
     Raises ``KbIndexCorrupt`` when git cannot read the index."""
     r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-uall", "--",
                         "kb/initiatives", "kb/epics", "kb/tasks"],
-                       capture_output=True, text=True, env=_env("sync:kb"), encoding="utf-8", errors="replace")
+                       capture_output=True, text=True, env=_guarded_env(repo, "sync:kb", guard), encoding="utf-8", errors="replace")
     if r.returncode != 0 and _INDEX_CORRUPT.search(r.stderr or ""):
         raise KbIndexCorrupt((r.stderr or "").strip()[-300:])
     # porcelain paths are relative to the git ROOT. A KB that is a subdirectory of a larger
     # repository (a project's docs/ in docs_mode=plain, ADR-2315) reports `docs/kb/tasks/…`;
     # strip that prefix, or such an edit is never seen (spike T-0350, fixed in T-0365)
     pre = subprocess.run(["git", "-C", str(repo), "rev-parse", "--show-prefix"], capture_output=True,
-                         text=True, env=_env("sync:kb"), encoding="utf-8", errors="replace").stdout.strip()
+                         text=True, env=_guarded_env(repo, "sync:kb", guard), encoding="utf-8", errors="replace").stdout.strip()
 
     def _rel(path: str) -> str:
         path = path.split(" -> ")[-1].strip('"')
@@ -362,10 +372,9 @@ def _run(repo: Path, *args: str, actor: str = "sync:kb", timeout: int = 120,
     """Run ``kb.py --repo <repo> <args>``. *engine* (a ``kb.py`` path) defaults to the repo's own
     copy; a PROJECT knowledge base is always run by the bound KB's engine instead (ADR-2316
     Decision 8): no code from a project directory is executed by the console."""
-    env = _env(actor)
-    if guard_git:       # a PROJECT folder's own git config must not run anything through the engine's git calls (review round 9)
-        from core.projects import changes  # noqa: PLC0415
-        env = changes.neutral_git_env(repo, env)
+    # an explicit engine means a PROJECT knowledge base (see above): its folder's own git config must not run anything through the
+    # engine's git calls (review rounds 9-10)
+    env = _guarded_env(repo, actor, guard_git or engine is not None)
     script = engine if engine is not None else repo / "scripts" / "kb.py"
     r = subprocess.run([sys.executable, str(script), "--repo", str(repo), *args],
                        capture_output=True, text=True, timeout=timeout, env=env, encoding="utf-8", errors="replace")
@@ -379,8 +388,9 @@ def _run(repo: Path, *args: str, actor: str = "sync:kb", timeout: int = 120,
     return r.returncode, data
 
 
-def fingerprint(repo: Path) -> str:
-    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
+def fingerprint(repo: Path, guard: bool = False) -> str:
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          env=_guarded_env(repo, "sync:kb", guard)).stdout.strip()
     parts = [head]
     for d in ("initiatives", "epics", "tasks"):
         base = repo / "kb" / d
@@ -388,7 +398,7 @@ def fingerprint(repo: Path) -> str:
             for p in sorted(base.glob("*.md")):
                 st = p.stat()
                 parts.append(f"{p.name}:{st.st_mtime_ns}:{st.st_size}")
-    parts += _uncommitted_work(repo)   # committing (or reverting) an edit is a change of state too
+    parts += _uncommitted_work(repo, guard)   # committing (or reverting) an edit is a change of state too
     # sha256, not hash(): str hashes are salted per process, and this value is persisted
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:32]
 
@@ -641,7 +651,7 @@ def _save_projects(tenant_id: str, st: dict[str, Any]) -> None:
 def _sync_one_project(tenant_id: str, scope: str, repo: Path, engine: Path,
                       prev: dict[str, Any]) -> dict[str, Any]:
     now = time.time()
-    fp = fingerprint(repo)                          # KbIndexCorrupt -> caller records an error
+    fp = fingerprint(repo, guard=True)              # KbIndexCorrupt -> caller records an error
     if prev.get("fingerprint") == fp and prev.get("payload"):
         d = projection.diff(tenant_id, prev["payload"])
         if not d:
@@ -659,7 +669,7 @@ def _sync_one_project(tenant_id: str, scope: str, repo: Path, engine: Path,
             return {**prev, "checked_at": now}
         res = projection.apply(tenant_id, payload)  # one projection_blocked record, nothing else
         return {**res, "fingerprint": fp, "checked_at": now, "payload": prev.get("payload")}
-    pending = _uncommitted_work(repo)
+    pending = _uncommitted_work(repo, guard=True)
     if pending:
         return {**{k: v for k, v in prev.items() if k != "error"}, "state": "held", "fingerprint": fp,
                 "pending_uncommitted": pending[:20], "checked_at": now, "payload": prev.get("payload")}
@@ -765,7 +775,7 @@ def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = ""
                "actor_kind": actor.split(":")[0], **({"sid_fingerprint": sid_fingerprint} if sid_fingerprint else {}),
                **({"scope": scope} if scope else {})}
     try:
-        pending = _uncommitted_work(repo)
+        pending = _uncommitted_work(repo, guard=engine is not None)
     except KbIndexCorrupt:
         raise KbTransitionRefused(f"board moves are paused: {index_repair_hint(repo)}") from None
     if pending:
@@ -1036,7 +1046,7 @@ def create_item(tenant_id: str, *, kind: str, title: str, parent_id: Optional[st
     service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "requested"})  # audit-first
     with _tenant_lock(tenant_id):
         try:
-            pending = _uncommitted_work(repo)
+            pending = _uncommitted_work(repo, guard=engine is not None)
         except KbIndexCorrupt:
             service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "refused"})
             raise KbTransitionRefused(f"board writes are paused: {index_repair_hint(repo)}") from None

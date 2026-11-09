@@ -76,7 +76,7 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
         try:
             lst = subprocess.run(["git", "-C", str(r), *neutral_git_args(r), "config", "--list", "--includes", "-z"], capture_output=True, timeout=10, env=base)
             entries = [e for e in lst.stdout.decode("utf-8", errors="replace").split("\0") if "\n" in e]
-            subs = subprocess.run(["git", "-C", str(r), *neutral_git_args(r), "ls-files", "--stage", "-z"], capture_output=True, timeout=20, env=base) if depth < 3 else None
+            subs = subprocess.run(["git", "-C", str(r), *neutral_git_args(r), "ls-files", "--stage", "-z"], capture_output=True, timeout=20, env=base)
         except (OSError, subprocess.TimeoutExpired):
             # fail closed: a call that cannot be guarded is not made (an unreadable config must never mean an unguarded run - round 9)
             raise ChangesError("the repository's configuration could not be read in time") from None
@@ -87,6 +87,8 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
                 items.append((key, "cat" if key.lower().endswith((".clean", ".smudge")) else ""))
         for rec in (subs.stdout.decode("utf-8", errors="replace").split("\0") if subs else []):
             if rec.startswith("160000 ") and "\t" in rec:
+                if depth >= 3:        # deeper than the scan reads: refuse rather than run unguarded (review round 10)
+                    raise ChangesError("the repository nests submodules deeper than the console will read")
                 child = r / rec.split("\t", 1)[1]
                 if child.is_dir() and not child.is_symlink():
                     collect(child, depth + 1)
@@ -180,12 +182,12 @@ def working_changes_ex(root: Path, *, count_lines: bool = True, timeout: int = _
         head = _has_head(repo)
         nums: dict[str, tuple[Optional[int], Optional[int]]] = {}
         if head:
-            for line in _git(repo, "diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD", timeout=timeout).splitlines():
+            for line in _git(repo, "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "--numstat", "HEAD", timeout=timeout).splitlines():
                 a, _, rest = line.partition("\t")
                 d, _, path = rest.partition("\t")
                 nums[path] = (int(a) if a.isdigit() else None, int(d) if d.isdigit() else None)
         # `-z` prints a rename or copy as "XY new\0old\0": the old path is a SEPARATE field that must be consumed with its entry
-        parts = [e for e in _git(repo, "status", "--porcelain=v1", "-z", "-uall", timeout=timeout).split("\0") if e]
+        parts = [e for e in _git(repo, "status", "--porcelain=v1", "-z", "-uall", "--ignore-submodules=all", timeout=timeout).split("\0") if e]
         i = 0
         while i < len(parts):
             ent = parts[i]
@@ -307,9 +309,9 @@ def file_view(root: Path, rel: str, commit: Optional[str] = None) -> dict[str, A
         out["text"] = data[:MAX_BYTES].decode("utf-8", errors="replace")
         return out
     elif meta["status"] == "deleted":
-        raw = _git(repo, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "HEAD", "--", inner)
+        raw = _git(repo, "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "--unified=3", "HEAD", "--", inner)
     else:
-        raw = _git(repo, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "HEAD", "--", inner) if _has_head(repo) else ""
+        raw = _git(repo, "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "--unified=3", "HEAD", "--", inner) if _has_head(repo) else ""
     if "Binary files" in raw[:2000] or raw.startswith("Binary"):
         out["binary"] = True
         return out

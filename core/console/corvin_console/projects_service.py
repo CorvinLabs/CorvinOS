@@ -344,6 +344,11 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
             "expires_in_s": int(PLAN_TTL_S)}
 
 
+def changes_error() -> type:
+    from core.projects import changes  # noqa: PLC0415
+    return changes.ChangesError
+
+
 def _need_git() -> None:
     if shutil.which("git") is None:
         raise Conflict("git is not installed on this machine; install git and try again - nothing was changed", "git_missing")
@@ -777,7 +782,10 @@ def repair(tenant_id: str, project_id: str, *, dry_run: bool = False) -> dict[st
     if any(o.kind == "action" and o.action in ("git_init", "git_commit") for o in pending):
         _need_git()
     _audit(tenant_id, "project.repaired", project_id=project_id, template=man.get("template"), files=len(plan.pending()))
-    res = F.apply_plan(plan, root, {**ctx, "_root": str(root)}, _runner(tenant_id, root))
+    try:
+        res = F.apply_plan(plan, root, {**ctx, "_root": str(root)}, _runner(tenant_id, root))
+    except (changes_error(), OSError, subprocess.TimeoutExpired) as exc:
+        raise Conflict(f"repair stopped: {str(exc)[:160]}", "git_unguarded") from None
     _sync_mcp(tenant_id, project_id, root, manifest.active_features(man))
     return {**summary, "written": res["written"], "actions": res["actions"]}
 
@@ -870,7 +878,7 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
                 blocking = out.get("blocking") if isinstance(out, dict) else None
                 add("kb_check", rc == 0 and blocking == 0, f"kb check: blocking {blocking}" if blocking is not None
                     else f"kb check failed: {str(out)[:120]}")
-            except (Conflict, subprocess.TimeoutExpired) as exc:
+            except (Conflict, subprocess.TimeoutExpired, OSError, ValueError) as exc:        # ChangesError is a ValueError
                 add("kb_check", False, str(exc)[:160])
     return {"project_id": project_id, "ok": all(c["ok"] for c in checks), "checks": checks}
 
@@ -1195,6 +1203,8 @@ def project_changes(tenant_id: str, project_id: str, commit: Optional[str] = Non
                 "has_repository": bool(changes.repos(root)), "truncated": cut or len(files) >= changes.MAX_FILES}
     except changes.ChangesError as exc:
         raise ProjectsError(str(exc)) from None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ProjectsError(f"git could not read the repository ({type(exc).__name__})") from None
 
 
 def project_change_file(tenant_id: str, project_id: str, path: str, commit: Optional[str] = None) -> dict[str, Any]:

@@ -528,7 +528,8 @@ class NeutralisedKeys(unittest.TestCase):
                               "print('{}')\n")
             kb_projection._run(repo, "check", actor="operator", engine=engine, guard_git=True)
             self.assertFalse(mark.exists(), "the engine's git ran the folder's clean filter")
-            kb_projection._run(repo, "check", actor="operator", engine=engine)      # control: unguarded, the marker appears
+            subprocess.run([sys.executable, str(engine), "--repo", str(repo), "check"], capture_output=True,
+                           env=kb_projection._env("operator"))                     # control: the same engine unguarded, the marker appears
             self.assertTrue(mark.exists(), "the control must run the filter, otherwise this test proves nothing")
             with mock.patch.object(changes.subprocess, "run", side_effect=subprocess.TimeoutExpired("git", 10)):
                 with self.assertRaises(changes.ChangesError):
@@ -537,3 +538,49 @@ class NeutralisedKeys(unittest.TestCase):
             got = {env[f"GIT_CONFIG_KEY_{i}"]: env[f"GIT_CONFIG_VALUE_{i}"] for i in range(int(env["GIT_CONFIG_COUNT"]))}
             self.assertEqual(got["log.showSignature"], "false")
             self.assertEqual(got["core.fsmonitor"], "false")
+
+    def test_r10_1_the_background_sync_of_a_project_kb_never_runs_the_folders_fsmonitor(self):
+        import tempfile
+        from core.console.corvin_console import kb_projection
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d) / "docs"
+            repo.mkdir()
+            _git(repo, "init", "-q")
+            (repo / "kb" / "tasks").mkdir(parents=True)
+            (repo / "kb" / "tasks" / "T-0001.md").write_text("x\n")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "b")
+            mark = Path(d) / "PWN_fsmon"
+            evil = Path(d) / "evil.sh"
+            evil.write_text(f"#!/bin/sh\ntouch {mark}\n")
+            evil.chmod(0o755)
+            _git(repo, "config", "core.fsmonitor", str(evil))
+            kb_projection.fingerprint(repo, guard=True)
+            kb_projection._uncommitted_work(repo, guard=True)
+            self.assertFalse(mark.exists(), "the sync's git ran the folder's fsmonitor")
+            kb_projection.fingerprint(repo)                               # control: unguarded, the hook runs
+            self.assertTrue(mark.exists(), "the control must run the hook, otherwise this test proves nothing")
+
+    def test_r10_3_a_submodule_chain_deeper_than_the_scan_is_refused_not_run(self):
+        import tempfile
+        from core.projects import changes
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            mark = base / "PWN_deep"
+            leaf = base / "s0" / "s1" / "s2" / "s3" / "s4"
+            leaf.mkdir(parents=True)
+            chain = [base / "s0", base / "s0/s1", base / "s0/s1/s2", base / "s0/s1/s2/s3", leaf]
+            for r in chain:
+                _git(r, "init", "-q")
+            (leaf / ".gitattributes").write_text("*.txt filter=x\n")
+            (leaf / "a.txt").write_text("one\n")
+            _git(leaf, "add", "-A")
+            _git(leaf, "commit", "-qm", "l")
+            _git(leaf, "config", "filter.x.clean", f"sh -c 'touch {mark}; cat'")
+            for parent, child in zip(reversed(chain[:-1]), reversed(chain[1:])):
+                subprocess.run(["git", "-C", str(parent), "-c", "protocol.file.allow=always", "add", child.name], capture_output=True, check=True)
+                _git(parent, "commit", "-qm", "c")
+            (leaf / "a.txt").write_text("two\n")
+            with self.assertRaises(changes.ChangesError):
+                changes.working_changes(chain[0])
+            self.assertFalse(mark.exists(), "a filter in a submodule nested four levels deep ran")
