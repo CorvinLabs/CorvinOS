@@ -76,7 +76,7 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
             return
         for e in entries:
             key = e.split("\n", 1)[0]
-            if any(p.match(key.lower()) for p in _EXEC_KEYS) and not key.lower().endswith(".hookspath") and key not in seen:
+            if any(p.search(key.lower()) for p in _EXEC_KEYS) and not key.lower().endswith(".hookspath") and key not in seen:
                 seen.add(key)
                 items.append((key, "cat" if key.lower().endswith((".clean", ".smudge")) else ""))
         for rec in (subs.stdout.decode("utf-8", errors="replace").split("\0") if subs else []):
@@ -143,7 +143,7 @@ def _area(path: str) -> str:
 
 def _has_head(repo: Path) -> bool:
     return subprocess.run(["git", "-C", str(repo), *neutral_git_args(repo), "rev-parse", "--verify", "-q", "HEAD"], capture_output=True,
-                          timeout=_GIT_TIMEOUT, env=_env()).returncode == 0
+                          timeout=_GIT_TIMEOUT, env=neutral_git_env(repo, _env())).returncode == 0
 
 
 def _count_lines(p: Path) -> Optional[int]:
@@ -229,7 +229,7 @@ def commit_files(root: Path, sha: str) -> list[dict[str, Any]]:
         raise ChangesError("invalid commit")
     for prefix, repo in repos(root):
         if subprocess.run(["git", "-C", str(repo), *neutral_git_args(repo), "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True,
-                          timeout=_GIT_TIMEOUT, env=_env()).returncode != 0:
+                          timeout=_GIT_TIMEOUT, env=neutral_git_env(repo, _env())).returncode != 0:
             continue
         files = []
         # `-z`: "add\tdel\tpath\0", and a rename "add\tdel\t\0old\0new\0" (without -z git prints "{old => new}", which no

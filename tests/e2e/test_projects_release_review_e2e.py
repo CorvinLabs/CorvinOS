@@ -482,3 +482,28 @@ class ReleaseReview(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NeutralisedKeys(unittest.TestCase):
+    """Round 8: the generic key matching was anchored (re.match) and so matched nothing; assert the exact blanked set for a known config."""
+
+    def test_r8_1_every_program_naming_key_is_blanked_in_the_env(self):
+        import tempfile
+        from core.projects import changes
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            _git(repo, "init", "-q")
+            keys = {"diff.x.command": "a", "gpg.program": "b", "credential.helper": "c", "remote.origin.uploadpack": "d",
+                    "core.alternateRefsCommand": "e", "trailer.t.cmd": "f", "gpg.ssh.defaultKeyCommand": "g", "filter.f.clean": "h",
+                    "merge.m.driver": "i", "user.name": "keep"}
+            for k, v in keys.items():
+                _git(repo, "config", k, v)
+            env = changes.neutral_git_env(repo, changes._env())
+            got = {env[f"GIT_CONFIG_KEY_{i}"].lower(): env[f"GIT_CONFIG_VALUE_{i}"] for i in range(int(env["GIT_CONFIG_COUNT"]))}
+            for k in keys:
+                if k == "user.name":
+                    self.assertNotIn(k, got, "an ordinary key must be left alone")
+                else:
+                    self.assertIn(k.lower(), got, f"{k} was not blanked")
+            self.assertEqual(got["filter.f.clean"], "cat")
+            self.assertEqual(env["GIT_ALLOW_PROTOCOL"], "none")
