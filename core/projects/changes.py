@@ -38,7 +38,8 @@ _EXEC_KEYS = (re.compile(r"^filter\..+\.(clean|smudge|process)$"), re.compile(r"
 
 
 _FIXED = (("core.fsmonitor", "false"), ("core.hooksPath", os.devnull), ("diff.ignoreSubmodules", "all"), ("status.submoduleSummary", "false"),
-          ("submodule.recurse", "false"), ("diff.external", ""), ("core.pager", ""), ("core.sshCommand", ""), ("core.askPass", ""))
+          ("submodule.recurse", "false"), ("diff.external", ""), ("core.pager", ""), ("core.sshCommand", ""), ("core.askPass", ""),
+          ("gc.auto", "0"), ("maintenance.auto", "false"), ("gc.recentObjectsHook", ""))
 
 
 def neutral_git_args(repo: Path) -> list[str]:
@@ -63,9 +64,9 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
         # git descends into a committed nested repository (add -A, status, diff) and reads ITS config too, so the keys of every gitlink
         # are neutralised as well; the command-scope entries below apply to those child processes (review round 4)
         try:
-            lst = subprocess.run(["git", "-C", str(r), "config", "--list", "--includes", "-z"], capture_output=True, timeout=10, env=base)
+            lst = subprocess.run(["git", "-C", str(r), *neutral_git_args(r), "config", "--list", "--includes", "-z"], capture_output=True, timeout=10, env=base)
             entries = [e for e in lst.stdout.decode("utf-8", errors="replace").split("\0") if "\n" in e]
-            subs = subprocess.run(["git", "-C", str(r), "ls-files", "--stage", "-z"], capture_output=True, timeout=20, env=base) if depth < 3 else None
+            subs = subprocess.run(["git", "-C", str(r), *neutral_git_args(r), "ls-files", "--stage", "-z"], capture_output=True, timeout=20, env=base) if depth < 3 else None
         except (OSError, subprocess.TimeoutExpired):
             return
         for e in entries:

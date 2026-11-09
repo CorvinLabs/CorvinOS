@@ -217,6 +217,40 @@ class ReleaseReview(_Base):
                 pass
             self.assertFalse(mark_sub.exists() or mark_eq.exists(), "the commit path ran a repository command")
 
+    def test_r5_1_the_scan_and_a_commit_never_run_fsmonitor_or_gc_hooks_from_the_repo_config(self):
+        """Round 5: the neutraliser's own index read ran core.fsmonitor; a commit started gc, which runs gc.recentObjectsHook."""
+        with self._ctx() as c:
+            mark = self.tmp / "PWN_r5"
+            evil = self.tmp / "evil_r5.sh"
+            evil.write_text(f"#!/bin/sh\necho x >> {mark}\n")
+            evil.chmod(0o755)
+            repo = c.root / "hostile-r5"
+            repo.mkdir()
+            _git(repo, "init", "-q")
+            (repo / "a.txt").write_text("one\n")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "b")
+            for k, v in (("core.fsmonitor", str(evil)), ("gc.auto", "1"), ("gc.autoDetach", "false"), ("gc.pruneExpire", "now"),
+                         ("gc.recentObjectsHook", str(evil))):
+                _git(repo, "config", k, v)
+            for i in range(3):
+                d = repo / ".git" / "objects" / f"1{i}"
+                d.mkdir(exist_ok=True)
+                (d / ("0" * 38)).write_bytes(b"x")
+            mark.unlink(missing_ok=True)
+            (repo / "a.txt").write_text("two\n")
+            pid = c.own.post(f"{_URL}/adopt", json={"location": str(repo)}, headers=self._h(c)).json()["id"]
+            c.own.get(f"{_URL}/{pid}/changes")
+            c.own.get(f"{_URL}/{pid}/changes/file", params={"path": "a.txt"})
+            self.assertFalse(mark.exists(), "the change view ran a program named by the repo's config")
+            from core.console.corvin_console import projects_service as svc
+            for args in (("add", "-A"), ("commit", "-qm", "x")):
+                try:
+                    svc._git(repo, *args)
+                except Exception:  # noqa: BLE001 - only the marker matters
+                    pass
+            self.assertFalse(mark.exists(), "a commit ran fsmonitor or a gc hook from the repo's config")
+
     def test_r2b4_without_git_a_repair_or_feature_change_is_a_clear_refusal_and_project_yaml_is_unchanged(self):
         import shutil as _sh
         with self._ctx() as c:
