@@ -30,13 +30,13 @@ function Links({ projectId, links }: { projectId: string; links: ChangeLink[] })
   );
 }
 
-function FileRow({ projectId, f, onOpen }: { projectId: string; f: ChangedFile; onOpen: () => void }) {
+function FileRow({ projectId, f, onOpen, stale }: { projectId: string; f: ChangedFile; onOpen: () => void; stale?: boolean }) {
   const { dir, name } = splitPath(f.path);
   const m = STATUS_META[f.status];
   return (
-    <li className="flex items-center gap-2 border-b px-3 py-1.5 last:border-b-0" data-testid="change-row" data-path={f.path} data-status={f.status}>
+    <li className={`flex items-center gap-2 border-b px-3 py-1.5 last:border-b-0 ${stale ? "opacity-50" : ""}`} data-testid="change-row" data-path={f.path} data-status={f.status}>
       <span className="w-5 shrink-0 text-center font-mono text-xs font-semibold" title={m.label} aria-label={m.label}>{m.letter}</span>
-      <button type="button" onClick={onOpen} className="min-w-0 flex-1 truncate text-left text-sm hover:underline" data-testid="change-open" title={f.path}>
+      <button type="button" onClick={onOpen} disabled={stale} className="min-w-0 flex-1 truncate text-left text-sm hover:underline" data-testid="change-open" title={f.path}>
         <span className="text-muted-foreground">{dir}</span>{name}
       </button>
       <Links projectId={projectId} links={f.links} />
@@ -71,7 +71,8 @@ export function ChangesPanel({ projectId, title, onClose }: { projectId: string;
   const [file, setFile] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const q = useQuery({ queryKey: changesKey(projectId, commit), queryFn: ({ signal }) => getChanges(projectId, commit, signal), refetchInterval: 10_000, retry: false,
-    staleTime: 0, refetchOnMount: "always" });          // opening the panel always shows the files as they are now
+    staleTime: 0, refetchOnMount: "always",            // opening the panel always shows the files as they are now
+    placeholderData: (prev) => prev });                 // switching commits keeps the picker (and its focus) on screen
   useEffect(() => { closeRef.current?.focus(); }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { if (file) setFile(null); else onClose(); } };
@@ -79,6 +80,10 @@ export function ChangesPanel({ projectId, title, onClose }: { projectId: string;
     return () => document.removeEventListener("keydown", onKey);
   }, [file, onClose]);
   const d = q.data;
+  // a commit that cannot be read goes back to the uncommitted view instead of leaving the panel without its picker
+  const [commitError, setCommitError] = useState<string | null>(null);
+  useEffect(() => { if (q.error && commit) { setCommitError(`Commit ${commit.slice(0, 9)} could not be read; showing the uncommitted changes.`); setCommit(null); } }, [q.error, commit]);
+  const loadingOther = q.isPlaceholderData;                // the rows below still belong to the PREVIOUS selection
   const groups = d ? groupByArea(d.files) : [];
   return (
     <aside role="dialog" aria-label={`Changes in ${title}`} data-testid="changes-panel"
@@ -87,7 +92,7 @@ export function ChangesPanel({ projectId, title, onClose }: { projectId: string;
         {file && <Button variant="ghost" size="sm" onClick={() => setFile(null)} aria-label="Back to the list" data-testid="changes-back"><ArrowLeft className="h-4 w-4" /></Button>}
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium" data-testid="changes-title">{file ? file : `Changes in ${title}`}</div>
-          {!file && d && <div className="text-xs text-muted-foreground" data-testid="changes-summary">{commit ? `Commit ${commit.slice(0, 9)}: ` : ""}{summaryLine(d.files)}</div>}
+          {!file && d && !loadingOther && <div className="text-xs text-muted-foreground" data-testid="changes-summary">{commit ? `Commit ${commit.slice(0, 9)}: ` : ""}{summaryLine(d.files)}</div>}
         </div>
         <Button ref={closeRef} variant="ghost" size="sm" onClick={onClose} aria-label="Close the changes" data-testid="changes-close"><X className="h-4 w-4" /></Button>
       </header>
@@ -102,18 +107,20 @@ export function ChangesPanel({ projectId, title, onClose }: { projectId: string;
             <>
               <label className="flex items-center gap-2 text-xs text-muted-foreground">Show
                 <select className="min-w-0 flex-1 rounded border bg-background px-2 py-1 text-xs text-foreground" value={commit ?? ""} data-testid="changes-source"
-                  onChange={(e) => setCommit(e.target.value || null)}>
+                  onChange={(e) => { setCommitError(null); setCommit(e.target.value || null); }}>
                   <option value="">Changes not yet committed</option>
                   {d.commits.map((c) => <option key={c.sha} value={c.sha}>{`${c.short} · ${ago(c.at)} · ${c.subject}`.slice(0, 90)}</option>)}
                 </select>
               </label>
+              {commitError && <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="changes-commit-error">{commitError}</p>}
+              {d.repository_note && <p className="text-xs text-muted-foreground" data-testid="changes-repo-note">Not listed: {d.repository_note}.</p>}
               {commit && d.commits.find((c) => c.sha === commit)?.links.length ? <Links projectId={projectId} links={d.commits.find((c) => c.sha === commit)!.links} /> : null}
               {groups.length === 0 ? (
-                <p className="text-sm text-muted-foreground" data-testid="changes-empty">{emptyMessage(d.has_repository, commit !== null)}</p>
+                <p className="text-sm text-muted-foreground" data-testid="changes-empty">{loadingOther ? "Loading…" : emptyMessage(d.has_repository, commit !== null, d.repository_note)}</p>
               ) : groups.map((g) => (
                 <section key={g.area} aria-label={g.label} data-testid="changes-group" data-area={g.area}>
                   <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{g.label} ({g.files.length})</h3>
-                  <ul className="rounded-md border">{g.files.map((f) => <FileRow key={f.path} projectId={projectId} f={f} onOpen={() => setFile(f.path)} />)}</ul>
+                  <ul className="rounded-md border">{g.files.map((f) => <FileRow key={f.path} projectId={projectId} f={f} stale={q.isPlaceholderData} onOpen={() => setFile(f.path)} />)}</ul>
                 </section>
               ))}
               {d.truncated && <p className="text-xs text-muted-foreground" data-testid="changes-truncated">The list stops at {d.files.length} files.</p>}

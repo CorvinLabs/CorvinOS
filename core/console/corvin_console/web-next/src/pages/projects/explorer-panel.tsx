@@ -36,6 +36,7 @@ export function ExplorerPanel({ projectId, title, onClose, onOpenChanges }: { pr
   }, [onClose]);
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 5000); return () => clearInterval(t); }, []);
 
+  const [attempt, setAttempt] = useState(0);                 // "Try again" after a failed first look
   // snapshot first (a real status), then the stream
   useEffect(() => {
     let es: EventSource | null = null;
@@ -59,15 +60,24 @@ export function ExplorerPanel({ projectId, title, onClose, onOpenChanges }: { pr
       es.addEventListener("open", () => { if (timer) { clearTimeout(timer); timer = null; } dispatch({ type: "conn", conn: "live" }); });
       es.addEventListener("snapshot", (e) => { const d = parse<ActivitySnapshot>(e as MessageEvent); if (d) dispatch({ type: "snapshot", data: d }); });
       es.addEventListener("activity", (e) => { const d = parse<ActivityEvent>(e as MessageEvent); if (d) dispatch({ type: "activity", data: d }); });
-      es.addEventListener("end", (e) => { const d = parse<{ reason: string }>(e as MessageEvent); if (d) dispatch({ type: "end", reason: d.reason }); });
+      es.addEventListener("end", (e) => {
+        const d = parse<{ reason: string }>(e as MessageEvent);
+        if (!d) return;
+        dispatch({ type: "end", reason: d.reason });
+        if (d.reason === "project_removed") es.close();          // no reconnect to a project that is no longer in the list
+      });
       es.addEventListener("error", () => {
         if (!es) return;
-        if (es.readyState === EventSource.CLOSED) { dispatch({ type: "conn", conn: "error" }); return; }     // a refusal (e.g. 429): no automatic retry
+        if (es.readyState === EventSource.CLOSED) {
+          if (timer) { clearTimeout(timer); timer = null; }        // final: no "reconnecting" 6 s later over the error
+          dispatch({ type: "conn", conn: "error" });
+          return;
+        }     // a refusal (e.g. 429): no automatic retry
         if (!timer) timer = setTimeout(() => dispatch({ type: "conn", conn: "reconnecting" }), ROLLOVER_GRACE_MS);   // a normal rollover reopens within 2 s
       });
     })();
     return () => { cancelled = true; ctl.abort(); if (timer) clearTimeout(timer); es?.close(); };
-  }, [projectId]);
+  }, [projectId, attempt]);
 
   // screen-reader announcement: only an agent starting or finishing
   useEffect(() => {
@@ -97,6 +107,10 @@ export function ExplorerPanel({ projectId, title, onClose, onOpenChanges }: { pr
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="explorer-status" data-conn={state.conn}>
             <span className={`h-2 w-2 shrink-0 rounded-full ${toneCls} ${st.tone === "ok" ? "motion-safe:animate-pulse" : ""}`} aria-hidden />
             <span>{st.text}</span>
+            {state.conn === "error" && (
+              <button type="button" className="ml-1 underline" onClick={() => { dispatch({ type: "conn", conn: "connecting" }); setAttempt((n) => n + 1); }}
+                data-testid="explorer-retry">Try again</button>
+            )}
           </div>
         </div>
         <Button variant="ghost" size="sm" onClick={onOpenChanges} data-testid="explorer-open-changes" title="Open the Changes view"><FileDiff className="mr-1 h-4 w-4" aria-hidden /> Changes</Button>
@@ -119,11 +133,11 @@ export function ExplorerPanel({ projectId, title, onClose, onOpenChanges }: { pr
                   <span className="truncate text-sm font-medium">{a.title || "A chat"}</span>
                   <span className="shrink-0 text-xs text-muted-foreground" data-testid="agent-elapsed">Working for {elapsed(a.since, now)}</span>
                 </div>
-                <div className="text-xs text-muted-foreground" data-testid="agent-tool">{a.tool ? `Now: ${a.tool}${a.detail ? ` ${a.detail}` : ""}` : "Thinking"} · {a.tools} {a.tools === 1 ? "tool call" : "tool calls"}</div>
+                <div className="min-w-0 break-words text-xs text-muted-foreground" data-testid="agent-tool">{a.tool ? `Now: ${a.tool}${a.detail ? ` ${a.detail}` : ""}` : "Thinking"} · {a.tools} {a.tools === 1 ? "tool call" : "tool calls"}</div>
               </li>
             ))}
             {idle.map((a) => (
-              <li key={a.session_id} className="rounded-lg border border-dashed p-2 text-xs text-muted-foreground" data-testid="explorer-agent" data-state="idle">
+              <li key={a.session_id} className="break-words rounded-lg border border-dashed p-2 text-xs text-muted-foreground" data-testid="explorer-agent" data-state="idle">
                 {a.title || "A chat"}: {a.ok === false ? "stopped" : "finished"} {a.finished ? ago(a.finished, now) : ""}
               </li>
             ))}

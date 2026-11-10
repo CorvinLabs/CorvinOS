@@ -572,10 +572,59 @@ def _project_manifest(root: Path) -> dict[str, Any]:
     try:
         import yaml  # noqa: PLC0415
 
-        data = yaml.safe_load((root / "project.yaml").read_text(encoding="utf-8")) or {}
+        from core.projects.fsutil import read_text_any  # noqa: PLC0415 - UTF-8 with/without BOM, UTF-16 with BOM (Windows editors)
+
+        data = yaml.safe_load(read_text_any(root / "project.yaml", limit=64 * 1024)) or {}
     except Exception:  # noqa: BLE001 -- unreadable manifest: not a project this tick
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def project_sources_contained(docs: Path) -> bool:
+    """Public name of the containment check: every engine run on a PROJECT's docs/ must pass it first."""
+    return _project_sources_contained(docs)
+
+
+def _project_sources_contained(docs: Path) -> bool:
+    """A project's ``docs/kb/_meta/sources.yaml`` is a file the assistant or an adopted folder controls. The engine reads every source
+    root it names, so each must be a relative folder INSIDE ``docs/`` (no ``..`` out, no absolute path, no git ``ref``, no link on the
+    way, every listed dir inside it); otherwise the board would show whatever folder - another tenant's knowledge base - it names
+    (adversarial review 2026-11-10). Unreadable or unexpected -> not contained."""
+    try:
+        import yaml  # noqa: PLC0415
+        from core.projects.fsutil import is_link, passes_link, read_text_any  # noqa: PLC0415
+
+        cfg = yaml.safe_load(read_text_any(docs / "kb" / "_meta" / "sources.yaml", limit=64 * 1024)) or {}
+        sources = cfg.get("sources") if isinstance(cfg, dict) else None
+        if not isinstance(sources, list) or not sources:
+            return False
+        if cfg.get("frozen"):
+            return False                  # frozen snapshots run git on the folders they name (filters, worktrees) and stat network paths
+        base = Path(os.path.abspath(docs))
+        real = docs.resolve(strict=True)
+        # the folders the engine WRITES into or reads as a whole must be the project's own: a junction at kb/graph would let
+        # `kb index` overwrite another tenant's graph files (review round 6)
+        for sub in ("kb", "kb/_meta", "kb/graph"):
+            sp = base / sub
+            if sp.exists() or is_link(sp):
+                if passes_link(base, sp) or not sp.resolve().is_relative_to(real):
+                    return False
+        for s in sources:
+            if not isinstance(s, dict) or s.get("ref") or not isinstance(s.get("root", "."), str):
+                return False
+            rel = Path(str(s.get("root", ".")))
+            if rel.is_absolute() or rel.drive or rel.root or ".." in rel.parts or ":" in str(rel):
+                return False
+            src = Path(os.path.abspath(base / rel))
+            if src != base and (passes_link(base, src) or not src.resolve().is_relative_to(real)):
+                return False
+            for d in (s.get("dirs") or {}):
+                dp = Path(str(d))
+                if dp.is_absolute() or dp.drive or ".." in dp.parts or passes_link(base, src / dp):
+                    return False
+        return True
+    except Exception:  # noqa: BLE001 - fail closed: a sources.yaml the check cannot judge keeps the project off the board
+        return False
 
 
 def project_kbs(tenant_id: str) -> list[tuple[str, Path]]:
@@ -584,7 +633,7 @@ def project_kbs(tenant_id: str) -> list[tuple[str, Path]]:
     skipped (logged at debug), never guessed: a path resolving into ANOTHER tenant's home, a
     manifest of another tenant, a duplicate id."""
     try:
-        reg = json.loads(project_registry_path(tenant_id).read_text(encoding="utf-8"))
+        reg = json.loads(project_registry_path(tenant_id).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return []
     entries = reg.get("projects") if isinstance(reg, dict) else None
@@ -614,7 +663,29 @@ def project_kbs(tenant_id: str) -> list[tuple[str, Path]]:
         if man.get("tenant") != tenant_id or feats.get("kb") is not True:
             continue
         docs = root / "docs"
+        from core.projects.fsutil import passes_link  # noqa: PLC0415
+        # docs/ (or anything below it on the way to kb/) must be the project's own folder: a junction there could hand this
+        # tenant another tenant's knowledge base, its board and its graph (adversarial review 2026-11-10)
+        if passes_link(root, docs / "kb" / "_meta" / "sources.yaml"):
+            log.debug("project %s of %s has a link in docs/: skipped", pid, tenant_id)
+            continue
+        try:
+            real_docs = docs.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if not real_docs.is_relative_to(root) or (real_docs.is_relative_to(tenants_root) and not real_docs.is_relative_to(own)):
+            continue
         if not (docs / "kb" / "_meta" / "sources.yaml").is_file():
+            continue
+        if not _project_sources_contained(docs):
+            log.debug("project %s of %s: sources.yaml names a folder outside its docs/: skipped", pid, tenant_id)
+            continue
+        try:
+            from core.projects import changes as _ch  # noqa: PLC0415
+            _ch.require_own_repo(docs)
+            _ch.require_own_repo(root)
+        except Exception:  # noqa: BLE001 - a repository the console does not read (junction, gitdir file, shared objects): not projected
+            log.debug("project %s of %s: its git repository is not one the console reads: skipped", pid, tenant_id)
             continue
         seen.add(pid)
         out.append((pid, docs))

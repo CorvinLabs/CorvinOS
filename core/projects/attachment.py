@@ -17,11 +17,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import manifest, registry
-from .fsutil import atomic_write, file_lock
+from .fsutil import atomic_write, file_lock, is_link, passes_link, read_text_any
 
 SID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_ENTRIES = 500
-_MAX_FILE = 64 * 1024
+_MAX_FILE = 256 * 1024
 RULES_ENV = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"
 
 
@@ -32,7 +32,7 @@ def _path(tenant_id: str) -> Path:
 def _load(tenant_id: str) -> dict[str, Any]:
     """sid -> {"project_id", "path"} (the folder the attachment was made for). A legacy entry is a bare project id."""
     try:
-        data = json.loads(_path(tenant_id=tenant_id).read_text(encoding="utf-8"))
+        data = json.loads(read_text_any(_path(tenant_id=tenant_id)))
     except (OSError, ValueError):
         return {}
     chats = data.get("chats") if isinstance(data, dict) else None
@@ -111,8 +111,151 @@ def detach(tenant_id: str, sid: str) -> bool:
     return True
 
 
-def _regular(p: Path) -> bool:
-    return p.is_file() and not p.is_symlink() and p.stat().st_size <= _MAX_FILE
+#: the rules files Claude Code loads from an additional directory (CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1)
+RULES_FILES = ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md")
+RULES_DIR = ".claude/rules"
+#: also loaded from an additional directory: skills (their SKILL.md and files), subagents and commands - their text reaches the engine
+#: as well, so it goes through the same data-flow check and the same link refusal (adversarial review round 4)
+CONTEXT_DIRS = (".claude/rules", ".claude/skills", ".claude/agents", ".claude/commands")
+
+
+def deny_base(abs_root: str) -> Optional[str]:
+    """The folder as the CLI's permission rules spell an ABSOLUTE path: ``//<path>`` with ``<path>`` POSIX-style. On Windows that is
+    the drive letter in lower case without its colon (``Edit(//c/Users/me/proj/**)``): ``/C:/Users/...`` is read as a path relative to
+    the working folder and matches nothing - every deny rule was silently void (adversarial review round 4, checked against the CLI).
+    A network (UNC) folder has no such form: None, and the caller withholds the attachment."""
+    pp = Path(abs_root)
+    if os.name == "nt":
+        if len(pp.drive) != 2 or pp.drive[1] != ":":
+            return None
+        rest = "/".join(pp.parts[1:])
+        base = f"/{pp.drive[0].lower()}/{rest}".rstrip("/")
+    else:
+        base = pp.as_posix()
+    # the rule is a gitignore-style pattern: [ ] * ? in a folder name (legal: "Report [final]") would turn the path into a pattern that
+    # no longer matches the folder, and the read-only rule would be void - so such a folder is never attached read-only
+    if any(ch in base for ch in "[]*?"):
+        return None
+    return base
+
+
+def project_rules_text(root: Path) -> Optional[str]:
+    """All rules text the assistant's CLI will read from the project, for the data-flow (L34) check. None = a rules file exists that
+    the check cannot read (too large, a link, unreadable): the caller withholds the attachment - an unchecked file never goes to the
+    engine (fail closed, adversarial review round 3). "" = no rules file."""
+    parts: list[str] = []
+    used: list[Path] = []
+    cands = [root / r for r in RULES_FILES]
+    seen = 0
+    for sub in CONTEXT_DIRS:
+        rd = root / sub
+        if is_link(rd) or rd.exists():
+            if passes_link(root, rd) or not rd.is_dir():
+                return None
+            # a bounded walk that NEVER descends into a link: pathlib's rglob follows directory junctions, and two junctions pointing back
+            # up make that tree infinite (adversarial review round 8)
+            stack = [str(rd)]
+            texts = 0
+            while stack:
+                d = stack.pop()
+                try:
+                    with os.scandir(d) as it:
+                        for e in it:
+                            seen += 1
+                            if seen > 20000:
+                                return None           # an enormous tree: withheld
+                            if e.is_symlink() or e.is_junction():
+                                return None           # a link inside: withheld (the CLI might follow it)
+                            if e.is_dir(follow_symlinks=False):
+                                stack.append(e.path)
+                            elif e.name.lower().endswith((".md", ".markdown")):
+                                # the CLI auto-loads the markdown of skills, agents, commands and rules; scripts, lock files and assets
+                                # next to them are not context and must not make a project unattachable
+                                texts += 1
+                                if texts > 300:
+                                    return None
+                                cands.append(Path(e.path))
+                except OSError:
+                    return None
+    cands.sort()
+    for p in cands:
+        if not (is_link(p) or p.exists()):
+            continue
+        if not _regular(p, root):
+            return None
+        try:
+            body = _gate_text(p)
+            if body is None:
+                return None
+            parts.append(body)
+            used.append(p)
+        except OSError:
+            return None
+    imported = _imports_text(root, [(c, t) for c, t in zip(used, parts)])
+    if imported is None:
+        return None
+    return "\n\n".join(parts + imported)
+
+
+_IMPORT = re.compile(r"(?:^|(?<=\s))@(\S+)")
+
+
+def _imports_text(root: Path, seeds: "list[tuple[Path, str]]") -> Optional[list[str]]:
+    """The CLI expands ``@path`` imports in the rules files it loads. Their text goes to the engine as well, so it is part of what
+    the data-flow check reads; an import it must not or cannot follow withholds the attachment (None): an absolute, home, drive,
+    network or ``..`` path (judged lexically - nothing is stat-ed first), a link, a file too large, or too many / too deep imports."""
+    out: list[str] = []
+    queue = [(p, t, 1) for p, t in seeds]
+    seen = 0
+    while queue:
+        path, text, depth = queue.pop()
+        for m in _IMPORT.finditer(text):
+            tok = m.group(1).rstrip(".,;:)]}>\"'")
+            if not tok or tok.startswith(("@", "#")):
+                continue
+            if tok.startswith(("~", "/", "\\")) or re.match(r"^[A-Za-z]:", tok) or ".." in tok.replace("\\", "/").split("/"):
+                return None
+            if ":" in tok:
+                # "@12:30", "@https://x": not a file - unless the part before the colon IS one (an alternate data stream of it)
+                if (path.parent / tok.split(":", 1)[0]).exists():
+                    return None
+                continue
+            cand = path.parent / tok
+            if is_link(cand):
+                return None                                # judged before anything stats it: a link to //host/share would be opened
+            if not cand.exists():
+                continue                                   # the CLI ignores an import that does not exist (an @mention)
+            if cand.is_dir():
+                continue                                   # "@docs": a folder is not an import
+            if depth >= 5 or seen >= 50 or not _regular(cand, root):
+                return None
+            seen += 1
+            try:
+                body = _gate_text(cand)
+            except OSError:
+                return None
+            if body is None:
+                return None
+            out.append(body)
+            queue.append((cand, body, depth + 1))
+    return out
+
+
+def _gate_text(p: Path) -> Optional[str]:
+    """The text of a rules/import file as the data-flow classifier must see it. UTF-16 with a byte order mark is decoded (read as UTF-8
+    it is text with NULs between the characters, which no detector recognises, while the engine still reads it); NULs without a
+    byte order mark (UTF-16 without BOM, binary) cannot be judged: None, and the caller withholds the attachment."""
+    data = p.read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace")
+    if b"\x00" in data:
+        return None
+    return data.decode("utf-8-sig", errors="replace")
+
+
+def _regular(p: Path, root: Path) -> bool:
+    """A regular file below ``root`` that is not reached through a link (symlink or junction) on the way."""
+    return not passes_link(root, p) and p.is_file() and p.stat().st_size <= _MAX_FILE
 
 
 def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None) -> Optional[dict[str, Any]]:
@@ -134,7 +277,7 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
     if not att.get("path") or os.path.abspath(att["path"]) != os.path.abspath(root):
         return None                                   # a legacy entry, or another folder that once had this id: attach again (R2)
     try:
-        if not root.is_dir() or root.is_symlink():
+        if not root.is_dir() or is_link(root):
             return None
         man = builtin.manifest(tenant_id) if builtin.is_builtin(pid) else manifest.load(root)
         if man.get("tenant") != tenant_id or man.get("id") != pid:
@@ -149,17 +292,21 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
                     return None
             except Exception:  # noqa: BLE001 - fail closed
                 return None
-        rules = root / "CLAUDE.md"
-        if _regular(rules) and l34_allows is not None:
+        rules_text = project_rules_text(root)
+        if rules_text is None:
+            return None                                   # a rules file the gate cannot read (too large, a link): withheld
+        if rules_text and l34_allows is not None:
             try:
-                if not l34_allows(rules.read_text(encoding="utf-8", errors="replace")):
+                if not l34_allows(rules_text):
                     return None
             except Exception:  # noqa: BLE001 - fail closed
                 return None
     except (OSError, manifest.ManifestError):
         return None
     abs_root = os.path.abspath(root)
-    base = Path(abs_root).as_posix()
+    base = deny_base(abs_root)
+    if base is None:
+        return None                                   # the read-only rules cannot be written for this folder: never attach without them
     # always: the project's own control files (its grants live there too) - even with write access (release review R5)
     control = [f"{tool}(/{base}/{rel})" for tool in ("Write", "Edit", "NotebookEdit")
                for rel in ("project.yaml", ".mcp.json", ".corvin/**", ".git/**", ".gitattributes")]
@@ -167,7 +314,7 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
     mcp = root / ".corvin" / "local" / "mcp.json"      # the ENGINE's copy only - an adopted repo's own .mcp.json never runs (review R6)
     want = registry.mcp_sha(tenant_id=tenant_id, project_id=pid)   # set only while an MCP feature is on and the engine wrote the file
     mcp_ok = False
-    if want and _regular(mcp):
+    if want and _regular(mcp, root):
         import hashlib  # noqa: PLC0415
         mcp_ok = hashlib.sha256(mcp.read_bytes()).hexdigest() == want
     return {

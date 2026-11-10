@@ -126,7 +126,9 @@ function applyEvent(s: State, e: ActivityEvent): State {
 
 export function reduce(s: State, m: Msg): State {
   switch (m.type) {
-    case "conn": return { ...s, conn: m.conn };
+    // "gone" (the project was removed from the list) is final: the reconnect that follows ends in a 404/CLOSED and must not
+    // turn the status into a generic connection error
+    case "conn": return s.conn === "gone" ? s : { ...s, conn: m.conn };
     case "end": return m.reason === "project_removed" ? { ...s, conn: "gone" } : s;
     case "activity": return applyEvent({ ...s, conn: "live" }, m.data);
     case "snapshot": {
@@ -159,7 +161,7 @@ export function elapsed(sinceUnix: number, nowMs: number = Date.now()): string {
 /** The status line: words first, never colour alone. */
 export function statusLine(s: State): { text: string; tone: "ok" | "wait" | "bad" } {
   if (s.conn === "gone") return { text: "This project was removed from the list", tone: "bad" };
-  if (s.conn === "error") return { text: "Could not connect (too many open explorers, or the project is gone)", tone: "bad" };
+  if (s.conn === "error") return { text: "Could not connect (the console did not answer, or too many explorers are open)", tone: "bad" };
   if (s.conn === "reconnecting") return { text: "Reconnecting...", tone: "wait" };
   if (s.conn === "connecting") return { text: "Connecting...", tone: "wait" };
   if (s.watcher === "paused") return { text: "Live - file watching paused, the console is busy", tone: "wait" };

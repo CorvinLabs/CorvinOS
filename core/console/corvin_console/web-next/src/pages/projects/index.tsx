@@ -3,7 +3,7 @@
  *
  * Data: GET /v1/console/projects and /projects/templates (routes/projects.py). The list is the
  * registry's index; a project whose folder is gone is SHOWN as missing, never dropped. Nothing here is
- * sample data: no project, no card. Creating, inspecting and opening arrive as their own views.
+ * sample data: no project, no card. A card's title opens the project's inspector (/app/projects/:id).
  */
 import { Link } from "react-router-dom";
 import { useState } from "react";
@@ -30,11 +30,13 @@ function ProjectCard({ p }: { p: ProjectSummary }) {
   const chips = featureChips(p);
   const off = offFeatures(p);
   return (
-    <Card data-testid="project-card" data-project-id={p.id} data-state={p.state}>
+    <Card className="min-w-0" data-testid="project-card" data-project-id={p.id} data-state={p.state}>
       <CardContent className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="flex items-center gap-2 truncate text-base font-semibold" data-testid="project-title">{p.title ?? p.id}
+            <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold" data-testid="project-title">
+              <Link to={`/app/projects/${encodeURIComponent(p.id)}`} className="min-w-0 truncate hover:underline" title={p.title ?? p.id}
+                data-testid="project-open">{p.title ?? p.id}</Link>
               {p.builtin && <Badge variant="secondary" data-testid="project-builtin">Built in</Badge>}
             </h2>
             <p className="font-mono text-xs text-muted-foreground" data-testid="project-id">{p.id}</p>
@@ -71,7 +73,7 @@ function ProjectCard({ p }: { p: ProjectSummary }) {
         {off.length > 0 && (
           <p className="text-xs text-muted-foreground" data-testid="project-off">Off: {off.join(", ")}</p>
         )}
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <dt>Template</dt><dd>{templateLabel(p.template)}</dd>
           {p.docs_mode && (<><dt>Docs</dt><dd>{p.docs_mode === "nested" ? "own repository" : "inside the project repository"}</dd></>)}
           <dt>Folder</dt><dd className="truncate font-mono" title={p.path} data-testid="project-path">{p.path}</dd>
@@ -103,7 +105,7 @@ export default function ProjectsPage() {
           </h1>
           {projects.data && (
             <p className="text-sm text-muted-foreground" data-testid="projects-root">
-              Projects live under <span className="font-mono">{projects.data.projects_root}</span>
+              Projects live under <span className="break-all font-mono">{projects.data.projects_root}</span>
               <RootEditor current={projects.data.projects_root} />
             </p>
           )}
@@ -161,7 +163,7 @@ export default function ProjectsPage() {
       )}
 
       {list.length > 0 && (
-        <section className="grid gap-4 md:grid-cols-2" aria-label="Projects" data-testid="projects-list">
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2" aria-label="Projects" data-testid="projects-list">
           {list.map((p) => <ProjectCard key={p.id} p={p} />)}
         </section>
       )}

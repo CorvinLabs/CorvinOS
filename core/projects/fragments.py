@@ -39,7 +39,7 @@ from typing import Any, Callable, Optional
 
 import yaml
 
-from .fsutil import atomic_write, ensure_inside
+from .fsutil import atomic_write, ensure_inside, is_link, passes_link, read_bytes_limited, MAX_READ_BYTES
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 FILE_KINDS = ("seed", "generated", "local")
@@ -115,8 +115,8 @@ def _tup(v: Any, what: str) -> tuple:
 
 
 def _load_yaml(p: Path) -> dict[str, Any]:
-    if p.is_symlink() or not p.is_file():
-        raise FragmentError(f"{p.name}: missing or a symlink")
+    if is_link(p) or not p.is_file():
+        raise FragmentError(f"{p.name}: missing or a link")
     if p.stat().st_size > MAX_FILE_BYTES:
         raise FragmentError(f"{p.name}: too large")
     try:
@@ -141,7 +141,7 @@ def load_catalogue(src: Path) -> Catalogue:
     if not fdir.is_dir():
         raise FragmentError("catalogue has no fragments/ directory")
     frags: dict[str, Fragment] = {}
-    for d in sorted(p for p in fdir.iterdir() if p.is_dir() and not p.is_symlink()):
+    for d in sorted(p for p in fdir.iterdir() if p.is_dir() and not is_link(p)):
         raw = _load_yaml(d / "fragment.yaml")
         fid = raw.get("id")
         if not isinstance(fid, str) or not ID_RE.match(fid) or fid != d.name:
@@ -363,38 +363,59 @@ def _walk_sub(obj: Any, ctx: dict[str, str], where: str) -> Any:
     return obj
 
 
-def _read_bytes_regular(p: Path) -> Optional[bytes]:
-    """The bytes of a regular file (never through a symlink), or None."""
+def _read_bytes_regular(p: Path, root: Optional[Path] = None) -> Optional[bytes]:
+    """The bytes of a regular file (never through a link, nor below one when ``root`` is given), or None."""
     try:
-        if p.is_symlink() or not p.is_file():
+        if is_link(p) or (root is not None and passes_link(root, p)) or not p.is_file():
             return None
-        return p.read_bytes()
+        return read_bytes_limited(p)
+    except ValueError:
+        return _OVERSIZE                    # not None (that would read as "absent" and let the engine overwrite it) and never equal to ours
     except OSError:
         return None
 
 
-def _read_text(p: Path) -> Optional[str]:
+_OVERSIZE = b"\x00<too large to read>"
+
+
+class _Unreadable(str):
+    """An existing file this engine cannot read as text (not UTF-8/UTF-16, a link, no access). It is never treated as absent: composing
+    it "fresh" would overwrite the user's own lines (adversarial review 2026-11-10)."""
+
+
+_UNREADABLE = _Unreadable("")
+
+
+def _read_text(p: Path, root: Optional[Path] = None) -> Optional[str]:
+    from .fsutil import read_text_any  # noqa: PLC0415
+    if not (is_link(p) or p.exists()):
+        return None
+    if is_link(p) or (root is not None and passes_link(root, p)):
+        return _UNREADABLE
     try:
-        return p.read_text(encoding="utf-8")
+        return read_text_any(p, limit=MAX_READ_BYTES)
     except FileNotFoundError:
         return None
-    except (OSError, UnicodeDecodeError):
-        return None
+    except (OSError, ValueError):
+        return _UNREADABLE
 
 
 def _status_of(root: Path, rel: str, new: bytes, kind: str) -> tuple[str, str]:
     p = root / rel
-    if p.is_symlink():
-        return "skip", "target is a symlink"
+    if passes_link(root, p):
+        return "skip", "target is, or lies below, a link (symlink or junction)"
     if not p.exists():
         return "new", ""
     if kind == "seed":
         return "skip", "exists (seed files are never overwritten)"
     try:
-        old = p.read_bytes()
+        old = read_bytes_limited(p)
+    except ValueError:
+        return "skip", "too large to read (more than 1 MB); left as it is"
     except OSError:
         return "skip", "unreadable"
-    if old == new:
+    if old == new or (kind != "seed" and old.replace(b"\r\n", b"\n") == new.replace(b"\r\n", b"\n")):
+        # git for Windows (core.autocrlf=true) checks text out with CRLF: the same content is not drift
         return "unchanged", ""
     try:
         d = "".join(difflib.unified_diff(old.decode("utf-8").splitlines(True), new.decode("utf-8").splitlines(True),
@@ -406,11 +427,17 @@ def _status_of(root: Path, rel: str, new: bytes, kind: str) -> tuple[str, str]:
 
 def _user_block(existing: Optional[str]) -> str:
     """The text between the user markers of an existing file, or the default empty block."""
-    if existing and USER_BEGIN in existing and USER_END in existing:
-        a = existing.index(USER_BEGIN) + len(USER_BEGIN)
-        b = existing.index(USER_END, a)
-        return existing[a:b]
+    span = _marker_span(existing, USER_BEGIN, USER_END) if existing else None
+    if span is not None:                             # whole-line markers; one mentioned inside a sentence is text, not a block
+        a, b = span
+        return existing[a + len(USER_BEGIN):b - len(USER_END)]
     return "\n\n"
+
+
+def _orphan_user_block(existing: Optional[str]) -> bool:
+    """True when the user block's begin marker is there but its end marker is not: the user's own rules cannot be told apart from the
+    rest, so a repair must not rebuild the file (it would drop them)."""
+    return bool(existing and USER_BEGIN in existing and _marker_span(existing, USER_BEGIN, USER_END) is None)
 
 
 def _compose_claude(cat: Catalogue, active: list[str], ctx: dict[str, str], root: Path,
@@ -427,6 +454,19 @@ def _compose_claude(cat: Catalogue, active: list[str], ctx: dict[str, str], root
     return ("\n".join(parts)).encode("utf-8"), ""
 
 
+def _marker_span(text: str, begin: str, end: str) -> Optional[tuple[int, int]]:
+    """(start of the begin line, end of the end marker) of the managed block: markers are WHOLE LINES, and the block is the LAST begin
+    marker before the first end marker that follows it - an orphan begin marker earlier in the file stays user text (adversarial review
+    round 9: it used to swallow every user line up to the real end marker)."""
+    ends = [m for m in re.finditer(r"(?m)^" + re.escape(end) + r"[ \t]*\r?$", text)]
+    begins = [m for m in re.finditer(r"(?m)^" + re.escape(begin) + r"[ \t]*\r?$", text)]
+    for e in ends:
+        prior = [b for b in begins if b.end() <= e.start()]
+        if prior:
+            return prior[-1].start(), e.start() + len(end)
+    return None
+
+
 def _compose_gitignore(cat: Catalogue, active: list[str], existing: Optional[str], extra: list[str]) -> bytes:
     lines: list[str] = []
     for fid in active:
@@ -437,10 +477,10 @@ def _compose_gitignore(cat: Catalogue, active: list[str], existing: Optional[str
         if g not in lines:
             lines.append(g)
     block = "\n".join([GI_BEGIN, *lines, GI_END]) + "\n"
-    if existing and GI_BEGIN in existing and GI_END in existing:
-        a = existing.index(GI_BEGIN)
-        b = existing.index(GI_END, a) + len(GI_END)
-        tail = existing[b:].lstrip("\n")
+    span = _marker_span(existing, GI_BEGIN, GI_END) if existing else None
+    if span is not None:
+        a, b = span
+        tail = existing[b:].lstrip("\r\n")
         head = existing[:a]
         return (head + block + (tail and "\n" + tail if tail else "")).encode("utf-8")
     return ((existing.rstrip("\n") + "\n\n" if existing else "") + block).encode("utf-8")
@@ -467,12 +507,12 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
     for fid in pulled_all:
         for a in cat.fragments[fid].actions:
             if a == "git_init":
-                has_git = (root / ".git").exists()
+                has_git = is_link(root / ".git") or (root / ".git").exists()
                 plan.ops.append(Op(kind="action", status="skip" if has_git else "new", action=a, owner=fid,
                                    args={"docs_mode": docs_mode}, reason="already a repository" if has_git else ""))
     if kb_on:
         # BEFORE any file: the scaffold step refuses a docs/ that already holds something it did not create
-        scaffolded = (root / "docs" / "kb" / "_meta" / "tenant_kb.json").is_file()
+        scaffolded = not passes_link(root, root / "docs" / "kb" / "_meta" / "tenant_kb.json") and (root / "docs" / "kb" / "_meta" / "tenant_kb.json").is_file()
         plan.ops.append(Op(kind="action", status="skip" if scaffolded else "new", action="kb_scaffold", owner="kb",
                            args={"docs_mode": docs_mode}, reason="already scaffolded" if scaffolded else ""))
     for fid in pulled_all:
@@ -480,7 +520,7 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
         where = f"fragment {fid}"
         for spec in f.files:
             data = (f.root / spec["src"])
-            if data.is_symlink() or not data.is_file() or data.stat().st_size > MAX_FILE_BYTES:
+            if is_link(data) or not data.is_file() or data.stat().st_size > MAX_FILE_BYTES:
                 raise FragmentError(f"{where}: {spec['src']} is missing, a symlink or too large")
             content = substitute(data.read_text(encoding="utf-8"), ctx, f"{fid}/{spec['src']}").encode("utf-8")
             status, extra = _status_of(root, spec["dst"], content, spec["kind"])
@@ -490,8 +530,16 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
 
     # composed files: CLAUDE.md, .gitignore, MCP block
     if "claude" in pulled_all and any(cat.fragments[f].claude for f in pulled_all):
-        existing = _read_text(root / CLAUDE_MD)
-        if existing is not None and GEN_MARK not in existing:
+        existing = _read_text(root / CLAUDE_MD, root)
+        if existing is _UNREADABLE:
+            plan.ops.append(Op(kind="write", status="skip", path=CLAUDE_MD, file_kind="generated", owner="engine",
+                               reason="CLAUDE.md exists but is not readable as UTF-8/UTF-16 text (or is a link); it is never overwritten"))
+            plan.warnings.append("CLAUDE.md is not UTF-8 text: left untouched - save it as UTF-8 and repair again")
+        elif _orphan_user_block(existing):
+            plan.ops.append(Op(kind="write", status="skip", path=CLAUDE_MD, file_kind="generated", owner="engine",
+                               reason="CLAUDE.md has a begin marker for your own rules but no end marker; it is not rewritten"))
+            plan.warnings.append("CLAUDE.md: the end marker of your own rules block is missing; left untouched - restore it and repair again")
+        elif existing is not None and GEN_MARK not in existing:
             plan.ops.append(Op(kind="write", status="skip", path=CLAUDE_MD, file_kind="generated", owner="engine",
                                reason="an existing CLAUDE.md that this engine did not generate is never overwritten"))
             plan.warnings.append("CLAUDE.md exists and is not generated: left untouched")
@@ -500,11 +548,16 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
             st, df = _status_of(root, CLAUDE_MD, body or b"", "generated")
             plan.ops.append(Op(kind="write", status=st, path=CLAUDE_MD, file_kind="generated", owner="engine",
                                content=body or b"", diff=df if st == "changed" else ""))
-    gi_existing = _read_text(root / ".gitignore")
-    gi_body = _compose_gitignore(cat, pulled_all, gi_existing, local_extra + [f"{LOCAL_DIR}/", ".mcp.json"])
-    st, df = _status_of(root, ".gitignore", gi_body, "generated")
-    plan.ops.append(Op(kind="write", status=st, path=".gitignore", file_kind="generated", owner="engine",
-                       content=gi_body, diff=df if st == "changed" else ""))
+    gi_existing = _read_text(root / ".gitignore", root)
+    if gi_existing is _UNREADABLE:
+        plan.ops.append(Op(kind="write", status="skip", path=".gitignore", file_kind="generated", owner="engine",
+                           reason=".gitignore exists but is not readable as UTF-8/UTF-16 text (or is a link); it is never overwritten"))
+        plan.warnings.append(".gitignore is not UTF-8 text: left untouched - save it as UTF-8 and repair again")
+    else:
+        gi_body = _compose_gitignore(cat, pulled_all, gi_existing, local_extra + [f"{LOCAL_DIR}/", ".mcp.json"])
+        st, df = _status_of(root, ".gitignore", gi_body, "generated")
+        plan.ops.append(Op(kind="write", status=st, path=".gitignore", file_kind="generated", owner="engine",
+                           content=gi_body, diff=df if st == "changed" else ""))
     servers: dict[str, Any] = {}
     for fid in pulled_all:
         for name, spec in cat.fragments[fid].mcp.items():
@@ -512,8 +565,8 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
     # The MCP block (release review R1/R6): the engine owns `.corvin/local/mcp.json`; the root `.mcp.json` (for the user's own terminal)
     # is engine-owned only while it is byte-identical to that copy - a foreign one (an adopted repo's) is never overwritten, never deleted.
     local_rel = f"{LOCAL_DIR}/mcp.json"
-    engine_copy = _read_bytes_regular(root / local_rel)
-    root_copy = _read_bytes_regular(root / ".mcp.json")
+    engine_copy = _read_bytes_regular(root / local_rel, root)
+    root_copy = _read_bytes_regular(root / ".mcp.json", root)
     root_is_ours = root_copy is None or (engine_copy is not None and root_copy == engine_copy)
     if servers:
         mcp = (json.dumps({"mcpServers": servers}, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -537,7 +590,8 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
     # host actions, in a fixed order after the files
     if kb_on:
         kbspec = next((cat.fragments[f].kb for f in pulled_all if cat.fragments[f].kb), {})
-        seeded = (root / "docs" / "kb" / "initiatives").is_dir() and any((root / "docs" / "kb" / "initiatives").glob("*.md"))
+        _ini = root / "docs" / "kb" / "initiatives"
+        seeded = not passes_link(root, _ini) and _ini.is_dir() and any(_ini.glob("*.md"))
         tasks = [t for fid in pulled_all for t in cat.fragments[fid].seed_tasks]
         plan.ops.append(Op(kind="action", status="skip" if seeded else "new", action="kb_seed", owner="kb",
                            args={"initiative": substitute(str(kbspec.get("initiative", "{{project.title}}")), ctx, "kb.initiative"),
@@ -556,13 +610,18 @@ def build_plan(cat: Catalogue, root: Path, selected: Any, ctx: dict[str, str], *
     return plan
 
 
+def _sh_quote(s: str) -> str:
+    """One POSIX shell word: a folder name like ``x$(cmd)`` (legal on Windows) stays text."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
 def _kb_commands(ctx: dict[str, str]) -> bytes:
     eng, docs = ctx.get("paths.kb_engine", ""), ctx.get("paths.docs", "")
     return (f"# Knowledge-base commands (machine-local, generated - do not commit)\n\n"
             f"The path gate runs `kb.py` only from the pinned engine; this project's KB is `docs/`, selected with `--repo`.\n\n"
-            f"```bash\nKB=\"python3 {eng} --repo {docs}\"\n"
-            f"$KB find <words>\n$KB new idea --title \"...\"\n$KB new task --title \"...\" --epic E-001 --dod \"...\"\n"
-            f"$KB task T-0001 in_progress|blocked|done|cancelled [--reason ...] [--dod ...]\n$KB check\n```\n").encode("utf-8")
+            f"```bash\nkb() {{ python3 {_sh_quote(eng)} --repo {_sh_quote(docs)} \"$@\"; }}\n"
+            f"kb find <words>\nkb new idea --title \"...\"\nkb new task --title \"...\" --epic E-001 --dod \"...\"\n"
+            f"kb task T-0001 in_progress|blocked|done|cancelled [--reason ...] [--dod ...]\nkb check\n```\n").encode("utf-8")
 
 
 # ---------------------------------------------------------------------------------------------

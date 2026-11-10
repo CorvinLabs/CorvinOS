@@ -20,6 +20,8 @@ describe("feature rows", () => {
     const s = rowState(row({ id: "video_producer", active: false, plugins: [{ plugin: "video_producer", state: "absent" }] }));
     expect(s.canToggle).toBe(false);
     expect(s.blockedBy).toMatch(/video producer plugin, which is not enabled/);
+    const on = rowState(row({ id: "video_producer", active: true, plugins: [{ plugin: "video_producer", state: "absent" }] }));
+    expect(on).toMatchObject({ canToggle: true, action: "off", blockedBy: null });
   });
 });
 

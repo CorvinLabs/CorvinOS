@@ -45,7 +45,9 @@ export interface RowState {
 
 export function rowState(f: FeatureRow): RowState {
   const missingPlugins = f.plugins.filter((p) => p.state !== "enabled");
-  const blockedBy = missingPlugins.length
+  // a missing plugin blocks switching a feature ON; switching an active one OFF is always allowed (the server checks plugins
+  // only for features being added), so a plugin disabled later never traps a feature in the project
+  const blockedBy = missingPlugins.length && !f.active
     ? `needs the ${missingPlugins.map((p) => p.plugin.replace(/_/g, " ")).join(", ")} plugin, which is not enabled for this tenant`
     : null;
   return {

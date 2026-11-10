@@ -76,7 +76,8 @@ export function ago(unixSeconds: number, nowMs: number = Date.now()): string {
 }
 
 /** What the panel says when there is nothing to list - the reason decides, never a bare blank. */
-export function emptyMessage(hasRepository: boolean, viewingCommit: boolean): string {
+export function emptyMessage(hasRepository: boolean, viewingCommit: boolean, note?: string | null): string {
+  if (!hasRepository && note) return `Changes cannot be listed: ${note}.`;
   if (!hasRepository) return "This folder is not a git repository, so changes cannot be listed. Corvin can still read and write files here.";
   if (viewingCommit) return "This commit changed no files.";
   return "No changes yet. Files Corvin creates or edits in this project appear here.";

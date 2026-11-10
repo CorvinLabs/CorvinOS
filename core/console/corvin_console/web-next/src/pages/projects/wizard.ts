@@ -83,20 +83,37 @@ export function planRequest(s: WizardState): PlanRequest {
   };
 }
 
-/** The server's refusal as one sentence; an unknown error never shows a raw status code. */
-export function explain(err: unknown): string {
+/** The server's refusal as one sentence; an unknown error never shows a raw status code.
+ * `context` picks the fallback: the wizard creates a project, every other caller changes one that exists. A failure without an
+ * answer (network, timeout, console restarting) never claims "nothing was written": the request may have been applied. */
+export function explain(err: unknown, context: "wizard" | "action" = "action"): string {
   if (err instanceof ApiError) {
-    // ApiError.detail is the whole response body: { detail: <string | { message, reason_class }> }
+    // ApiError.detail is the whole response body: { detail: <string | { message, reason_class } | [{ msg }, ...]> }
     const body = err.detail as { detail?: unknown } | undefined;
     const inner = body && typeof body === "object" && "detail" in body ? body.detail : body;
+    if (Array.isArray(inner)) {                     // FastAPI validation errors: one line per field
+      const msgs = inner
+        .map((x) => (x && typeof x === "object" && typeof (x as { msg?: unknown }).msg === "string" ? (x as { msg: string }).msg : ""))
+        .filter(Boolean);
+      if (msgs.length) return `The input was refused: ${msgs.join("; ")}.`;
+    }
     const msg = typeof inner === "string" ? inner : (inner as { message?: unknown } | undefined)?.message;
     if (typeof msg === "string" && msg) return msg;
-    if (err.status === 404) return "That template or plan no longer exists. Start again.";
-    if (err.status === 422) return "The location was refused. Choose a folder inside your projects folder.";
-    if (err.status === 409) return "Something changed while you were planning. Review the plan again.";
     if (err.status === 403) return "Your session expired. Sign in again.";
+    if (context === "wizard") {
+      if (err.status === 404) return "That template or plan no longer exists. Start again.";
+      if (err.status === 422) return "The location was refused. Choose a folder inside your projects folder.";
+      if (err.status === 409) return "Something changed while you were planning. Review the plan again.";
+      return "The project could not be created. Nothing was written.";
+    }
+    if (err.status === 404) return "This project is no longer in your list.";
+    if (err.status === 422) return "The server refused the input.";
+    if (err.status === 409) return "The project changed in the meantime. Reload the page and try again.";
+    return "The server refused the change.";
   }
-  return "The project could not be created. Nothing was written.";
+  return context === "wizard"
+    ? "No answer from the console. Reload the page to see whether the project was created."
+    : "No answer from the console. The change may or may not have been applied - reload the page to see the current state.";
 }
 
 /** Human names for the review list. */

@@ -190,7 +190,11 @@ export function repairProject(id: string, dryRun: boolean, csrf: string): Promis
   return api(`/projects/${encodeURIComponent(id)}/repair`, { method: "POST", body: { dry_run: dryRun }, csrf });
 }
 
-export function openProject(id: string, csrf: string): Promise<{ command: string; chat_attachment: boolean; note: string }> {
+/** One `cd` per shell, each quoted so nothing in a folder name is evaluated. `cmd` is null when the name holds `%` or `!` (cmd.exe expands
+ * those even inside quotes). `command` is the one for this machine's usual shell (PowerShell on Windows). */
+export interface OpenCommands { powershell: string; cmd: string | null; posix: string }
+
+export function openProject(id: string, csrf: string): Promise<{ command: string; commands?: OpenCommands; chat_attachment: boolean; note: string }> {
   return api(`/projects/${encodeURIComponent(id)}/open`, { method: "POST", csrf });
 }
 
@@ -220,7 +224,7 @@ export function renameProject(id: string, title: string, csrf: string): Promise<
 }
 
 /** Moves the folder under the projects root and follows it in the list; machine-local files are regenerated. */
-export function moveProject(id: string, location: string, csrf: string): Promise<ProjectDetail & { repaired_files: number | null }> {
+export function moveProject(id: string, location: string, csrf: string): Promise<ProjectDetail & { repaired_files: number | null; warnings?: string[] }> {
   return api(`/projects/${encodeURIComponent(id)}/move`, { method: "POST", body: { location }, csrf });
 }
 
@@ -266,6 +270,8 @@ export interface ChangeList {
   files: ChangedFile[];
   commits: ChangeCommit[];
   has_repository: boolean;
+  /** why a folder that has a .git is not listed (worktree checkout, shared objects, a link, too large); null otherwise */
+  repository_note?: string | null;
   truncated: boolean;
 }
 export interface ChangeFileView {

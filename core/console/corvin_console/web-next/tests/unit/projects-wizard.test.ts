@@ -120,8 +120,11 @@ describe("refusals become sentences", () => {
     expect(explain(new ApiError(404, { detail: "no such plan (it expires after 15 minutes) - plan again" }))).toBe("no such plan (it expires after 15 minutes) - plan again");
   });
   it("falls back to an honest sentence per status, never a raw code", () => {
-    expect(explain(new ApiError(404, undefined))).toMatch(/no longer exists/);
+    expect(explain(new ApiError(404, undefined), "wizard")).toMatch(/no longer exists/);
+    expect(explain(new ApiError(404, undefined))).toMatch(/no longer in your list/);
+    expect(explain(new ApiError(422, { detail: [{ msg: "String should have at most 1000 characters" }] }))).toMatch(/at most 1000/);
     expect(explain(new ApiError(403, undefined))).toMatch(/Sign in again/);
-    expect(explain(new Error("network"))).toMatch(/Nothing was written/);
+    expect(explain(new Error("network"), "wizard")).toMatch(/whether the project was created/);
+    expect(explain(new Error("network"))).toMatch(/may or may not have been applied/);
   });
 });

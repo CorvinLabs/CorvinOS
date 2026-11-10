@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, AlertTriangle, ChevronDown, FileDiff, FolderKanban, FolderOpen, Settings } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
 import { attachProject, detachProject, getActivity, getChanges, getChatAttachment, listProjects, type ProjectSummary } from "@/lib/api/projects";
 import { AccessBadge, ClassBadge } from "./badges";
@@ -47,6 +48,26 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
     wasStreaming.current = streaming;
   }, [streaming, pid, qc]);
 
+  const button = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true;
+      // focus goes INTO the dialog the button announces: the checked project (or the first option)
+      requestAnimationFrame(() => (root.current?.querySelector<HTMLElement>("input[type=radio]:checked") ?? root.current?.querySelector<HTMLElement>("input[type=radio]"))?.focus());
+    } else {
+      setSel(undefined);                                    // an arrowed-to but never committed choice does not survive a close
+      if (wasOpen.current) {
+        wasOpen.current = false;
+        // only when focus would otherwise be lost (on <body>, or still inside the menu that just closed): a click on the composer or a
+        // side panel that took focus keeps it
+        requestAnimationFrame(() => {
+          const a = document.activeElement;
+          if (!a || a === document.body) button.current?.focus();
+        });
+      }
+    }
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => { if (root.current && !root.current.contains(e.target as Node)) setOpen(false); };
@@ -58,14 +79,27 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
 
   const choose = useMutation({
     mutationFn: async (id: string | null) => (id ? attachProject(id, sid, csrf) : detachProject(sid, csrf)),
-    onSuccess: () => { setError(null); setOpen(false); void qc.invalidateQueries({ queryKey: attachKey(sid) }); void qc.invalidateQueries({ queryKey: ["projects", "changes"] }); },
+    onSuccess: () => { setError(null); setSel(undefined); setOpen(false); void qc.invalidateQueries({ queryKey: attachKey(sid) }); void qc.invalidateQueries({ queryKey: ["projects", "changes"] }); },
     onError: (e) => setError(explain(e)),
   });
 
+  // Arrow keys move through a radio group and fire change (and a synthetic click with detail 0) on every step: that only SELECTS here.
+  // A real click attaches at once; from the keyboard, Enter or the "Use" button commits the selection (adversarial review round 4).
+  const [sel, setSel] = useState<string | null | undefined>(undefined);
+  const commit = (id: string | null) => {
+    if (choose.isPending) return;
+    if (id === (pid ?? null)) { setSel(undefined); return; }
+    choose.mutate(id);                                   // `sel` is cleared when it succeeds; on a refusal the button (and focus) stays
+  };
+  const pick = (id: string | null) => ({
+    onChange: () => { if (!choose.isPending) setSel(id); },
+    onClick: (e: { detail: number }) => { if (e.detail > 0) commit(id); },
+    onKeyDown: (e: { key: string; preventDefault: () => void }) => { if (e.key === "Enter") { e.preventDefault(); commit(id); } },
+  });
   const label = current?.title ?? att.data?.title ?? (pid ? pid : "Project");
   return (
     <div ref={root} className="relative" data-testid="project-menu">
-      <button type="button" onClick={() => { setOpen((o) => !o); setError(null); }} aria-haspopup="dialog" aria-expanded={open}
+      <button ref={button} type="button" onClick={() => { setOpen((o) => !o); setError(null); }} aria-haspopup="dialog" aria-expanded={open}
         data-testid="project-menu-button" data-attached={pid ? "yes" : "no"}
         title={pid && current ? `${label} - ${badgeLine(current)}` : "Choose a project for this chat"}
         className="inline-flex max-w-[14rem] items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground">
@@ -88,15 +122,21 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
           )}
           <div role="radiogroup" aria-label="Project" className="space-y-1">
             <label className="flex cursor-pointer items-center gap-2 rounded border p-2 hover:border-primary/40">
-              <input type="radio" name="chat-project" checked={!pid} data-testid="project-option" data-project="" disabled={choose.isPending}
-                onChange={() => pid && choose.mutate(null)} />
+              <input type="radio" name="chat-project" checked={(sel === undefined ? pid ?? null : sel) === null} data-testid="project-option" data-project=""
+                aria-disabled={choose.isPending} {...pick(null)} />
               <span>No project</span>
             </label>
             {list.isLoading && <p className="px-1 text-xs text-muted-foreground">Loading projects…</p>}
+            {(list.error || att.error) && (
+              <p role="alert" className="rounded border border-red-600/40 p-2 text-xs text-red-800 dark:text-red-300" data-testid="project-menu-load-error">
+                {att.error ? "The project attached to this chat could not be read, so the choice below may not show it." : "The projects could not be loaded."}
+                {" "}<button type="button" className="underline" onClick={() => { void list.refetch(); void att.refetch(); }}>Try again</button>
+              </p>
+            )}
             {projects.map((p) => (
               <label key={p.id} className="flex cursor-pointer items-start gap-2 rounded border p-2 hover:border-primary/40">
-                <input type="radio" name="chat-project" className="mt-1" checked={pid === p.id} data-testid="project-option" data-project={p.id}
-                  disabled={choose.isPending} onChange={() => choose.mutate(p.id)} />
+                <input type="radio" name="chat-project" className="mt-1" checked={(sel === undefined ? pid ?? null : sel) === p.id} data-testid="project-option"
+                  data-project={p.id} aria-disabled={choose.isPending} {...pick(p.id)} />
                 <span className="min-w-0 flex-1 space-y-1">
                   <span className="block truncate font-medium">{p.title ?? p.id}</span>
                   {(p.builtin || roleLabel(p.role)) && <span className="block text-xs text-muted-foreground">{p.builtin ? "Built in - Corvin's own knowledge" : roleLabel(p.role)}</span>}
@@ -104,6 +144,11 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
                 </span>
               </label>
             ))}
+            {sel !== undefined && sel !== (pid ?? null) && (
+              <Button size="sm" className="w-full" onClick={() => commit(sel)} aria-disabled={choose.isPending} data-testid="project-menu-use">
+                {sel === null ? "Detach the project" : `Use ${projects.find((x) => x.id === sel)?.title ?? sel}`}
+              </Button>
+            )}
             {list.data && projects.length === 0 && (
               <p className="px-1 text-xs text-muted-foreground" data-testid="project-menu-none">No project is ready yet. <Link className="underline" to="/app/projects">Create one</Link>.</p>
             )}
@@ -130,8 +175,8 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
           </div>
         </div>
       )}
-      {panel && pid && <ChangesPanel projectId={pid} title={label} onClose={() => setPanel(false)} />}
-      {explorer && pid && <ExplorerPanel projectId={pid} title={label} onClose={() => setExplorer(false)} onOpenChanges={() => { setExplorer(false); setPanel(true); }} />}
+      {panel && pid && <ChangesPanel key={pid} projectId={pid} title={label} onClose={() => setPanel(false)} />}
+      {explorer && pid && <ExplorerPanel key={pid} projectId={pid} title={label} onClose={() => setExplorer(false)} onOpenChanges={() => { setExplorer(false); setPanel(true); }} />}
     </div>
   );
 }

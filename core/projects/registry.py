@@ -17,8 +17,10 @@ to exactly one tenant.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -27,13 +29,18 @@ from core.paths.tenant import corvin_home, tenant_home
 from core.tenants import validate_tenant_id
 
 from . import manifest
-from .fsutil import atomic_write, file_lock
+from .fsutil import atomic_write, file_lock, is_link, read_text_any
 
 SCHEMA = 1
 #: components that must never be (part of) a project root: version-control internals and the
 #: platform's own protected stores (path gate / session ledger / CEL anchors)
 PROTECTED_COMPONENTS = frozenset({".git", ".corvin", "session_ledger", ".corvin-ledger", "cel_anchors",
                                   "pending_notifications", "tenants"})
+
+
+def _protected(parts) -> bool:
+    """Case-insensitive: on NTFS `.GIT` IS the git directory and `Tenants` the tenants folder."""
+    return any(str(part).lower() in PROTECTED_COMPONENTS for part in parts)
 MAX_PROJECTS = 200
 
 
@@ -43,6 +50,74 @@ class ProjectPathError(ValueError):
 
 class RegistryError(RuntimeError):
     """The registry is unreadable or an entry conflicts (-> HTTP 409/500)."""
+
+
+_WIN_BAD_CHARS = re.compile(r'[<>:"|?*\x00-\x1f]')
+_MAX_PATH = 260
+_FILE_BUDGET = 95
+
+
+def _read_json(p: Path) -> Any:
+    """JSON as Windows editors save it (UTF-8 with or without BOM, UTF-16 with BOM)."""
+    return json.loads(read_text_any(p))
+
+
+@functools.lru_cache(maxsize=1)
+def long_paths_enabled() -> bool:
+    """Windows: whether this process may use paths of 260 characters and more (``LongPathsEnabled``). Elsewhere always True."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes  # noqa: PLC0415
+
+        return bool(ctypes.WinDLL("ntdll").RtlAreLongPathsEnabled())
+    except (OSError, AttributeError):
+        return False
+
+
+def normalize_input(raw: str, what: str = "the location") -> str:
+    r"""Windows spellings of a local path reduced to the plain one BEFORE anything touches the filesystem: ``\\?\C:\x`` and
+    ``\\.\C:\x`` become ``C:\x``; a network (UNC) or device path is refused here, so a request never waits for an SMB timeout.
+    Elsewhere the input is returned unchanged."""
+    if os.name != "nt":
+        return raw
+    t = raw.strip().replace("/", "\\")
+    if t[:4] in ("\\\\?\\", "\\\\.\\"):
+        rest = t[4:]
+        if re.match(r"^[A-Za-z]:\\", rest):
+            return rest
+        if rest[:4].upper() == "UNC\\":
+            raise ProjectPathError(f"{what} must be on a local drive; network (UNC) paths are not supported - map the share to a drive letter")
+        raise ProjectPathError(f"{what} must be a folder on a drive, not a device path")
+    if t.startswith("\\\\"):
+        raise ProjectPathError(f"{what} must be on a local drive; network (UNC) paths are not supported - map the share to a drive letter")
+    return raw.strip()
+
+
+def _check_windows_names(p: Path, what: str) -> None:
+    """Names Windows cannot create or silently changes: device names (``con``, ``nul.txt`` ...), a trailing dot or space,
+    and the characters ``< > : " | ? *``. Refused with the rule, so the user never sees "does not exist" for a name Windows ate."""
+    if os.name != "nt":
+        return
+    cur = Path(p.parts[0])
+    for part in p.parts[1:]:
+        cur = cur / part
+        if _WIN_BAD_CHARS.search(part):
+            raise ProjectPathError(f'{what} contains a character Windows does not allow in a name (< > : " | ? *)')
+        if part != part.rstrip(". "):
+            raise ProjectPathError(f"{what} contains a name that ends in a dot or a space, which Windows removes")
+        # an EXISTING folder with such a name evidently works (Windows 11 opens `aux`, `con.d` ...); only a name to be created is refused
+        if part.split(".", 1)[0].rstrip(" ").lower() in manifest.WINDOWS_DEVICE_NAMES and not os.path.lexists("\\\\?\\" + str(cur)):
+            raise ProjectPathError(f"{what} contains a reserved Windows device name (con, nul, aux, prn, com1, lpt1 ...)")
+
+
+def _check_length(p: Path, what: str) -> None:
+    # project.yaml and the files below must stay reachable; with long paths off the whole folder would read as "missing"
+    # budget: the longest file the engine writes below a project - docs\kb\tasks\T-0001-<slug up to 60>.md is about 85 characters,
+    # the atomic-write temp names .project.yaml.XXXXXXXX less (adversarial review rounds 3 and 6)
+    if not long_paths_enabled() and len(str(p)) + _FILE_BUDGET >= _MAX_PATH:
+        raise ProjectPathError(f"{what} is too long for Windows (260 characters with long paths switched off); choose a shorter path "
+                               "or enable long paths (LongPathsEnabled)")
 
 
 def registry_path(tenant_id: str) -> Path:
@@ -56,7 +131,7 @@ def _empty() -> dict[str, Any]:
 def load(tenant_id: str) -> dict[str, Any]:
     p = registry_path(tenant_id)
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read_json(p)
     except FileNotFoundError:
         return _empty()
     except (OSError, ValueError):
@@ -73,7 +148,7 @@ def _save(tenant_id: str, data: dict[str, Any]) -> None:
         os.chmod(p.parent, 0o700)
     except OSError:
         pass
-    atomic_write(p, (json.dumps(data, indent=1, sort_keys=True) + "\n").encode("utf-8"), mode=0o600)
+    atomic_write(p, (json.dumps(data, indent=1, sort_keys=True) + "\n").encode("utf-8"), mode=0o600, owned=True)
 
 
 def _lock(tenant_id: str):
@@ -90,10 +165,16 @@ def projects_root(tenant_id: str) -> Path:
     """The tenant's allowlisted parent of all project directories: the operator's setting, else
     ``~/projects`` (ADR-2315 plan E7: one root per tenant, an operator setting)."""
     try:
-        raw = json.loads(settings_path(tenant_id).read_text(encoding="utf-8")).get("projects_root")
+        raw = _read_json(settings_path(tenant_id)).get("projects_root")
     except (OSError, ValueError, AttributeError):
         raw = None
-    return Path(raw).expanduser() if isinstance(raw, str) and raw.strip() else Path.home() / "projects"
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = normalize_input(raw, "the projects folder")      # a value saved before normalisation (\\?\C:\...) still compares right
+        except ProjectPathError:
+            return Path.home() / "projects"                        # a stored network root is not used; the default stays safe
+        return Path(raw).expanduser()
+    return Path.home() / "projects"
 
 
 def validate_root(tenant_id: str, path: str) -> Path:
@@ -102,17 +183,25 @@ def validate_root(tenant_id: str, path: str) -> Path:
     validate_tenant_id(tenant_id)
     if not isinstance(path, str) or not path.strip() or "\x00" in path or len(path) > 1000:
         raise ProjectPathError("the projects folder must be a path")
-    given = Path(path.strip()).expanduser()
+    given = Path(normalize_input(path, "the projects folder")).expanduser()
     if not given.is_absolute() or ".." in given.parts:
         raise ProjectPathError("the projects folder must be an absolute path without '..'")
     root = _resolve_forgiving(given)
+    if os.name == "nt" and str(root).startswith("\\\\") and not str(given).startswith("\\\\"):
+        # a mapped network drive (Y:\...) resolves to its UNC form; the setting keeps the drive letter the user chose, which is
+        # what every later comparison and the UNC refusal expect (adversarial review 2026-11-10)
+        root = Path(os.path.abspath(given))
     if root == Path(root.anchor) or len(root.parts) < 3:
         raise ProjectPathError("choose a folder below your home or data directory, not a top-level one")
     home = _resolve_forgiving(corvin_home())
     if root == home or home in root.parents or root in home.parents:
         raise ProjectPathError("the projects folder must not be inside, or contain, the CorvinOS home")
-    if any(part in PROTECTED_COMPONENTS for part in root.parts):
+    if _protected(root.parts):
         raise ProjectPathError("the projects folder contains a protected path component")
+    _check_windows_names(given, "the projects folder")
+    _check_length(root, "the projects folder")
+    if is_link(root):
+        raise ProjectPathError("the projects folder must not be a link (symlink or junction)")
     if root.exists() and not root.is_dir():
         raise ProjectPathError("that path is a file, not a folder")
     return root
@@ -120,7 +209,11 @@ def validate_root(tenant_id: str, path: str) -> Path:
 
 def set_projects_root(tenant_id: str, path: str) -> Path:
     root = validate_root(tenant_id, path)
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        # a drive that does not exist, a folder without write access (C:\Windows\...), a full disk: the rule, never a 500
+        raise ProjectPathError(f"the projects folder could not be created ({type(exc).__name__}); choose a folder you can write to") from None
     try:
         os.chmod(root, 0o700) if not any(root.iterdir()) else None
     except OSError:
@@ -158,7 +251,7 @@ def _other_tenants_claiming(tenant_id: str, resolved: Path) -> bool:
     for name in names:
         reg = tenants_dir / name / "projects" / "registry.json"
         try:
-            data = json.loads(reg.read_text(encoding="utf-8"))
+            data = _read_json(reg)
         except (OSError, ValueError):
             continue
         for e in data.get("projects", []) if isinstance(data, dict) else []:
@@ -175,12 +268,12 @@ def _registered_paths() -> list[tuple[str, str, Path]]:
     out: list[tuple[str, str, Path]] = []
     tdir = corvin_home() / "tenants"
     try:
-        tenants = [d for d in tdir.iterdir() if d.is_dir() and not d.is_symlink()]
+        tenants = [d for d in tdir.iterdir() if d.is_dir() and not is_link(d)]
     except OSError:
         return out
     for d in tenants:
         try:
-            data = json.loads((d / "projects" / "registry.json").read_text(encoding="utf-8"))
+            data = _read_json(d / "projects" / "registry.json")
         except (OSError, ValueError):
             continue
         for e in (data.get("projects") or []) if isinstance(data, dict) else []:
@@ -209,11 +302,12 @@ def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanage
     validate_tenant_id(tenant_id)
     if not isinstance(raw, str) or not raw.strip() or "\x00" in raw or len(raw) > 1000:
         raise ProjectPathError("the location must be a non-empty path")
-    given = Path(raw).expanduser()
+    given = Path(normalize_input(raw)).expanduser()
     if ".." in given.parts:
         raise ProjectPathError("the location must not contain '..'")
     if not given.is_absolute():
         raise ProjectPathError("the location must be an absolute path")
+    _check_windows_names(given, "the location")
     resolved = _resolve_forgiving(given)
     root = _resolve_forgiving(projects_root(tenant_id))
     if resolved == root or root not in resolved.parents:
@@ -221,10 +315,11 @@ def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanage
     home = _resolve_forgiving(corvin_home())
     if resolved == home or home in resolved.parents or resolved in home.parents:
         raise ProjectPathError("the location must not be inside the CorvinOS home")
-    if any(part in PROTECTED_COMPONENTS for part in resolved.relative_to(root).parts):
+    if _protected(resolved.relative_to(root).parts):
         raise ProjectPathError("the location contains a protected path component")
     if any(part.startswith(".") for part in resolved.relative_to(root).parts[:1]):
         raise ProjectPathError("a project directory must not be hidden")
+    _check_length(resolved, "the location")
     # no symlink anywhere between the projects root and the target, judged on the path AS GIVEN
     # (resolve() would silently follow it to a place that looks harmless)
     cur = Path(os.path.abspath(given))
@@ -236,10 +331,10 @@ def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanage
     walk = base
     for part in parts:
         walk = walk / part
-        if walk.is_symlink():
-            raise ProjectPathError("the location must not be, or lie below, a symlink")
-    if base.is_symlink():
-        raise ProjectPathError("the projects root must not be a symlink")
+        if is_link(walk):
+            raise ProjectPathError("the location must not be, or lie below, a link (symlink or junction)")
+    if is_link(base):
+        raise ProjectPathError("the projects root must not be a link (symlink or junction)")
     if _other_tenants_claiming(tenant_id, resolved):
         raise ProjectPathError("this directory already belongs to another tenant")
     if nesting_conflict(resolved, ignore=ignore) and not (adopt and not unmanaged and any(p == resolved and t == tenant_id
@@ -249,15 +344,16 @@ def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanage
         # a directory that is not a project yet: it must exist and must NOT carry a foreign manifest
         if not resolved.is_dir():
             raise ProjectPathError("the directory does not exist")
-        if (resolved / manifest.FILE).exists() or (resolved / manifest.FILE).is_symlink():
+        if (resolved / manifest.FILE).exists() or is_link(resolved / manifest.FILE):
             raise ProjectPathError("the directory already has a project.yaml")
     elif adopt:
         if not resolved.is_dir():
             raise ProjectPathError("the directory does not exist")
         try:
             man = manifest.load(resolved)
-        except manifest.ManifestError:
-            raise ProjectPathError("the directory has no valid project.yaml") from None
+        except manifest.ManifestError as exc:
+            # the reason (not UTF-8, not YAML, a missing field) is the rule's text, never a path
+            raise ProjectPathError(f"the directory has no valid project.yaml ({exc})") from None
         if man.get("tenant") != tenant_id:
             raise ProjectPathError("project.yaml names another tenant")
     else:
@@ -319,7 +415,7 @@ def rebuild(tenant_id: str) -> dict[str, Any]:
     root = projects_root(tenant_id)
     added, skipped = [], []
     try:
-        children = sorted(d for d in root.iterdir() if d.is_dir() and not d.is_symlink())
+        children = sorted(d for d in root.iterdir() if d.is_dir() and not is_link(d))
     except OSError:
         return {"added": [], "kept": len(entries(tenant_id)), "skipped": []}
     for d in children:
@@ -335,7 +431,7 @@ def rebuild(tenant_id: str) -> dict[str, Any]:
         try:
             validate_location(tenant_id, str(d), adopt=True)
             register(tenant_id, man["id"], d, man.get("template"))
-            set_protection(tenant_id, man["id"], manifest.DEFAULT_CLASS, manifest.DEFAULT_ACCESS)   # never from project.yaml
+            set_protection(tenant_id, man["id"], manifest.legacy_class(man), manifest.DEFAULT_ACCESS)   # the class may only be RAISED by project.yaml; access never
             added.append(man["id"])
         except (ProjectPathError, RegistryError):
             skipped.append(man["id"])

@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from .fsutil import atomic_write
+from .fsutil import atomic_write, is_link, read_text_any
 
 SCHEMA = 1
 FILE = "project.yaml"
@@ -28,6 +28,9 @@ CLASSES = ("public", "internal", "confidential", "secret")      # the L34 vocabu
 ACCESS = ("read", "write")
 DEFAULT_CLASS = "internal"
 DEFAULT_ACCESS = "read"
+#: Windows device names: a folder or file with one of these names (plus any extension) cannot be created or opened normally, so a NEW
+#: project id (which becomes the default folder name) must never be one (an existing project.yaml keeps loading)
+WINDOWS_DEVICE_NAMES = frozenset({"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))})
 _TENANT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
 _MAX_BYTES = 64 * 1024
 
@@ -85,24 +88,38 @@ def validate(data: Any) -> dict[str, Any]:
     return data
 
 
+def is_new_id_allowed(pid: str) -> bool:
+    """A NEW project id: the id rules, not a route word, and not a Windows device name (it is the default folder name)."""
+    return bool(isinstance(pid, str) and PROJECT_ID_RE.match(pid)) and pid not in RESERVED_IDS and pid not in WINDOWS_DEVICE_NAMES
+
+
 def parse(text: str) -> dict[str, Any]:
     try:
         data = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
+    except (yaml.YAMLError, ValueError, TypeError, RecursionError, OverflowError) as exc:
+        # an impossible date (2024-02-30) is a plain ValueError from the YAML constructor - never a 500 for the whole list
         raise ManifestError(f"project.yaml is not valid YAML: {type(exc).__name__}") from None
     return validate(data)
 
 
 def load(root: Path) -> dict[str, Any]:
     p = Path(root) / FILE
-    if p.is_symlink():
-        raise ManifestError("project.yaml is a symlink")
+    if is_link(p):
+        raise ManifestError("project.yaml is a link")
     try:
+        if not p.is_file():
+            raise ManifestError("project.yaml is missing or unreadable")
         if p.stat().st_size > _MAX_BYTES:
             raise ManifestError("project.yaml is too large")
-        return parse(p.read_text(encoding="utf-8"))
+        text = read_text_any(p, limit=_MAX_BYTES)
+    except ManifestError:
+        raise
     except OSError:
         raise ManifestError("project.yaml is missing or unreadable") from None
+    except (UnicodeError, ValueError):
+        # Windows editors write UTF-8 (with or without BOM) or UTF-16 with a BOM - those are read; anything else is named, never a 500
+        raise ManifestError("project.yaml is not UTF-8 or UTF-16 text; save it as UTF-8") from None
+    return parse(text)
 
 
 def dumps(data: dict[str, Any]) -> str:

@@ -32,16 +32,23 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
   const planMut = useMutation({
     mutationFn: (req: ReturnType<typeof planRequest>) => planProject(req, csrf),
     onSuccess: (p) => { setPlan(p); setError(null); setS((x) => ({ ...x, step: 4 })); },
-    onError: (e) => setError(explain(e)),
+    onError: (e) => setError(explain(e, "wizard")),
   });
-  const close = (o: boolean) => { if (!o) { setS(INITIAL); setPlan(undefined); setError(null); } onOpenChange(o); };
+  // while a plan or a create is on its way the dialog stays open: its answer would otherwise land in a reset wizard
+  const busy = () => planMut.isPending || createMut.isPending;
+  const close = (o: boolean) => {
+    if (!o && busy()) return;
+    if (!o) { setS(INITIAL); setPlan(undefined); setError(null); }
+    onOpenChange(o);
+  };
   const createMut = useMutation({
     mutationFn: () => createProject(plan!.plan_id, csrf),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: PROJECTS_KEY });
-      close(false);
+      setS(INITIAL); setPlan(undefined); setError(null);
+      onOpenChange(false);
     },
-    onError: (e) => setError(explain(e)),
+    onError: (e) => setError(explain(e, "wizard")),
   });
 
   const set = (patch: Partial<WizardState>) => { setError(null); setS((x) => ({ ...x, ...patch })); };
@@ -62,6 +69,12 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
         {s.step === 1 && (
           <section className="space-y-3" aria-label="Choose a template">
             {cat.isLoading && <p className="text-sm text-muted-foreground">Loading templates…</p>}
+            {cat.error && !cat.data && (
+              <div className="space-y-2" data-testid="wizard-templates-error">
+                <p role="alert" className="text-sm text-red-700 dark:text-red-300">{explain(cat.error, "wizard")}</p>
+                <Button size="sm" variant="outline" onClick={() => void cat.refetch()} disabled={cat.isFetching}>Try again</Button>
+              </div>
+            )}
             {cat.data && !cat.data.available && (
               <p className="text-sm text-red-700 dark:text-red-300" data-testid="wizard-unavailable">{cat.data.reason}</p>
             )}
@@ -98,7 +111,7 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
             <label className="block space-y-1 text-sm">
               <span>Folder (optional)</span>
               <Input data-testid="wizard-location" value={s.location} onChange={(e) => set({ location: e.target.value })}
-                placeholder={cat.data?.projects_root ? `${cat.data.projects_root}/<name>` : "inside your projects folder"} />
+                placeholder={cat.data?.projects_root ? `${cat.data.projects_root}${cat.data.projects_root.includes("\\") ? "\\" : "/"}<name>` : "inside your projects folder"} />
               <span className="block text-xs text-muted-foreground">Empty = a new folder named after the project, inside your projects folder.</span>
             </label>
           </section>
@@ -168,8 +181,8 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
         {s.step === 4 && plan && (
           <section className="space-y-3 text-sm" aria-label="Review" data-testid="wizard-review">
             <p>Nothing is written until you press Create.</p>
-            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-              <dt className="text-muted-foreground">Project</dt><dd data-testid="review-title">{plan.title} <span className="font-mono text-xs">({plan.project_id})</span></dd>
+            <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+              <dt className="text-muted-foreground">Project</dt><dd className="break-words [overflow-wrap:anywhere]" data-testid="review-title">{plan.title} <span className="font-mono text-xs">({plan.project_id})</span></dd>
               <dt className="text-muted-foreground">Folder</dt><dd className="break-all font-mono text-xs" data-testid="review-location">{plan.location}</dd>
               <dt className="text-muted-foreground">Protection</dt><dd data-testid="review-protection">{badgeLine({ classification: plan.classification, assistant_access: plan.assistant_access })}</dd>
               <dt className="text-muted-foreground">Features</dt><dd data-testid="review-features">{featureNames(plan.features).join(", ") || "none"}</dd>

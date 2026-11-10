@@ -20,7 +20,7 @@ from core.projects import activity
 
 from core.projects import fragments as F
 from core.projects import manifest, registry
-from core.projects.fsutil import UnsafePath
+from core.projects.fsutil import LockBusy, UnsafePath, WriteFailed
 from core.task_tracking import service as tt
 
 from .. import auth as session_auth
@@ -118,6 +118,18 @@ def _call(fn, *args, **kwargs) -> Any:
         raise HTTPException(status_code=422, detail={"message": str(exc)[:300], "reason_class": "invalid"})
     except tt.AuditUnavailable:
         raise HTTPException(status_code=503, detail="audit chain unavailable - nothing was written")
+    except LockBusy as exc:                        # another request on the same project/registry is still running
+        raise HTTPException(status_code=409, detail={"message": str(exc), "reason_class": "busy"})
+    except WriteFailed as exc:                     # read-only project.yaml, a file held open by another program
+        raise HTTPException(status_code=409, detail={"message": str(exc)[:300], "reason_class": "write_failed"})
+    except OSError as exc:
+        # the filesystem said no (permission, a lock, a vanished drive, a too-long path): the reason class, never the path, never a 500
+        raise HTTPException(status_code=409, detail={"message": f"the filesystem refused the operation ({type(exc).__name__})",
+                                                     "reason_class": "filesystem"})
+    except UnicodeError:
+        raise HTTPException(status_code=422, detail={"message": "a project file is not UTF-8 or UTF-16 text", "reason_class": "invalid"})
+    except ValueError as exc:                      # a project file that does not parse the way the engine expects (markers, sizes)
+        raise HTTPException(status_code=422, detail={"message": f"a project file could not be processed ({str(exc)[:120]})", "reason_class": "invalid"})
 
 
 @router.get("")

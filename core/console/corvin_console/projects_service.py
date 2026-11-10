@@ -27,7 +27,7 @@ from typing import Any, Optional
 from core.paths.tenant import corvin_home
 from core.projects import fragments as F
 from core.projects import manifest, registry
-from core.projects.fsutil import UnsafePath
+from core.projects.fsutil import UnsafePath, is_link, passes_link
 from core.task_tracking import service as _tt
 
 from . import kb_projection
@@ -197,6 +197,7 @@ class PlanRecord:
 
 _plans: dict[str, PlanRecord] = {}
 _plans_lock = threading.Lock()
+_plans_running: set[str] = set()
 
 
 def _store_plan(rec: PlanRecord) -> None:
@@ -218,13 +219,57 @@ def _take_plan(tenant_id: str, plan_id: str) -> PlanRecord:
             rec = None
         if rec is None or rec.tenant_id != tenant_id:
             raise NotFound("no such plan (it expires after 15 minutes) - plan again")
+        if plan_id in _plans_running:
+            # a double click / a client retry: the second create would write the same project.yaml and its rollback could delete
+            # the FIRST create's manifest (adversarial review round 3)
+            raise Conflict("this plan is being created right now", "in_progress")
+        _plans_running.add(plan_id)
         return rec
 
 
+_TRANSLIT = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "å": "aa", "đ": "d", "ł": "l"})
+
+
+_held = threading.local()
+
+
+def _project_locked(fn):
+    """One writer per project at a time: every function that reads project.yaml, changes it and writes it back (or moves the folder,
+    or appends to videos/INDEX.md) holds a per-project file lock, so a rename and a settings change running in parallel cannot undo
+    each other (adversarial review 2026-11-10). Re-entrant within a thread (move -> repair)."""
+    import functools  # noqa: PLC0415
+
+    @functools.wraps(fn)
+    def wrapper(tenant_id: str, project_id: str, *args: Any, **kwargs: Any) -> Any:
+        if not isinstance(project_id, str) or not manifest.PROJECT_ID_RE.match(project_id):
+            return fn(tenant_id, project_id, *args, **kwargs)        # not an id: the function refuses it, no lock file is named after it
+        key = (tenant_id, project_id)
+        held = getattr(_held, "keys", None)
+        if held is None:
+            held = _held.keys = set()
+        if key in held:
+            return fn(tenant_id, project_id, *args, **kwargs)
+        from core.projects.fsutil import file_lock  # noqa: PLC0415
+        with file_lock(registry.registry_path(tenant_id).with_name(f"project-{project_id}.lock"), timeout=20.0):
+            held.add(key)
+            try:
+                return fn(tenant_id, project_id, *args, **kwargs)
+            finally:
+                held.discard(key)
+    return wrapper
+
+
 def slug(title: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:28].strip("-")
+    """A kebab-case id from a title or folder name: German umlauts spelled out (Büro -> buero), other accents dropped
+    (café -> cafe), never a route word and never a Windows device name (the id is the default folder name)."""
+    import unicodedata  # noqa: PLC0415
+    t = unicodedata.normalize("NFKD", (title or "").lower().translate(_TRANSLIT))
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    s = re.sub(r"[^a-z0-9]+", "-", t).strip("-")[:28].strip("-")
     s = s or "project"
-    return f"{s[:20]}-project" if s in manifest.RESERVED_IDS else s       # never an id that collides with a fixed route (review R9)
+    if not manifest.is_new_id_allowed(s):                # a route word (review R9) or con/nul/aux/com1 ...
+        s = f"{s[:20]}-project"
+    return s
 
 
 def _unique_id(tenant_id: str, base: str) -> str:
@@ -237,6 +282,26 @@ def _unique_id(tenant_id: str, base: str) -> str:
         if cand not in taken:
             return cand
     raise Conflict("could not derive a free project id")
+
+
+def _refuse_foreign_kb(tenant_id: str, loc: Path) -> None:
+    """A location that is, lies inside or contains ANY tenant's bound knowledge base (the default projects root is shared by all
+    tenants; Corvin-Knowledge sits in it) is never a project: adopting it would write a project.yaml into that KB and hand the
+    folder to this tenant's engine (adversarial review round 6)."""
+    try:
+        names = [d.name for d in (corvin_home() / "tenants").iterdir() if d.is_dir()]
+    except OSError:
+        names = []
+    for name in {*names, tenant_id}:
+        try:
+            kb = kb_projection.kb_repo(name)
+        except Exception:  # noqa: BLE001
+            continue
+        if kb is None:
+            continue
+        k = registry._resolve_forgiving(Path(kb))
+        if loc == k or k in loc.parents or loc in k.parents:
+            raise registry.ProjectPathError("the location is, or contains, a knowledge base; it cannot be a project")
 
 
 def _context(tenant_id: str, project_id: str, title: str, root: Path) -> dict[str, str]:
@@ -300,10 +365,13 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
     if not title or len(title) > 120:
         raise ProjectsError("the title must be 1-120 characters")
     pid = project_id or _unique_id(tenant_id, slug(title))
-    if not manifest.PROJECT_ID_RE.match(pid) or pid in manifest.RESERVED_IDS:
-        raise ProjectsError("the project id must be lowercase kebab-case, 1-28 characters, and not a reserved word")
+    if not manifest.is_new_id_allowed(pid):
+        raise ProjectsError("the project id must be lowercase kebab-case, 1-28 characters, and not a reserved word "
+                            "or a Windows device name (con, nul, aux, prn, com1, lpt1 ...)")
     if registry.get(tenant_id, pid) is not None:
         raise Conflict("a project with this id already exists", "id_taken")
+    if len(registry.entries(tenant_id)) >= registry.MAX_PROJECTS:
+        raise Conflict(f"at most {registry.MAX_PROJECTS} projects per tenant", "limit")
     selected = list(features) if features is not None else list(tpl.features)
     outside = [f for f in selected if f not in tpl.offered]
     if outside:
@@ -320,6 +388,7 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
     raw_loc = location or str(registry.projects_root(tenant_id) / pid)
     try:
         loc = registry.validate_location(tenant_id, raw_loc)
+        _refuse_foreign_kb(tenant_id, loc)
     except registry.ProjectPathError:
         _audit_refusal(tenant_id, "path_rule", pid)
         raise
@@ -357,6 +426,11 @@ def _need_git() -> None:
 def _git(root: Path, *args: str) -> None:
     from core.projects import changes  # noqa: PLC0415
     _need_git()
+    if args and args[0] != "init":
+        try:
+            changes.require_own_repo(Path(root))
+        except changes.ChangesError as exc:
+            raise Conflict(str(exc), "repo_unsupported") from None
     try:
         r = subprocess.run(["git", "-C", str(root), "-c", "user.name=CorvinOS", "-c", "user.email=corvin@localhost",
                             "-c", "commit.gpgsign=false", *changes.neutral_git_args(Path(root)), *args],
@@ -368,6 +442,8 @@ def _git(root: Path, *args: str) -> None:
         raise Conflict(f"git could not be run ({type(exc).__name__})", "git_missing") from None
     if r.returncode != 0:
         raise ProjectsError(f"git {args[0]} failed: {(r.stderr or r.stdout).strip()[:200]}")
+    if args and args[0] in ("init", "clone"):
+        changes.forget_repo_cache()                  # the folder is a repository now: do not keep answering "not a repository"
 
 
 def _sync_mcp(tenant_id: str, project_id: str, root: Path, active: Any) -> None:
@@ -380,18 +456,90 @@ def _sync_mcp(tenant_id: str, project_id: str, root: Path, active: Any) -> None:
     except Exception:  # noqa: BLE001
         needs = False
     f = Path(root) / ".corvin" / "local" / "mcp.json"
-    sha = hashlib.sha256(f.read_bytes()).hexdigest() if needs and f.is_file() and not f.is_symlink() else None
+    sha = None
+    if needs and not passes_link(Path(root), f) and f.is_file():
+        from core.projects.fsutil import read_bytes_limited  # noqa: PLC0415
+        try:
+            sha = hashlib.sha256(read_bytes_limited(f)).hexdigest()
+        except (OSError, ValueError):
+            sha = None                                  # unreadable or oversized: no hash, so a chat never loads it
     registry.set_mcp(tenant_id=tenant_id, project_id=project_id, sha=sha)
+
+
+def _refuse_linked_changes(where: Path) -> None:
+    """Before ``git add -A``: git for Windows walks INTO a directory junction and would commit the files behind it into the project's
+    history, where the change view could later show them. Every path git is about to stage (untracked, modified, deleted) must lie
+    below ``where`` without a link on the way; otherwise nothing is committed (adversarial review 2026-11-10)."""
+    from core.projects import changes  # noqa: PLC0415
+    _need_git()
+    try:
+        changes.require_own_repo(Path(where))
+    except changes.ChangesError as exc:
+        raise Conflict(str(exc), "repo_unsupported") from None
+    try:
+        r = subprocess.run(["git", "-C", str(where), *changes.neutral_git_args(Path(where)), "ls-files", "-z", "--others",
+                            "--exclude-standard", "--modified", "--deleted"],
+                           capture_output=True, timeout=120, env=changes.neutral_git_env(Path(where), kb_projection._env("operator")))
+    except changes.ChangesError as exc:
+        raise Conflict(str(exc), "git_unguarded") from None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Conflict(f"git could not list the changes ({type(exc).__name__})", "git_missing") from None
+    if r.returncode != 0:
+        return                                    # no repository yet / nothing tracked: `git add` reports its own error
+    paths = sorted({x for x in r.stdout.decode("utf-8", errors="surrogateescape").split("\0") if x})
+    for rel in paths:
+        if passes_link(Path(where), Path(where) / rel):
+            raise Conflict("the project contains a link (symlink or junction) with files behind it; remove the link (or add it to "
+                           ".gitignore) - nothing was committed", "linked_changes")
+    env = changes.neutral_git_env(Path(where), kb_projection._env("operator"))
+    off = changes.neutralised_filters(env)
+    if paths and off:
+        # the console runs no filter program (LFS & co. are switched off): `git add` would commit such files raw instead of as the
+        # pointers the repository expects (adversarial review round 4)
+        try:
+            ca = subprocess.run(["git", "-C", str(where), *changes.neutral_git_args(Path(where)), "check-attr", "-z", "--stdin", "filter"],
+                                input=("\0".join(paths) + "\0").encode("utf-8", errors="surrogateescape"), capture_output=True, timeout=60, env=env)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise Conflict(f"git could not check the file attributes ({type(exc).__name__})", "git_missing") from None
+        f = ca.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+        used = {f[i + 2] for i in range(0, len(f) - 2, 3) if f[i + 1] == "filter"}
+        if used & off:
+            raise Conflict(f"files to commit are stored through a git filter the console does not run ({', '.join(sorted(used & off))}, "
+                           "e.g. Git LFS); commit them in your own terminal - nothing was committed", "git_filter")
+
+
+def _project_kb_run(docs: Path, *args: str, **kwargs: Any):
+    """``kb_projection._run`` on a PROJECT's docs/, after its knowledge-base config was judged: the engine follows what
+    ``docs/kb/_meta/sources.yaml`` names (source folders, git refs, frozen snapshots), and that file is the assistant's or an adopted
+    folder's to write - an unchecked run could execute a git filter, write into another folder or contact a network path
+    (adversarial review round 6)."""
+    from core.projects import changes  # noqa: PLC0415
+    if passes_link(docs.parent, docs):
+        raise Conflict("docs/ is a link (symlink or junction); the knowledge base is not read or changed through it", "linked_changes")
+    try:
+        changes.require_own_repo(docs)
+        changes.require_own_repo(docs.parent)
+    except changes.ChangesError as exc:
+        raise Conflict(str(exc), "repo_unsupported") from None
+    if not kb_projection.project_sources_contained(docs):
+        raise Conflict("the project's knowledge-base config (docs/kb/_meta/sources.yaml) names a folder outside docs/, a git ref, a snapshot or a "
+                       "link; the knowledge base is not read or changed until that is fixed", "kb_sources")
+    return kb_projection._run(docs, *args, **kwargs)
 
 
 def _runner(tenant_id: str, root: Path):
     def run(op: F.Op, ctx: dict[str, str]) -> None:
         docs = root / "docs"
+        if op.action in ("kb_scaffold", "kb_seed") or (op.action == "git_commit" and op.args.get("dir")):
+            if passes_link(root, docs):
+                # the writes were skipped, but these actions run a program INSIDE docs/: through a junction that is somewhere else
+                raise Conflict("docs/ is a link (symlink or junction); the knowledge base is not created or changed through it", "linked_changes")
         if op.action == "git_init":
             _git(root, "init", "-q")
             _git(root, "symbolic-ref", "HEAD", "refs/heads/main")
         elif op.action == "git_commit":
             where = root / op.args["dir"] if op.args.get("dir") else root
+            _refuse_linked_changes(where)
             _git(where, "add", "-A")
             _git(where, "commit", "-q", "-m", op.args.get("message", "project: update"), "--allow-empty")
         elif op.action == "kb_scaffold":
@@ -411,7 +559,7 @@ def _runner(tenant_id: str, root: Path):
             engine = bound_engine(tenant_id)
 
             def kb(*a: str) -> dict[str, Any]:
-                rc, out = kb_projection._run(docs, *a, "--actor=operator", actor="operator", engine=engine, guard_git=True)
+                rc, out = _project_kb_run(docs, *a, "--actor=operator", actor="operator", engine=engine, guard_git=True)
                 if rc != 0 or not isinstance(out, dict):
                     raise ProjectsError(f"kb {a[0]} {a[1] if len(a) > 1 else ''} failed: {str(out)[:200]}")
                 return out
@@ -445,6 +593,14 @@ def _manifest_for(rec_tenant: str, pid: str, title: str, template: str, version:
 
 def create_project(tenant_id: str, plan_id: str) -> dict[str, Any]:
     rec = _take_plan(tenant_id, plan_id)
+    try:
+        return _create_project(tenant_id, plan_id, rec)
+    finally:
+        with _plans_lock:
+            _plans_running.discard(plan_id)
+
+
+def _create_project(tenant_id: str, plan_id: str, rec: "PlanRecord") -> dict[str, Any]:
     cat = catalogue(tenant_id)
     tpl = cat.templates.get(rec.template)
     if tpl is None or tpl.version != rec.template_version:
@@ -474,7 +630,17 @@ def create_project(tenant_id: str, plan_id: str) -> dict[str, Any]:
                             plan.features, list(tpl.offered), tpl.videos, rec.role, rec.classification,
                             rec.assistant_access)
         manifest.write(loc, man)                                                # the truth first,
-        registry.register(tenant_id, rec.project_id, loc, man["template"])      # then the index
+        try:
+            registry.register(tenant_id, rec.project_id, loc, man["template"])  # then the index
+        except BaseException:
+            # nothing else was written yet: take the manifest (and the folder this call created) back, so planning again works
+            try:
+                (loc / manifest.FILE).unlink()
+                if not any(loc.iterdir()):
+                    loc.rmdir()
+            except OSError:
+                pass
+            raise
         registry.set_protection(tenant_id, rec.project_id, rec.classification, rec.assistant_access)
         try:
             applied = F.apply_plan(plan, loc, {**ctx, "_root": str(loc)}, _runner(tenant_id, loc))
@@ -497,8 +663,9 @@ def create_project(tenant_id: str, plan_id: str) -> dict[str, Any]:
 def _detect_adopted(root: Path) -> tuple[str, dict[str, bool]]:
     """Read-only look at a foreign directory: which docs mode it has and which features it already
     carries. Only evidence on disk counts - nothing is guessed, nothing is written."""
-    nested = (root / "docs" / ".git").exists()
-    kb = (root / "docs" / "kb" / "_meta").is_dir()
+    linked = passes_link(root, root / "docs")
+    nested = not linked and (root / "docs" / ".git").exists()
+    kb = not linked and not passes_link(root, root / "docs" / "kb" / "_meta") and (root / "docs" / "kb" / "_meta").is_dir()
     return ("nested" if nested else "plain"), ({"kb": True} if kb else {})
 
 
@@ -508,8 +675,15 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
     repository the user already owns) exactly ONE file is written - ``project.yaml`` - and
     nothing else in the directory is touched (ADR-2315 Decision 6)."""
     try:
-        loc = registry.validate_location(tenant_id, location, adopt=True,
-                                         unmanaged=not (Path(location) / manifest.FILE).exists())
+        # the input is normalised (and a network path refused) BEFORE the first filesystem access: an exists() on a UNC path
+        # would wait for the SMB timeout; the manifest is looked for in the normalised local folder only
+        location = registry.normalize_input(location)
+        unmanaged = True
+        given = Path(location)
+        if given.is_absolute() and ".." not in given.parts:
+            unmanaged = not (given / manifest.FILE).exists()
+        loc = registry.validate_location(tenant_id, location, adopt=True, unmanaged=unmanaged)
+        _refuse_foreign_kb(tenant_id, loc)
     except registry.ProjectPathError:
         _audit_refusal(tenant_id, "path_rule")
         raise
@@ -519,27 +693,40 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
             raise Conflict("a project with this id is already registered", "id_taken")
         _audit(tenant_id, "project.adopted", project_id=man["id"], template=man.get("template"))
         registry.register(tenant_id, man["id"], loc, man.get("template"))        # writes nothing in the project
-        registry.set_protection(tenant_id, man["id"], manifest.DEFAULT_CLASS, manifest.DEFAULT_ACCESS)   # a manifest may not grant itself write access
+        registry.set_protection(tenant_id, man["id"], manifest.legacy_class(man), manifest.DEFAULT_ACCESS)   # a manifest may RAISE the class, never grant itself write access
         return get_project(tenant_id, man["id"])
     ttl = (title or loc.name).strip()
     if not 0 < len(ttl) <= 120:
         raise ProjectsError("the title must be 1-120 characters")
-    if project_id is not None and (not manifest.PROJECT_ID_RE.match(project_id) or project_id in manifest.RESERVED_IDS):
-        raise ProjectsError("the project id must be lowercase kebab-case, 1-28 characters")
+    if project_id is not None and not manifest.is_new_id_allowed(project_id):
+        raise ProjectsError("the project id must be lowercase kebab-case, 1-28 characters, and not a reserved word "
+                            "or a Windows device name (con, nul, aux, prn, com1, lpt1 ...)")
     pid = project_id or _unique_id(tenant_id, slug(loc.name))
     if registry.get(tenant_id, pid) is not None:
         raise Conflict("a project with this id is already registered", "id_taken")
+    if len(registry.entries(tenant_id)) >= registry.MAX_PROJECTS:
+        raise Conflict(f"at most {registry.MAX_PROJECTS} projects per tenant", "limit")
     mode, feats = _detect_adopted(loc)
     data = {"schema": manifest.SCHEMA, "id": pid, "title": ttl, "tenant": tenant_id,
             "template": "adopted@1", "docs_mode": mode, "features": feats}
     manifest.validate(data)
     _audit(tenant_id, "project.adopted", project_id=pid, template="adopted@1", outcome="requested")
     manifest.write(loc, data)                                                    # the ONLY write
-    registry.register(tenant_id, pid, loc, "adopted@1")
+    try:
+        registry.register(tenant_id, pid, loc, "adopted@1")
+    except BaseException:
+        # a parallel request won the id / the limit: the folder is left exactly as it was (no stray project.yaml)
+        try:
+            if manifest.load(loc).get("id") == pid:
+                (loc / manifest.FILE).unlink()
+        except (OSError, manifest.ManifestError):
+            pass
+        raise
     registry.set_protection(tenant_id, pid, manifest.DEFAULT_CLASS, manifest.DEFAULT_ACCESS)
     return get_project(tenant_id, pid)
 
 
+@_project_locked
 def rename_project(tenant_id: str, project_id: str, title: str) -> dict[str, Any]:
     _refuse_builtin(project_id)
     """Change the title in ``project.yaml``. The id (the KB scope label, the registry key) never changes."""
@@ -552,11 +739,18 @@ def rename_project(tenant_id: str, project_id: str, title: str) -> dict[str, Any
     return get_project(tenant_id, project_id)
 
 
+@_project_locked
 def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, Any]:
     _refuse_builtin(project_id)
     """Move the directory to another place under this tenant's projects root and follow it in the
     index. Same filesystem only (an atomic rename); an existing target is never overwritten."""
     root, _man = _load_project(tenant_id, project_id)
+    try:
+        same = registry._resolve_forgiving(Path(registry.normalize_input(location))) == registry._resolve_forgiving(root)
+    except (registry.ProjectPathError, OSError, ValueError):
+        same = False
+    if same:
+        raise Conflict("the project is already in this folder (Windows does not tell folders apart by letter case)", "move_same")
     try:
         dest = registry.validate_location(tenant_id, location, ignore=registry._resolve_forgiving(root))  # create rules: absent or empty
     except registry.ProjectPathError:
@@ -571,7 +765,16 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.exists():
             dest.rmdir()                                                # empty by the check above
-        os.rename(root, dest)
+        for attempt in range(8):
+            try:
+                os.rename(root, dest)
+                break
+            except PermissionError:
+                # Windows refuses to rename a folder another process uses as its working directory - the activity watcher's git
+                # poll does for a moment: wait it out briefly; a lasting hold (an open file, a terminal) still fails cleanly
+                if attempt == 7:
+                    raise
+                time.sleep(0.25)
     except OSError as exc:
         _audit_refusal(tenant_id, "move_failed", project_id)
         raise Conflict(f"the directory could not be moved ({type(exc).__name__}); nothing changed", "move_failed") from None
@@ -584,18 +787,27 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
             pass
         _audit_refusal(tenant_id, "move_failed", project_id)
         raise Conflict("the list could not be updated, so the folder was moved back; nothing changed", "move_failed") from None
+    # From here on the move HAS happened (folder and list agree): every later step is best effort and is reported as a warning,
+    # never as a failure that would make the user move it again (adversarial review 2026-11-10)
+    warnings: list[str] = []
     from core.projects import attachment  # noqa: PLC0415
-    for sid, att in attachment._load(tenant_id).items():                       # attached chats follow the folder
-        if att["project_id"] == project_id:
-            attachment.attach(tenant_id, sid, project_id, str(dest))
-    _audit(tenant_id, "project.moved", project_id=project_id, outcome="applied")
+    try:
+        for sid, att in attachment._load(tenant_id).items():                   # attached chats follow the folder
+            if att["project_id"] == project_id:
+                attachment.attach(tenant_id, sid, project_id, str(dest))
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"the chats attached to this project could not be updated ({type(exc).__name__}); attach them again")
+    try:
+        _audit(tenant_id, "project.moved", project_id=project_id, outcome="applied")
+    except _tt.AuditUnavailable:
+        warnings.append("the audit chain was unavailable for the 'applied' record")
     # machine-local files carry the old absolute path (ADR-2315 Decision 5): regenerate them now
     repaired: Optional[int] = None
     try:
         repaired = len(repair(tenant_id, project_id).get("written", []))
-    except (ProjectsError, F.FragmentError):
-        repaired = None                     # the move stands; the doctor will name what is out of sync
-    return {**get_project(tenant_id, project_id), "repaired_files": repaired}
+    except Exception:  # noqa: BLE001 - the move stands; the doctor will name what is out of sync
+        repaired = None
+    return {**get_project(tenant_id, project_id), "repaired_files": repaired, "warnings": warnings}
 
 
 def _refuse_builtin(project_id: str) -> None:
@@ -639,7 +851,7 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
     return {**out, "state": "ok", "title": man.get("title", e["id"]), "docs_mode": man.get("docs_mode", "nested"),
             "features": man.get("features", {}), "active": manifest.active_features(man),
             "role": man.get("role") or "", **_protection_of(tenant_id, e["id"], man),
-            "kb": (root / "docs" / "kb" / "_meta").is_dir()}
+            "kb": not passes_link(root, root / "docs" / "kb" / "_meta") and (root / "docs" / "kb" / "_meta").is_dir()}
 
 
 def _protection_of(tenant_id: str, project_id: str, man: dict[str, Any]) -> dict[str, str]:
@@ -704,6 +916,7 @@ def _load_project(tenant_id: str, project_id: str) -> tuple[Path, dict[str, Any]
     return root, man
 
 
+@_project_locked
 def set_features(tenant_id: str, project_id: str, changes: dict[str, bool], *, accept_dependencies: bool = False,
                  cascade: bool = False) -> dict[str, Any]:
     _refuse_builtin(project_id)
@@ -766,6 +979,7 @@ def set_features(tenant_id: str, project_id: str, changes: dict[str, bool], *, a
     return out
 
 
+@_project_locked
 def repair(tenant_id: str, project_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     _refuse_builtin(project_id)
     root, man = _load_project(tenant_id, project_id)
@@ -797,8 +1011,25 @@ def open_project(tenant_id: str, project_id: str) -> dict[str, Any]:
         raise Conflict(f"the project is {summary['state']}: {summary.get('reason', '')}", "not_openable")
     _audit(tenant_id, "project.opened", project_id=project_id, template=summary.get("template") or None)
     path = summary["path"]
-    return {"project": summary, "command": f'cd "{path}"', "chat_attachment": True,
+    commands = shell_commands(path)
+    return {"project": summary, "command": commands["powershell"] if os.name == "nt" else commands["posix"], "commands": commands,
+            "chat_attachment": True,
             "note": "Opening shows the command for your own terminal. To use the project in a console chat, attach it to that chat."}
+
+
+#: PowerShell treats the typographic single quotes as quote characters too; each one is doubled like '
+_PS_QUOTES = "'\u2018\u2019\u201a\u201b"
+
+
+def shell_commands(path: str) -> dict[str, Optional[str]]:
+    """``cd`` into *path* for PowerShell, cmd.exe and a POSIX shell, each quoted so that nothing in a folder name is evaluated:
+    PowerShell gets a single-quoted literal path (``$( )``, ``$var`` and backticks are text there, unlike in double quotes), a POSIX
+    shell a single-quoted word. cmd.exe expands ``%VAR%`` (and ``!VAR!``) even inside quotes and has no way to escape it there, so a
+    name containing either gets no cmd command at all (None) instead of one that runs something else."""
+    ps = "Set-Location -LiteralPath '" + "".join(ch * 2 if ch in _PS_QUOTES else ch for ch in path) + "'"
+    posix = "cd -- '" + path.replace("'", "'\\''") + "'"
+    cmd = None if any(ch in path for ch in '%!"\r\n') else f'cd /d "{path}"'
+    return {"powershell": ps, "cmd": cmd, "posix": posix}
 
 
 def remove_from_registry(tenant_id: str, project_id: str) -> dict[str, Any]:
@@ -826,7 +1057,7 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
                 blocking = res.get("blocking") if isinstance(res, dict) else None
                 out.append({"id": "kb_check", "ok": rc == 0 and blocking == 0, "detail": f"kb check: blocking {blocking}" if blocking is not None
                             else f"kb check failed: {str(res)[:120]}", "at": now})
-            except (Conflict, subprocess.TimeoutExpired) as exc:
+            except (Conflict, subprocess.TimeoutExpired, OSError, ValueError) as exc:      # ChangesError is a ValueError
                 out.append({"id": "kb_check", "ok": False, "detail": str(exc)[:160], "at": now})
         return {"project_id": project_id, "ok": all(c["ok"] for c in out), "checks": out}
     checks: list[dict[str, Any]] = []
@@ -874,7 +1105,7 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
             add("kb_check", False, "docs/kb is missing")
         else:
             try:
-                rc, out = kb_projection._run(docs, "check", actor="operator", engine=bound_engine(tenant_id), timeout=90, guard_git=True)
+                rc, out = _project_kb_run(docs, "check", actor="operator", engine=bound_engine(tenant_id), timeout=90, guard_git=True)
                 blocking = out.get("blocking") if isinstance(out, dict) else None
                 add("kb_check", rc == 0 and blocking == 0, f"kb check: blocking {blocking}" if blocking is not None
                     else f"kb check failed: {str(out)[:120]}")
@@ -897,25 +1128,86 @@ def _videos_root(tenant_id: str, root: Path, man: dict[str, Any]) -> Path:
     raw = str(cfg.get("root") or "../Corvin-Videos")
     if "\x00" in raw or len(raw) > 500:
         raise ProjectsError("videos.root is not a usable path")
+    try:
+        raw = registry.normalize_input(raw, "videos.root")     # a network or device path is refused before anything touches it
+    except registry.ProjectPathError as exc:
+        raise ProjectsError(str(exc)) from None
     target = Path(raw).expanduser()
     if not target.is_absolute():
         target = root / target
+    target = Path(os.path.abspath(target))
+    # lexical containment FIRST: resolving walks the path with exists() calls, which must never reach a folder outside the rule
+    lex_project = Path(os.path.abspath(root))
+    pr_given = registry.projects_root(tenant_id)
+    lex_roots = {Path(os.path.abspath(pr_given))}
+    if os.name == "nt" and str(lex_project).startswith("\\\\"):
+        lex_roots.add(registry._resolve_forgiving(pr_given))    # a mapped drive: the project is stored in its UNC form
+    if not (target == lex_project or lex_project in target.parents or any(r in target.parents for r in lex_roots)):
+        raise ProjectsError("videos.root must lie inside the project or inside your projects folder")
     resolved = registry._resolve_forgiving(target)
     home = registry._resolve_forgiving(corvin_home())
     if resolved == home or home in resolved.parents or resolved in home.parents:
         raise ProjectsError("videos.root must not be inside the CorvinOS home")
+    # project.yaml is a file the assistant (or an adopted folder) controls: the videos folder may only lie inside the project or
+    # inside this tenant's projects folder, reached without a link, and never inside ANOTHER registered project - otherwise
+    # "New video" would write into any folder the console can reach (adversarial review 2026-11-10)
+    proot = registry._resolve_forgiving(root)
+    pr = registry._resolve_forgiving(registry.projects_root(tenant_id))
+    inside_project = resolved == proot or proot in resolved.parents
+    inside_root = pr in resolved.parents or any(r in resolved.parents for r in lex_roots)
+    if not (inside_project or inside_root):
+        raise ProjectsError("videos.root must lie inside the project or inside your projects folder")
+    if passes_link(Path(os.path.abspath(root)) if inside_project else Path(os.path.abspath(registry.projects_root(tenant_id))), target):
+        raise ProjectsError("videos.root must not be, or lie below, a link (symlink or junction)")
+    if not inside_project and registry.nesting_conflict(resolved, ignore=proot):
+        raise ProjectsError("videos.root must not lie inside another project")
     return resolved
+
+
+def _append_index_row(root: Path, index: Path, row: str) -> None:
+    """Add one row to videos/INDEX.md the way the file is written: its encoding (UTF-8, UTF-8 with BOM, UTF-16), its line ending, and
+    on a line of its own even when the last line has no newline (Notepad, VS Code). Atomic; an unreadable file is refused."""
+    from core.projects.fsutil import atomic_write, read_text_any  # noqa: PLC0415
+    from core.projects.fsutil import read_bytes_limited  # noqa: PLC0415
+    try:
+        raw = read_bytes_limited(index)
+        text = read_text_any(index, limit=1024 * 1024)
+    except (UnicodeError, ValueError):
+        raise ProjectsError("videos/INDEX.md is not UTF-8 or UTF-16 text of at most 1 MB; save it as UTF-8 and try again") from None
+    nl = "\r\n" if "\r\n" in text else "\n"
+    if text and not text.endswith(("\n", "\r")):
+        text += nl
+    text += row + nl
+    if raw.startswith(b"\xfe\xff"):
+        data = b"\xfe\xff" + text.encode("utf-16-be")
+    elif raw.startswith(b"\xff\xfe"):
+        data = text.encode("utf-16")
+    elif raw.startswith(b"\xef\xbb\xbf"):
+        data = text.encode("utf-8-sig")
+    else:
+        data = text.encode("utf-8")
+    atomic_write(index, data, root=root)
 
 
 def _kb_initiative(root: Path) -> Optional[str]:
     """The id of the project's first initiative (the one the seed created), or None."""
-    for p in sorted((root / "docs" / "kb" / "initiatives").glob("*.md")):
-        m = re.search(r"^id:\s*(\S+)\s*$", p.read_text(encoding="utf-8"), re.M)
+    d = root / "docs" / "kb" / "initiatives"
+    if passes_link(root, d):
+        return None
+    for p in sorted(d.glob("*.md")):
+        if is_link(p):
+            continue
+        try:
+            from core.projects.fsutil import read_text_any  # noqa: PLC0415
+            m = re.search(r"^id:\s*(\S+)\s*$", read_text_any(p, limit=256 * 1024), re.M)
+        except (OSError, ValueError):
+            continue
         if m:
             return m.group(1)
     return None
 
 
+@_project_locked
 def new_video(tenant_id: str, project_id: str, name: str) -> dict[str, Any]:
     _refuse_builtin(project_id)
     """Create one video's folder (source/, build/, sources.md), a row in the project's videos/INDEX.md and,
@@ -931,13 +1223,22 @@ def new_video(tenant_id: str, project_id: str, name: str) -> dict[str, Any]:
     langs = [x for x in (cfg.get("languages") or ["de", "en"]) if isinstance(x, str)]
     vroot = _videos_root(tenant_id, root, man)
     vdir = vroot / name
-    if vdir.exists() or vdir.is_symlink():
+    if vdir.exists() or is_link(vdir):
         raise Conflict("a video with this name already exists in the videos folder", "exists")
     kb_on = "kb" in manifest.active_features(man)
     if kb_on:
         bound_engine(tenant_id)            # refuse before anything is written when there is no engine for the KB
+    _idx = root / "videos" / "INDEX.md"
+    if not passes_link(root, _idx) and _idx.is_file():
+        from core.projects.fsutil import read_text_any  # noqa: PLC0415
+        try:
+            read_text_any(_idx, limit=1024 * 1024)
+        except (UnicodeError, ValueError, OSError):
+            raise ProjectsError("videos/INDEX.md is not UTF-8 or UTF-16 text; save it as UTF-8 and try again") from None
     _audit(tenant_id, "project.video_created", project_id=project_id, outcome="requested", files=0)
     created: list[Path] = []
+    epic_id: Optional[str] = None
+    tasks = []
     try:
         vroot.mkdir(parents=True, exist_ok=True)
         vdir.mkdir()
@@ -946,27 +1247,25 @@ def new_video(tenant_id: str, project_id: str, name: str) -> dict[str, Any]:
             (vdir / sub).mkdir()
             created.append(vdir / sub)
             (vdir / sub / ".gitkeep").write_text("", encoding="utf-8")
+            created.append(vdir / sub / ".gitkeep")
         tpl = root / "videos" / "TEMPLATE-sources.md"
-        text = tpl.read_text(encoding="utf-8") if tpl.is_file() else ""
+        try:
+            from core.projects.fsutil import read_text_any  # noqa: PLC0415
+            text = read_text_any(tpl, limit=256 * 1024) if not passes_link(root, tpl) and tpl.is_file() else ""
+        except (OSError, ValueError):
+            raise ProjectsError("videos/TEMPLATE-sources.md could not be read as text (UTF-8/UTF-16, up to 256 KB); restore it with Repair") from None
         if [s for s in VIDEO_SECTIONS if f"## {s}" not in text]:
             raise ProjectsError("videos/TEMPLATE-sources.md is missing its eight sections; restore it with Repair")
         body = re.sub(r"^# sources\.md - .*$", f"# sources.md - {name}", text, count=1, flags=re.M)
         (vdir / "sources.md").write_text(body, encoding="utf-8")
         created.append(vdir / "sources.md")
-        index = root / "videos" / "INDEX.md"
-        if index.is_file() and not index.is_symlink():
-            row = "| {} | {} | {} | `{}` | started |\n".format(
-                name, "yes" if "de" in langs else "-", "yes" if "en" in langs else "-", vdir)
-            with index.open("a", encoding="utf-8") as fh:
-                fh.write(row)
-        epic_id: Optional[str] = None
         tasks: list[str] = []
         if kb_on:
             docs = root / "docs"
             ini = _kb_initiative(root)
             if ini is None:
                 raise ProjectsError("the project has no initiative in its knowledge base to put the video's epic under")
-            rc, out = kb_projection._run(docs, "new", "epic", f"--title=VIDEO-{name}", f"--initiative={ini}",
+            rc, out = _project_kb_run(docs, "new", "epic", f"--title=VIDEO-{name}", f"--initiative={ini}",
                                          "--actor=operator", actor="operator", engine=bound_engine(tenant_id))
             if rc != 0 or not isinstance(out, dict) or not out.get("id"):
                 raise ProjectsError(f"the knowledge base refused the epic: {str(out)[:160]}")
@@ -979,25 +1278,37 @@ def new_video(tenant_id: str, project_id: str, name: str) -> dict[str, Any]:
                 plan.append(("Check numbers DE against EN", "every number and date in both languages agrees"))
             plan.append(("Acceptance and sources.md", "loudness about -16 LUFS, frames sampled, duration equals the sum of the segments, sources.md has all eight sections"))
             for title, dod in plan:
-                rc, t = kb_projection._run(docs, "new", "task", f"--title={title}", f"--epic={epic_id}",
+                rc, t = _project_kb_run(docs, "new", "task", f"--title={title}", f"--epic={epic_id}",
                                            f"--dod={dod}", "--actor=operator", actor="operator", engine=bound_engine(tenant_id))
                 if rc != 0 or not isinstance(t, dict) or not t.get("id"):
                     raise ProjectsError(f"the knowledge base refused the task {title!r}: {str(t)[:160]}")
                 tasks.append(str(t["id"]))
+        # the INDEX row is the LAST write: a failure before it leaves no row that a retry would trip over
+        index = root / "videos" / "INDEX.md"
+        if not passes_link(root, index) and index.is_file():
+            row = "| {} | {} | {} | `{}` | started |".format(
+                name, "yes" if "de" in langs else "-", "yes" if "en" in langs else "-", vdir)
+            _append_index_row(root, index, row)
     except BaseException as exc:
         # roll back only what this call created: nothing that existed before is removed
         for path in sorted(created, key=lambda p: len(p.parts), reverse=True):
             try:
-                if path.is_file() or path.is_symlink():
+                if is_link(path) and path.is_dir():
+                    path.rmdir()                       # a junction is removed as a link, its target is never touched
+                elif path.is_file() or is_link(path):
                     path.unlink()
                 elif path.is_dir():
                     path.rmdir()
             except OSError:
                 pass
         _audit(tenant_id, "project.video_created", project_id=project_id, outcome="error", files=0)
+        left = [p for p in created if p.exists() or is_link(p)]
+        undo = "The video folder could not be removed completely; delete it by hand." if left else "The video folder was removed again."
+        kept = f" The knowledge-base epic {epic_id} and {len(tasks)} task(s) stay; cancel them in the knowledge base." if epic_id else ""
         if isinstance(exc, ProjectsError):
+            exc.args = (f"{exc} {undo}{kept}",)
             raise
-        raise ProjectsError(f"the video could not be created ({type(exc).__name__}); what was written was removed") from None
+        raise ProjectsError(f"the video could not be created ({type(exc).__name__}). {undo}{kept}") from None
     _audit(tenant_id, "project.video_created", project_id=project_id, outcome="applied", files=len(created))
     note = ("" if kb_on else
             "No knowledge base on this project: the folder and sources.md were created; no epic or tasks.")
@@ -1022,7 +1333,7 @@ def structure(tenant_id: str, project_id: str, depth: int = 2) -> dict[str, Any]
     def walk(d: Path, rel: str, level: int) -> None:
         nonlocal truncated
         try:
-            children = sorted(d.iterdir(), key=lambda p: (not p.is_dir(), p.name))
+            children = _bounded_children(d)                                                   # a link is judged before it is stat-ed
         except OSError:
             return
         for c in children:
@@ -1034,7 +1345,7 @@ def structure(tenant_id: str, project_id: str, depth: int = 2) -> dict[str, Any]
             if len(entries) >= _STRUCTURE_MAX:
                 truncated = True
                 return
-            if c.is_symlink():
+            if is_link(c):
                 entries.append({"path": r, "kind": "symlink", "size": None})
                 continue
             if c.is_dir():
@@ -1051,30 +1362,81 @@ def structure(tenant_id: str, project_id: str, depth: int = 2) -> dict[str, Any]
     walk(root, "", 1)
     docs_dir = root / "docs" / "kb"
     kb_counts: dict[str, int] = {}
-    if docs_dir.is_dir():
+
+    def _count(d: Path) -> int:
+        if passes_link(root, d) or not d.is_dir():
+            return 0
+        n = 0
+        try:
+            with os.scandir(d) as it:                   # bounded: a folder with a million files must not stall a worker
+                for k, e in enumerate(it):
+                    if k >= 20000:
+                        break
+                    if e.name.lower().endswith(".md") and not (e.is_symlink() or e.is_junction()):
+                        n += 1
+        except OSError:
+            return 0
+        return n
+
+    if not passes_link(root, docs_dir) and docs_dir.is_dir():
         for sub in ("initiatives", "epics", "tasks"):
-            kb_counts[sub] = len(list((docs_dir / sub).glob("*.md"))) if (docs_dir / sub).is_dir() else 0
+            kb_counts[sub] = _count(docs_dir / sub)
     for sub in ("concepts", "decisions", "ideas", "implementation-plans", "notes", "adversarial-reviews"):
-        kb_counts[sub] = len(list((root / "docs" / sub).glob("*.md"))) if (root / "docs" / sub).is_dir() else 0
+        kb_counts[sub] = _count(root / "docs" / sub)
+    try:
+        vroot: Optional[Path] = _videos_root(tenant_id, root, man)
+    except ProjectsError:
+        vroot = None                    # a videos.root the rules refuse: the structure still shows; no row is looked up anywhere
     return {"project_id": project_id, "entries": entries, "truncated": truncated, "kb_counts": kb_counts,
-            "videos": _video_rows(root, man), "videos_root": str(_videos_root(tenant_id, root, man))}
+            "videos": _video_rows(root, man, vroot), "videos_root": str(vroot) if vroot is not None else ""}
 
 
-def _video_rows(root: Path, man: dict[str, Any]) -> list[dict[str, Any]]:
-    """The rows of videos/INDEX.md (one per video), each with whether its folder still exists."""
+def _bounded_children(d: Path, limit: int = _STRUCTURE_MAX * 4) -> list[Path]:
+    """The entries of *d*, directories first, but never more than *limit* are listed or stat-ed (a folder with a million files)."""
+    out: list[tuple[bool, str, Path]] = []
+    with os.scandir(d) as it:
+        for k, e in enumerate(it):
+            if k >= limit:
+                break
+            isd = e.is_dir(follow_symlinks=False) and not e.is_junction()
+            out.append((not isd, e.name, Path(e.path)))
+    out.sort(key=lambda t: (t[0], t[1]))
+    return [t[2] for t in out]
+
+
+def _video_rows(root: Path, man: dict[str, Any], vroot: Optional[Path] = None) -> list[dict[str, Any]]:
+    """The rows of videos/INDEX.md (one per video), each with whether its folder still exists. ``folder_exists`` is only ever
+    looked up for a folder inside the project's videos folder: the index is a file the assistant can edit, and a row naming an
+    arbitrary path must not turn the inspector into a probe of what exists on this machine."""
     index = root / "videos" / "INDEX.md"
-    if not index.is_file() or index.is_symlink():
+    if passes_link(root, index) or not index.is_file():
+        return []
+    from core.projects.fsutil import read_text_any  # noqa: PLC0415
+    try:
+        lines = read_text_any(index, limit=1024 * 1024).splitlines()        # UTF-8 (BOM) or UTF-16, the encodings "New video" keeps
+    except (OSError, UnicodeError, ValueError):
         return []
     rows: list[dict[str, Any]] = []
-    for line in index.read_text(encoding="utf-8").splitlines():
+    for line in lines:
         if not line.startswith("|") or line.startswith("|---") or line.startswith("| video "):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) < 5:
             continue
         name, de, en, folder, state = cells[0], cells[1], cells[2], cells[3].strip("`"), cells[4]
-        rows.append({"name": name, "de": de == "yes", "en": en == "yes", "folder": folder,
-                     "state": state, "folder_exists": bool(folder) and Path(folder).is_dir()})
+        exists = False
+        if folder and vroot is not None and "\x00" not in folder and len(folder) <= 500:
+            try:
+                # lexically inside the videos folder BEFORE any filesystem call: a row naming \\host\share must never make the
+                # console open an SMB connection (it would hand the host account's NTLM hash to that host)
+                # the videos folder is trusted (judged by _videos_root); a row is only looked up when it lies lexically inside it
+                lex = Path(os.path.abspath(folder))
+                if lex == vroot or vroot in lex.parents:
+                    fp = registry._resolve_forgiving(lex)
+                    exists = (fp == vroot or vroot in fp.parents) and not passes_link(vroot, lex) and fp.is_dir()
+            except (OSError, ValueError):
+                exists = False
+        rows.append({"name": name, "de": de == "yes", "en": en == "yes", "folder": folder, "state": state, "folder_exists": exists})
     return rows
 
 
@@ -1143,12 +1505,13 @@ def chat_attachment(tenant_id: str, session_id: str) -> dict[str, Any]:
             withheld = _class_refusal(tenant_id, summ.get("classification", "internal"))
             if withheld is None:
                 from . import chat_runtime  # noqa: PLC0415
-                rules = Path(str(e.get("path"))) / "CLAUDE.md"
-                try:
-                    txt = rules.read_text(encoding="utf-8", errors="replace") if rules.is_file() and not rules.is_symlink() else ""
-                except OSError:
-                    txt = ""
-                if txt and not chat_runtime.project_rules_allowed(tenant_id, txt):
+                txt = attachment.project_rules_text(Path(str(e.get("path"))))
+                if attachment.deny_base(os.path.abspath(str(e.get("path")))) is None:
+                    withheld = ("its read-only rules cannot be written for this folder (a network folder, or a name containing [ ] * ?), "
+                                "so it is not sent")
+                elif txt is None:
+                    withheld = "a rules file of the project (CLAUDE.md, .claude/...) is too large, a link or unreadable; it is not sent"
+                elif txt and not chat_runtime.project_rules_allowed(tenant_id, txt):
                     withheld = "the project's CLAUDE.md may not go to the assistant's engine (data-flow rule)"
     return {"session_id": session_id, "project_id": pid, "title": summ.get("title"), "withheld": withheld}
 
@@ -1161,6 +1524,7 @@ def _class_refusal(tenant_id: str, classification: str) -> Optional[str]:
 
 # ── settings: classification and what the assistant may do (T-0369, ADR-2319) ───────────────
 
+@_project_locked
 def set_settings(tenant_id: str, project_id: str, *, classification: Optional[str] = None,
                  assistant_access: Optional[str] = None, confirm: bool = False) -> dict[str, Any]:
     _refuse_builtin(project_id)
@@ -1177,6 +1541,11 @@ def set_settings(tenant_id: str, project_id: str, *, classification: Optional[st
     cur = _protection_of(tenant_id, project_id, man)
     old_cls, old_acc = cur["classification"], cur["assistant_access"]
     if (new_cls, new_acc) == (old_cls, old_acc):
+        # nothing changes in the record; project.yaml is rewritten only if it no longer matches it (hand edit - the health check
+        # "protection" tells the user to save the protection to fix exactly this)
+        if manifest.classification_of(man) != new_cls or manifest.access_of(man) != new_acc:
+            _audit(tenant_id, "project.settings_changed", project_id=project_id, classification=new_cls, access=new_acc)
+            manifest.write(root, {**man, "classification": new_cls, "assistant_access": new_acc})
         return get_project(tenant_id, project_id)
     lowers = manifest.CLASSES.index(new_cls) < manifest.CLASSES.index(old_cls)
     raises = old_acc == "read" and new_acc == "write"
@@ -1184,8 +1553,17 @@ def set_settings(tenant_id: str, project_id: str, *, classification: Optional[st
         raise Conflict("this change lowers the protection of the project and needs confirmation", "confirmation_required",
                        lowers_classification=lowers, raises_access=raises)
     _audit(tenant_id, "project.settings_changed", project_id=project_id, classification=new_cls, access=new_acc)
-    registry.set_protection(tenant_id, project_id, new_cls, new_acc)                  # the authoritative record
+    # project.yaml first: if it cannot be written (read-only, locked) NOTHING changed - the record that actually decides is untouched.
+    # Only then the authoritative record; if that fails, project.yaml is put back.
     manifest.write(root, {**man, "classification": new_cls, "assistant_access": new_acc})
+    try:
+        registry.set_protection(tenant_id, project_id, new_cls, new_acc)              # the authoritative record
+    except BaseException:
+        try:
+            manifest.write(root, man)
+        except Exception:  # noqa: BLE001 - the registry still holds the old protection, which is what applies
+            pass
+        raise
     return get_project(tenant_id, project_id)
 
 
@@ -1200,7 +1578,7 @@ def project_changes(tenant_id: str, project_id: str, commit: Optional[str] = Non
         else:
             files, cut = changes.working_changes_ex(root)
         return {"project_id": project_id, "commit": commit, "files": files, "commits": changes.recent_commits(root),
-                "has_repository": bool(changes.repos(root)), "truncated": cut or len(files) >= changes.MAX_FILES}
+                "has_repository": bool(changes.repos(root)), "repository_note": changes.repository_note(root), "truncated": cut or len(files) >= changes.MAX_FILES}
     except changes.ChangesError as exc:
         raise ProjectsError(str(exc)) from None
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1214,6 +1592,8 @@ def project_change_file(tenant_id: str, project_id: str, path: str, commit: Opti
         return changes.file_view(root, path, commit)
     except changes.ChangesError as exc:
         raise ProjectsError(str(exc)) from None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ProjectsError(f"git could not read the repository ({type(exc).__name__})") from None
 
 
 # ── where projects live (release review F1, ADR-2315 plan E7) ─────────────────────────────────

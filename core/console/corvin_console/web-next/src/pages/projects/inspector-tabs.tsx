@@ -17,7 +17,7 @@ function Explained({ children, testId }: { children: React.ReactNode; testId: st
 }
 
 /** A tab whose feature is off: what it needs, and the switch. */
-export function FeatureOff({ d, feature }: { d: ProjectDetail; feature: string }) {
+export function FeatureOff({ d, feature, onNotice }: { d: ProjectDetail; feature: string; onNotice?: (msg: string) => void }) {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
   const qc = useQueryClient();
@@ -25,7 +25,12 @@ export function FeatureOff({ d, feature }: { d: ProjectDetail; feature: string }
   const requires = (row?.requires ?? []).filter((r) => r !== "core").map(featureLabel);
   const mut = useMutation({
     mutationFn: () => setFeatures(d.id, { set: { [feature]: true }, accept_dependencies: true }, csrf),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["projects", "detail", d.id] }); },
+    onSuccess: (r) => {
+      // the response is the only place the warnings exist (a GET of the project has none): keep them for the next view
+      const warn = (r.warnings ?? []).filter(Boolean);
+      if (warn.length) onNotice?.(warn.join(" "));
+      void qc.invalidateQueries({ queryKey: ["projects", "detail", d.id] });
+    },
   });
   return (
     <div className="space-y-3 rounded-lg border p-4" data-testid="feature-off" data-feature={feature}>
@@ -43,9 +48,9 @@ export function FeatureOff({ d, feature }: { d: ProjectDetail; feature: string }
 }
 
 export function StructureTab({ id }: { id: string }) {
-  const q = useQuery({ queryKey: ["projects", "structure", id], queryFn: ({ signal }) => getStructure(id, signal) });
+  const q = useQuery({ queryKey: ["projects", "structure", id], queryFn: ({ signal }) => getStructure(id, signal), refetchInterval: 60_000 });
   if (q.isLoading) return <p className="text-sm text-muted-foreground">Reading the folder…</p>;
-  if (q.error || !q.data) return <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="structure-error">The folder could not be read.</p>;
+  if (!q.data) return <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="structure-error">The folder could not be read.</p>;
   const entries: StructureEntry[] = q.data.entries;
   return (
     <section className="space-y-3" data-testid="structure-tab">
@@ -66,11 +71,12 @@ export function StructureTab({ id }: { id: string }) {
 }
 
 export function DocsTab({ id }: { id: string }) {
-  const q = useQuery({ queryKey: ["projects", "structure", id], queryFn: ({ signal }) => getStructure(id, signal) });
+  const q = useQuery({ queryKey: ["projects", "structure", id], queryFn: ({ signal }) => getStructure(id, signal), refetchInterval: 60_000 });
   const counts = q.data?.kb_counts ?? {};
   const rows = Object.entries(counts);
   const total = rows.reduce((n, [, v]) => n + v, 0);
   if (q.isLoading) return <p className="text-sm text-muted-foreground">Counting the knowledge base…</p>;
+  if (!q.isLoading && !q.data) return <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="structure-error">The folder could not be read.</p>;
   return (
     <section className="space-y-3" data-testid="docs-tab">
       {total === 0 ? (
@@ -91,8 +97,10 @@ export function DocsTab({ id }: { id: string }) {
 }
 
 export function KnowledgeTab({ id }: { id: string }) {
-  const q = useQuery({ queryKey: ["projects", "structure", id], queryFn: ({ signal }) => getStructure(id, signal) });
+  const q = useQuery({ queryKey: ["projects", "structure", id], queryFn: ({ signal }) => getStructure(id, signal), refetchInterval: 60_000 });
   const total = Object.values(q.data?.kb_counts ?? {}).reduce((n, v) => n + v, 0);
+  if (q.isLoading) return <p className="text-sm text-muted-foreground">Counting the knowledge base…</p>;
+  if (!q.isLoading && !q.data) return <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="structure-error">The folder could not be read.</p>;
   return (
     <section className="space-y-3" data-testid="knowledge-tab">
       <p className="text-sm">{total} entries in this project's knowledge base.</p>
@@ -133,8 +141,10 @@ export function TasksTab({ id }: { id: string }) {
 }
 
 export function VideosTab({ id }: { id: string }) {
-  const q = useQuery({ queryKey: ["projects", "structure", id], queryFn: ({ signal }) => getStructure(id, signal) });
+  const q = useQuery({ queryKey: ["projects", "structure", id], queryFn: ({ signal }) => getStructure(id, signal), refetchInterval: 60_000 });
   const rows = q.data?.videos ?? [];
+  if (q.isLoading) return <p className="text-sm text-muted-foreground">Reading the videos…</p>;
+  if (!q.isLoading && !q.data) return <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="structure-error">The folder could not be read.</p>;
   return (
     <section className="space-y-3" data-testid="videos-tab">
       {rows.length === 0 ? (
@@ -144,12 +154,12 @@ export function VideosTab({ id }: { id: string }) {
           {rows.map((v) => (
             <li key={v.name} data-testid="video-row" className="flex flex-wrap justify-between gap-2 px-3 py-2">
               <span className="font-medium">{v.name}</span>
-              <span className="text-xs text-muted-foreground">DE {v.de ? "yes" : "-"} · EN {v.en ? "yes" : "-"} · {v.folder_exists ? "folder present" : "folder missing"}</span>
+              <span className="break-words text-xs text-muted-foreground">DE {v.de ? "yes" : "-"} · EN {v.en ? "yes" : "-"} · {v.folder_exists ? "folder present" : "folder missing"}{v.state ? ` · ${v.state}` : ""}</span>
             </li>
           ))}
         </ul>
       )}
-      {q.data?.videos_root && <p className="text-xs text-muted-foreground font-mono" data-testid="videos-root">{q.data.videos_root}</p>}
+      {q.data?.videos_root && <p className="break-all text-xs text-muted-foreground font-mono" data-testid="videos-root">{q.data.videos_root}</p>}
     </section>
   );
 }
@@ -170,11 +180,15 @@ export function DirectoryTab({ d }: { d: ProjectDetail }) {
 }
 
 export function ComputeTab({ id }: { id: string }) {
-  const q = useQuery({ queryKey: ["projects", "health", id], queryFn: ({ signal }) => getHealth(id, signal) });
+  const q = useQuery({ queryKey: ["projects", "health", id], queryFn: ({ signal }) => getHealth(id, signal), refetchInterval: false });
   const worker = q.data?.checks.find((c) => c.id === "compute_worker");
   return (
     <section className="space-y-3" data-testid="compute-tab">
-      {worker ? (
+      {q.error ? (
+        <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="compute-error">The compute worker could not be checked.</p>
+      ) : q.isLoading ? (
+        <p className="text-sm text-muted-foreground">Checking the compute worker…</p>
+      ) : worker ? (
         <p className="text-sm" data-testid="compute-worker">{worker.detail}</p>
       ) : (
         <Explained testId="compute-no-check">The compute worker is checked in Overview health when agentic compute is on.</Explained>
