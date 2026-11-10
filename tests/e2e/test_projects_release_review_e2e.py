@@ -159,7 +159,11 @@ class ReleaseReview(_Base):
                 mark.unlink()
                 pid = c.own.post(f"{_URL}/adopt", json={"location": str(repo)}, headers=self._h(c)).json()["id"]
                 ch = c.own.get(f"{_URL}/{pid}/changes")
-                self.assertEqual(ch.status_code, 200, ch.text)
+                # refusing a repository whose config pulls in other files is a safe outcome (review: 6250cd0b6); what must hold is that no
+                # filter ran, asserted below
+                self.assertIn(ch.status_code, (200, 400), ch.text)
+                if ch.status_code == 400:
+                    self.assertIn("includes other files", ch.text)
                 c.own.get(f"{_URL}/{pid}/changes/file", params={"path": "a.txt"})
                 self.assertFalse(mark.exists(), f"a filter from a {kind} config ran in the console")
 
@@ -681,3 +685,21 @@ class SubmoduleGuard(unittest.TestCase):
             env = changes.neutral_git_env(P, changes._env())
             keys = {env[f"GIT_CONFIG_KEY_{i}"].lower() for i in range(int(env.get("GIT_CONFIG_COUNT", "0")))}
             self.assertIn("filter.ev.clean", keys, "the child repository's own filter was not in the scan: its config would run")
+
+
+class Python311DirEntries(unittest.TestCase):
+    """T-0406: DirEntry.is_junction() exists only from Python 3.12; the live console runs 3.11. The walker must answer on every version."""
+
+    def test_the_git_walk_and_the_junction_helper_work_on_this_interpreter(self):
+        import tempfile
+        from core.projects import changes, fsutil
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "sub").mkdir()
+            (root / "sub" / "f.md").write_text("x")
+            (root / "link").symlink_to(root / "sub", target_is_directory=True)
+            with os.scandir(root) as it:
+                entries = {e.name: e for e in it}
+            self.assertFalse(fsutil.dirent_is_junction(entries["sub"]), "a plain directory is no junction")
+            self.assertFalse(fsutil.dirent_is_junction(entries["link"]), "a symlink is reported by is_symlink, not as a junction")
+            changes._git_dir_walk(root)           # raised AttributeError on 3.11 before the fix

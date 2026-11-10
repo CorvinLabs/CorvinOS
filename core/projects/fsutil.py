@@ -33,6 +33,16 @@ class WriteFailed(OSError):
     The message names the reason class, never the path."""
 
 
+def dirent_is_junction(e: "os.DirEntry[str]") -> bool:
+    """A directory entry is a junction / reparse point. ``DirEntry.is_junction()`` exists only from Python 3.12; on 3.11 (the minimum this
+    project supports) the same question is answered by ``is_link`` on the entry's path (review T-0406: the call raised AttributeError
+    and broke project creation on the live 3.11 console)."""
+    native = getattr(e, "is_junction", None)
+    if native is not None:
+        return bool(native())
+    return is_link(e.path) and not e.is_symlink()
+
+
 def is_link(p: Path | str) -> bool:
     """True for a symlink, a junction or any other name-surrogate reparse point. Never follows the link;
     a path that does not exist (or cannot be stat-ed) is not a link."""

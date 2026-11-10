@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
-from .fsutil import is_link, passes_link
+from .fsutil import is_link, passes_link, dirent_is_junction
 
 MAX_FILES = 300
 MAX_BYTES = 200 * 1024
@@ -397,7 +397,7 @@ def _git_dir_walk(g: Path) -> str:
                     seen += 1
                     if seen > _GIT_WALK_MAX:
                         return "large"
-                    if e.is_symlink() or e.is_junction():          # from the directory listing itself: no extra stat per entry
+                    if e.is_symlink() or dirent_is_junction(e):          # from the directory listing itself: no extra stat per entry
                         return "link"
                     if e.is_dir(follow_symlinks=False):
                         if d == top and e.name in _GIT_WALK_SKIP:

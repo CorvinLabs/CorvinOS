@@ -27,7 +27,7 @@ from typing import Any, Optional
 from core.paths.tenant import corvin_home
 from core.projects import fragments as F
 from core.projects import manifest, registry
-from core.projects.fsutil import UnsafePath, is_link, passes_link
+from core.projects.fsutil import UnsafePath, dirent_is_junction, is_link, passes_link
 from core.task_tracking import service as _tt
 
 from . import kb_projection
@@ -1372,7 +1372,7 @@ def structure(tenant_id: str, project_id: str, depth: int = 2) -> dict[str, Any]
                 for k, e in enumerate(it):
                     if k >= 20000:
                         break
-                    if e.name.lower().endswith(".md") and not (e.is_symlink() or e.is_junction()):
+                    if e.name.lower().endswith(".md") and not (e.is_symlink() or dirent_is_junction(e)):
                         n += 1
         except OSError:
             return 0
@@ -1398,7 +1398,7 @@ def _bounded_children(d: Path, limit: int = _STRUCTURE_MAX * 4) -> list[Path]:
         for k, e in enumerate(it):
             if k >= limit:
                 break
-            isd = e.is_dir(follow_symlinks=False) and not e.is_junction()
+            isd = e.is_dir(follow_symlinks=False) and not dirent_is_junction(e)
             out.append((not isd, e.name, Path(e.path)))
     out.sort(key=lambda t: (t[0], t[1]))
     return [t[2] for t in out]

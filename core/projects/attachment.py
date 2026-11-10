@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import manifest, registry
-from .fsutil import atomic_write, file_lock, is_link, passes_link, read_text_any
+from .fsutil import atomic_write, file_lock, is_link, passes_link, read_text_any, dirent_is_junction
 
 SID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_ENTRIES = 500
@@ -164,7 +164,7 @@ def project_rules_text(root: Path) -> Optional[str]:
                             seen += 1
                             if seen > 20000:
                                 return None           # an enormous tree: withheld
-                            if e.is_symlink() or e.is_junction():
+                            if e.is_symlink() or dirent_is_junction(e):
                                 return None           # a link inside: withheld (the CLI might follow it)
                             if e.is_dir(follow_symlinks=False):
                                 stack.append(e.path)

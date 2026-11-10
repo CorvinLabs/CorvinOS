@@ -215,8 +215,12 @@ class FragmentEngineE2E(unittest.TestCase):
         self.root.mkdir()
         (self.root / "notes").symlink_to(outside, target_is_directory=True)     # claude fragment writes notes/x.md
         plan = self.plan(("core", "claude"), mode="repair")
-        with self.assertRaises(UnsafePath):
+        # the invariant is that nothing is written through the link; how the refusal is reported is not fixed here (review: 6250cd0b6
+        # changed it from an exception to a refused item, and the link itself was never followed)
+        try:
             self.apply(plan, Runner())
+        except UnsafePath:
+            pass
         self.assertEqual(list(outside.iterdir()), [], "a write followed the symlink")
 
     def test_conflicts_refuse_before_any_write(self):
