@@ -822,6 +822,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "project.repaired":             "INFO",
     "project.registry_removed":     "WARNING",
     "project.blocked":              "WARNING",
+    # ADR-2321 Decision 14: where new projects go / the workspace binding (to = managed|root, outcome only - never a path or key)
+    "project.storage_changed":      "WARNING",
     "project.video_created":        "INFO",
     # ADR-0103 — A2A Network Membership Attestation.
     # Metadata only — SesT bytes, instruction, pairing cert body NEVER in chain.
@@ -3809,12 +3811,16 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     },
     **{
         _et: frozenset({"project_id", "feature", "to", "template", "files", "reason_class", "outcome", "tenant_id",
-                        "role", "classification", "access"})
+                        "role", "classification", "access",
+                        # ADR-2321: the storage kind of the project (managed|own) - never its path
+                        "storage"})
         for _et in ("project.plan_created", "project.created", "project.adopted", "project.opened",
                     "project.feature_toggled", "project.repaired", "project.registry_removed", "project.blocked",
                     "project.video_created", "project.renamed", "project.moved", "project.attached",
                     "project.detached", "project.settings_changed", "project.root_changed")
     },
+    # ADR-2321 Decision 14: never a path, never a workspace key
+    "project.storage_changed": frozenset({"to", "outcome", "tenant_id"}),
     "task_item.kb_create": frozenset({
         "kind", "outcome", "kb_id", "actor_kind", "sid_fingerprint", "tenant_id",
         "scope",   # ADR-2316: the project scope (a project id, never a path)

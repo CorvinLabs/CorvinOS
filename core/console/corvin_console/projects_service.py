@@ -176,6 +176,23 @@ def _audit_refusal(tenant_id: str, reason_class: str, project_id: Optional[str] 
         pass
 
 
+def _bind_audit(tenant_id: str):
+    """The audit-first hook of the workspace binding rules (ADR-2321 Decision 7): ``project.storage_changed`` with the outcome."""
+    def _rec(outcome: str) -> None:
+        _audit(tenant_id, "project.storage_changed", to="managed", outcome=outcome)
+    return _rec
+
+
+def _workspace(tenant_id: str) -> Path:
+    """The tenant's managed root, created and bound on first use; a foreign workspace refuses (422 ``workspace_foreign``)."""
+    try:
+        root, _outcome = registry.ensure_managed_root(tenant_id, audit=_bind_audit(tenant_id))
+    except registry.ProjectPathError as exc:
+        _audit_refusal(tenant_id, exc.reason_class)
+        raise
+    return root
+
+
 # ── plans (in memory, short-lived) ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -193,6 +210,7 @@ class PlanRecord:
     role: str = ""
     classification: str = manifest.DEFAULT_CLASS
     assistant_access: str = manifest.DEFAULT_ACCESS
+    storage: str = "own"
 
 
 _plans: dict[str, PlanRecord] = {}
@@ -385,13 +403,14 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
         raise ProjectsError(f"classification must be one of {manifest.CLASSES}")
     if acc not in manifest.ACCESS:
         raise ProjectsError(f"assistant_access must be one of {manifest.ACCESS}")
-    raw_loc = location or str(registry.projects_root(tenant_id) / pid)
     try:
-        loc = registry.validate_location(tenant_id, raw_loc)
+        raw_loc, _kind = registry.default_location(tenant_id, pid, location, audit=_bind_audit(tenant_id))
+        loc = registry.validate_location(tenant_id, str(raw_loc))
         _refuse_foreign_kb(tenant_id, loc)
-    except registry.ProjectPathError:
-        _audit_refusal(tenant_id, "path_rule", pid)
+    except registry.ProjectPathError as exc:
+        _audit_refusal(tenant_id, exc.reason_class, pid)
         raise
+    storage = registry.storage_of(tenant_id, loc)
     ctx = _context(tenant_id, pid, title, loc)
     plan = F.build_plan(cat, loc, selected, ctx, docs_mode=mode, mode="create")
     if any(o.kind == "action" and o.action in ("git_init", "git_commit") for o in plan.ops) and shutil.which("git") is None:
@@ -400,14 +419,14 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
     plugins = _check_plugins(tenant_id, plan)
     rec = PlanRecord(plan_id=secrets.token_urlsafe(18), tenant_id=tenant_id, template=tpl.id,
                      template_version=tpl.version, project_id=pid, title=title, features=selected,
-                     location=loc, docs_mode=mode, role=tpl.role, classification=cls, assistant_access=acc)
+                     location=loc, docs_mode=mode, role=tpl.role, classification=cls, assistant_access=acc, storage=storage)
     _audit(tenant_id, "project.plan_created", project_id=pid, template=f"{tpl.id}@{tpl.version}",
-           files=len(plan.writes))
+           files=len(plan.writes), storage=storage)
     _store_plan(rec)
     summary = plan.summary()
     summary["warnings"] = [*summary["warnings"], *external_warnings(tenant_id, plan.features)]
     return {"plan_id": rec.plan_id, "project_id": pid, "title": title, "template": f"{tpl.id}@{tpl.version}",
-            "docs_mode": mode, "location": str(loc), "role": tpl.role, "classification": cls,
+            "docs_mode": mode, "location": str(loc), "storage": storage, "role": tpl.role, "classification": cls,
             "assistant_access": acc, **summary, "plugins": plugins,
             "ready": not plan.conflicts and all(p["state"] == "enabled" for p in plugins),
             "expires_in_s": int(PLAN_TTL_S)}
@@ -607,9 +626,11 @@ def _create_project(tenant_id: str, plan_id: str, rec: "PlanRecord") -> dict[str
         _audit_refusal(tenant_id, "template_changed", rec.project_id)
         raise Conflict("the template changed since this plan was made - plan again", "template_changed")
     try:
+        if rec.storage == "managed":
+            _workspace(tenant_id)                                           # the workspace must still be this installation's
         loc = registry.validate_location(tenant_id, str(rec.location))      # re-validate: the disk may have changed
-    except registry.ProjectPathError:
-        _audit_refusal(tenant_id, "path_rule", rec.project_id)
+    except registry.ProjectPathError as exc:
+        _audit_refusal(tenant_id, exc.reason_class, rec.project_id)
         raise
     if registry.get(tenant_id, rec.project_id) is not None:
         raise Conflict("a project with this id already exists", "id_taken")
@@ -621,7 +642,8 @@ def _create_project(tenant_id: str, plan_id: str, rec: "PlanRecord") -> dict[str
     _require_plugins(tenant_id, plan, rec.project_id)
     if "kb" in plan.features:
         bound_engine(tenant_id)
-    base = dict(project_id=rec.project_id, template=f"{tpl.id}@{tpl.version}", files=len(plan.writes))
+    base = dict(project_id=rec.project_id, template=f"{tpl.id}@{tpl.version}", files=len(plan.writes),
+                storage=registry.storage_of(tenant_id, loc))
     _audit(tenant_id, "project.created", outcome="requested", **base)          # audit-first
     outcome = "error"
     try:
@@ -684,8 +706,8 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
             unmanaged = not (given / manifest.FILE).exists()
         loc = registry.validate_location(tenant_id, location, adopt=True, unmanaged=unmanaged)
         _refuse_foreign_kb(tenant_id, loc)
-    except registry.ProjectPathError:
-        _audit_refusal(tenant_id, "path_rule")
+    except registry.ProjectPathError as exc:
+        _audit_refusal(tenant_id, exc.reason_class)
         raise
     if (loc / manifest.FILE).exists():
         man = manifest.load(loc)
@@ -753,8 +775,8 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
         raise Conflict("the project is already in this folder (Windows does not tell folders apart by letter case)", "move_same")
     try:
         dest = registry.validate_location(tenant_id, location, ignore=registry._resolve_forgiving(root))  # create rules: absent or empty
-    except registry.ProjectPathError:
-        _audit_refusal(tenant_id, "path_rule", project_id)
+    except registry.ProjectPathError as exc:
+        _audit_refusal(tenant_id, exc.reason_class, project_id)
         raise
     if dest == root or root in dest.parents:
         raise Conflict("the target lies inside the project itself", "move_inside")
@@ -832,7 +854,8 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
         from core.projects import builtin  # noqa: PLC0415
         root = Path(str(e.get("path") or ""))
         man = builtin.manifest(tenant_id)
-        base = {"id": builtin.ID, "path": str(root), "template": "builtin@1", "added_at": None, "builtin": True}
+        base = {"id": builtin.ID, "path": str(root), "template": "builtin@1", "added_at": None, "builtin": True,
+                "storage": "builtin", "display_path": str(root)}
         if not str(e.get("path") or "") or not root.is_dir():
             return {**base, "state": "pending", "title": builtin.TITLE, "docs_mode": "plain", "features": {}, "active": [], "role": "",
                     "classification": "internal", "assistant_access": "read", "kb": False,
@@ -841,7 +864,8 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
                 "active": [f for f, on in man["features"].items() if on], "role": "", "classification": "internal",
                 "assistant_access": "read", "kb": True}
     root = Path(str(e.get("path")))
-    out: dict[str, Any] = {"id": e["id"], "path": str(root), "template": e.get("template") or "", "added_at": e.get("added_at")}
+    out: dict[str, Any] = {"id": e["id"], "path": str(root), "template": e.get("template") or "", "added_at": e.get("added_at"),
+                           "storage": e.get("storage") or "own", "display_path": _display(tenant_id, root)}
     try:
         man = manifest.load(root)
     except manifest.ManifestError as exc:
@@ -866,8 +890,33 @@ def _builtin_first(tenant_id: str) -> dict[str, Any]:
     return _summary(tenant_id, builtin.entry(tenant_id))
 
 
+def _display(tenant_id: str, p: Path) -> str:
+    from core.paths import user_dirs  # noqa: PLC0415
+    try:
+        return user_dirs.display_path(p, managed_root=registry.known_managed_root(tenant_id), home=Path.home())
+    except (OSError, ValueError, RuntimeError):
+        return str(p)
+
+
+def location_settings(tenant_id: str) -> dict[str, Any]:
+    """Where new projects go and where the workspace is (ADR-2321 Decision 16). The workspace is created and bound here on first
+    read (a lost ``settings.json`` recovers its key from the marker); a foreign workspace is reported, never used."""
+    workspace = "ok"
+    try:
+        _workspace(tenant_id)
+    except registry.WorkspaceForeign:
+        workspace = "foreign"
+    except (registry.ProjectPathError, OSError):
+        workspace = "unavailable"
+    st = registry.settings(tenant_id)
+    return {"default_storage": st["default_storage"], "managed_root": st["managed_root"],
+            "projects_root": str(registry.projects_root(tenant_id)), "projects_root_set": st["projects_root"] is not None,
+            "workspace": workspace}
+
+
 def list_projects(tenant_id: str) -> dict[str, Any]:
-    return {"projects_root": str(registry.projects_root(tenant_id)),
+    loc = location_settings(tenant_id)
+    return {**loc,
             "projects": [_builtin_first(tenant_id), *[_summary(tenant_id, e) for e in registry.entries(tenant_id)]]}
 
 

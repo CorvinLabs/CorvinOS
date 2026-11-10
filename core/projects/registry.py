@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from core.paths import user_dirs
 from core.paths.tenant import corvin_home, tenant_home
 from core.tenants import validate_tenant_id
 
@@ -45,7 +46,18 @@ MAX_PROJECTS = 200
 
 
 class ProjectPathError(ValueError):
-    """A client-supplied location is not allowed (-> HTTP 422); the message names the rule, never a path."""
+    """A client-supplied location is not allowed (-> HTTP 422); the message names the rule, never a path. ``reason_class`` is the
+    class of ADR-2321 Decision 14 the refusal belongs to (the HTTP answer and ``project.blocked`` carry it); ``warnings`` are
+    verdict notes that do not refuse."""
+
+    def __init__(self, message: str = "", reason_class: str = "path_rule", warnings: Optional[list[str]] = None):
+        super().__init__(message)
+        self.reason_class = reason_class
+        self.warnings = list(warnings or [])
+
+
+#: ADR-2321 Decision 15 - the one sentence of binding rule (c)/(d)
+WORKSPACE_FOREIGN = "This workspace belongs to another Corvin installation."
 
 
 class RegistryError(RuntimeError):
@@ -142,6 +154,7 @@ def load(tenant_id: str) -> dict[str, Any]:
 
 
 def _save(tenant_id: str, data: dict[str, Any]) -> None:
+    data["projects"] = _heal_storage(tenant_id, [e for e in data.get("projects", []) if isinstance(e, dict)])
     p = registry_path(tenant_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -161,13 +174,254 @@ def settings_path(tenant_id: str) -> Path:
     return registry_path(tenant_id).with_name("settings.json")
 
 
-def projects_root(tenant_id: str) -> Path:
-    """The tenant's allowlisted parent of all project directories: the operator's setting, else
-    ``~/projects`` (ADR-2315 plan E7: one root per tenant, an operator setting)."""
+SETTINGS_SCHEMA = 2
+STORAGE_KINDS = ("managed", "root")
+
+
+def _read_settings_raw(tenant_id: str) -> dict[str, Any]:
+    """settings.json as stored (schema 1, 2 or none); an unreadable file reads as empty (the setting is re-derived, never lost:
+    the workspace key comes back from the marker by binding rule (e))."""
     try:
-        raw = _read_json(settings_path(tenant_id)).get("projects_root")
-    except (OSError, ValueError, AttributeError):
-        raw = None
+        data = _read_json(settings_path(tenant_id))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _stored_root(raw: dict[str, Any]) -> Optional[str]:
+    v = raw.get("projects_root")
+    return v if isinstance(v, str) and v.strip() else None
+
+
+def _default_storage_of(raw: dict[str, Any]) -> str:
+    """Schema 2 reads its stored value; schema 1 (or none): ``root`` when a projects root is set, else ``managed``
+    (ADR-2321 Decision 8)."""
+    v = raw.get("default_storage")
+    if v in STORAGE_KINDS:
+        return v
+    return "root" if _stored_root(raw) else "managed"
+
+
+def _write_settings_locked(tenant_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    """Read-merge-write; the caller holds ``_lock(tenant_id)``. Unknown keys are kept; ``default_storage`` is fixed at the first
+    upgrade by the read rule, so a schema-1 file with a root stays ``root`` and a fresh tenant becomes ``managed``."""
+    cur = _read_settings_raw(tenant_id)
+    merged = {**cur, **changes}
+    if "default_storage" not in changes and cur.get("default_storage") not in STORAGE_KINDS:
+        merged["default_storage"] = _default_storage_of(merged)
+    if merged.get("default_storage") == "root" and not _stored_root(merged):
+        raise RegistryError("root_required")
+    merged["schema"] = SETTINGS_SCHEMA
+    p = settings_path(tenant_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(p.parent, 0o700)
+    except OSError:
+        pass
+    atomic_write(p, (json.dumps(merged, indent=1, sort_keys=True) + "\n").encode("utf-8"), mode=0o600, owned=True)
+    return merged
+
+
+def write_settings(tenant_id: str, **changes: Any) -> dict[str, Any]:
+    """The ONE writer of ``settings.json`` (ADR-2321 Decision 8, REVIEW-0061 M16): inside the registry lock, read the current file,
+    merge ``changes``, keep unknown keys, set ``schema: 2``, write it atomically 0o600."""
+    validate_tenant_id(tenant_id)
+    with _lock(tenant_id):
+        return _write_settings_locked(tenant_id, changes)
+
+
+def settings(tenant_id: str) -> dict[str, Any]:
+    """The tenant's location settings as the console shows them: ``default_storage``, ``projects_root`` (None when unset),
+    ``workspace_key`` and ``managed_root`` (None until the workspace exists), ``schema`` as stored (1 for a legacy file)."""
+    validate_tenant_id(tenant_id)
+    raw = _read_settings_raw(tenant_id)
+    key = raw.get("workspace_key") if isinstance(raw.get("workspace_key"), str) and user_dirs.WORKSPACE_KEY_RE.match(
+        raw.get("workspace_key") or "") else None
+    return {**raw, "schema": raw.get("schema", 1) if raw else None, "default_storage": _default_storage_of(raw),
+            "projects_root": _stored_root(raw), "workspace_key": key,
+            "managed_root": str(user_dirs.managed_projects_root(key)) if key else None}
+
+
+def set_default_storage(tenant_id: str, kind: str, projects_root: Optional[str] = None) -> dict[str, Any]:
+    """Switch where NEW projects go. ``root`` needs a usable projects root (given or stored); nothing is moved."""
+    if kind not in STORAGE_KINDS:
+        raise RegistryError("default_storage must be managed or root")
+    if projects_root is not None:
+        set_projects_root(tenant_id, projects_root)
+    with _lock(tenant_id):
+        cur = _read_settings_raw(tenant_id)
+        if kind == "root" and not _stored_root(cur):
+            raise RegistryError("root_required")
+        return _write_settings_locked(tenant_id, {"default_storage": kind})
+
+
+# ── the managed workspace (ADR-2321 Decision 7) ──────────────────────────────────────────────
+
+class WorkspaceForeign(ProjectPathError):
+    """Binding rule (c)/(d): the workspace marker names another installation (a home that still exists) or another tenant/key."""
+
+    def __init__(self) -> None:
+        super().__init__(WORKSPACE_FOREIGN, "workspace_foreign")
+
+
+MARKER = "workspace.json"
+
+
+def _home_str() -> str:
+    return str(_resolve_forgiving(corvin_home()))
+
+
+def _read_marker(d: Path) -> Optional[dict[str, Any]]:
+    m = d / MARKER
+    if is_link(m):
+        return None
+    try:
+        data = _read_json(m)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_marker(d: Path, tenant_id: str, key: str) -> None:
+    atomic_write(d / MARKER, (json.dumps({"schema": 1, "tenant": tenant_id, "workspace_key": key, "corvin_home": _home_str()},
+                                         indent=1, sort_keys=True) + "\n").encode("utf-8"), mode=0o600, owned=True)
+
+
+def _private_dir(d: Path) -> None:
+    """Create *d* 0o700 (POSIX) and re-apply the mode when it is wider; a link is refused."""
+    if is_link(d):
+        raise ProjectPathError("This is a link; choose the real folder.", "symlink")
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if is_link(d):
+        raise ProjectPathError("This is a link; choose the real folder.", "symlink")
+    if os.name != "nt":
+        try:
+            if os.stat(d).st_mode & 0o077:
+                os.chmod(d, 0o700)
+        except OSError:
+            pass
+
+
+def _recover_key(tenant_id: str, parent: Path) -> Optional[str]:
+    """Binding rule (e): a direct child of the managed parent whose marker names this tenant AND this resolved home."""
+    home = _home_str()
+    try:
+        children = sorted((e for e in os.scandir(parent) if e.is_dir(follow_symlinks=False)), key=lambda e: e.name)
+    except OSError:
+        return None
+    for e in children:
+        if not user_dirs.WORKSPACE_KEY_RE.match(e.name):
+            continue
+        m = _read_marker(Path(e.path))
+        if m and m.get("tenant") == tenant_id and m.get("workspace_key") == e.name and m.get("corvin_home") == home:
+            return e.name
+    return None
+
+
+def ensure_managed_root(tenant_id: str, *, audit=None) -> tuple[Path, Optional[str]]:
+    """The tenant's managed workspace, created when absent, bound by the rules of ADR-2321 Decision 7. Returns
+    ``(managed_root, outcome)``; ``outcome`` is ``rebound``/``recovered`` when a binding rule changed something, else None.
+    ``audit(outcome)`` is called BEFORE that change is written (audit-first); if it raises, nothing is written.
+    Raises :class:`WorkspaceForeign` for rules (c)/(d)."""
+    validate_tenant_id(tenant_id)
+    parent = Path(str(user_dirs.managed_parent()))
+    with _lock(tenant_id):
+        _private_dir(parent)
+        raw = _read_settings_raw(tenant_id)
+        key = raw.get("workspace_key") if isinstance(raw.get("workspace_key"), str) else None
+        outcome: Optional[str] = None
+        if key is not None and not user_dirs.WORKSPACE_KEY_RE.match(key):
+            key = None
+        if key is None:
+            key = _recover_key(tenant_id, parent)
+            if key is not None:
+                outcome = "recovered"
+            else:
+                key = user_dirs.new_workspace_key()
+        root = Path(str(user_dirs.managed_projects_root(key)))
+        marker = _read_marker(root) if root.is_dir() and not is_link(root) else None
+        if marker is not None:
+            if marker.get("tenant") != tenant_id or marker.get("workspace_key") != key:
+                raise WorkspaceForeign()                                         # (d)
+            recorded = marker.get("corvin_home")
+            if recorded != _home_str():
+                if isinstance(recorded, str) and recorded and os.path.exists(recorded):
+                    raise WorkspaceForeign()                                     # (c) a copy of another installation
+                outcome = "rebound"                                              # (b) the home was moved
+        if outcome and audit is not None:
+            audit(outcome)
+        _private_dir(root)
+        if marker is None or outcome == "rebound":
+            _write_marker(root, tenant_id, key)
+        if raw.get("workspace_key") != key or raw.get("managed_root") != str(root) or raw.get("schema") != SETTINGS_SCHEMA:
+            _write_settings_locked(tenant_id, {"workspace_key": key, "managed_root": str(root)})
+    return root, outcome
+
+
+def rekey_workspace(tenant_id: str, *, audit=None) -> Path:
+    """Start a new workspace for this installation (binding rule (c), the Settings action). Audit-first via ``audit("rekeyed")``.
+    The old workspace and every entry pointing into it stay as they are (they read ``own``)."""
+    validate_tenant_id(tenant_id)
+    parent = Path(str(user_dirs.managed_parent()))
+    with _lock(tenant_id):
+        _private_dir(parent)
+        key = user_dirs.new_workspace_key()
+        root = Path(str(user_dirs.managed_projects_root(key)))
+        if audit is not None:
+            audit("rekeyed")
+        _private_dir(root)
+        _write_marker(root, tenant_id, key)
+        _write_settings_locked(tenant_id, {"workspace_key": key, "managed_root": str(root)})
+    return root
+
+
+def workspace_state(tenant_id: str) -> str:
+    """``ok`` | ``foreign`` | ``none`` (no key yet) - read-only, for the list and the doctor."""
+    st = settings(tenant_id)
+    if not st["workspace_key"]:
+        return "none"
+    root = Path(st["managed_root"])
+    m = _read_marker(root) if root.is_dir() else None
+    if m is None:
+        return "ok"
+    if m.get("tenant") != tenant_id or m.get("workspace_key") != st["workspace_key"]:
+        return "foreign"
+    rec = m.get("corvin_home")
+    if rec != _home_str() and isinstance(rec, str) and rec and os.path.exists(rec):
+        return "foreign"
+    return "ok"
+
+
+def known_managed_root(tenant_id: str) -> Optional[Path]:
+    """The managed root when the tenant has a key (never creates anything)."""
+    mr = settings(tenant_id)["managed_root"]
+    return Path(mr) if mr else None
+
+
+def storage_of(tenant_id: str, path: "Path | str", *, managed: Optional[Path] = None) -> str:
+    """``managed`` when the resolved path lies directly in the tenant's managed root, else ``own`` (ADR-2321 Decision 9)."""
+    mr = managed if managed is not None else known_managed_root(tenant_id)
+    if mr is None:
+        return "own"
+    r = _resolve_forgiving(Path(str(path)))
+    return "managed" if r.parent == _resolve_forgiving(mr) else "own"
+
+
+def default_location(tenant_id: str, project_id: str, explicit: Optional[str] = None, *, audit=None) -> tuple[Path, str]:
+    """ADR-2321 Decision 3, first match wins: (a) an explicit folder from the client; (b) ``default_storage: root`` ->
+    ``<projects_root>/<id>``; (c) ``managed`` (the shipped default) -> ``<managed_root>/<id>``. Returns ``(path, storage)``."""
+    if explicit:
+        return Path(explicit), "own"
+    if settings(tenant_id)["default_storage"] == "root":
+        return projects_root(tenant_id) / project_id, "own"
+    root, _o = ensure_managed_root(tenant_id, audit=audit)
+    return root / project_id, "managed"
+
+
+def projects_root(tenant_id: str) -> Path:
+    """The tenant's own projects folder: the operator's setting, else ``~/projects`` (ADR-2315 plan E7). Where NEW projects go is
+    :func:`default_location`; this folder is one of the two places :func:`rebuild` looks in."""
+    raw = _stored_root(_read_settings_raw(tenant_id))
     if isinstance(raw, str) and raw.strip():
         try:
             raw = normalize_input(raw, "the projects folder")      # a value saved before normalisation (\\?\C:\...) still compares right
@@ -218,14 +472,7 @@ def set_projects_root(tenant_id: str, path: str) -> Path:
         os.chmod(root, 0o700) if not any(root.iterdir()) else None
     except OSError:
         pass
-    p = settings_path(tenant_id)
-    with _lock(tenant_id):
-        p.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(p.parent, 0o700)
-        except OSError:
-            pass
-        atomic_write(p, (json.dumps({"projects_root": str(root)}, indent=1) + "\n").encode("utf-8"), mode=0o600)
+    write_settings(tenant_id, projects_root=str(root))        # merges: default_storage, workspace_key, managed_root stay (M16)
     return root
 
 
@@ -310,6 +557,10 @@ def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanage
     _check_windows_names(given, "the location")
     resolved = _resolve_forgiving(given)
     root = _resolve_forgiving(projects_root(tenant_id))
+    base_given = projects_root(tenant_id)
+    mr = known_managed_root(tenant_id)
+    if mr is not None and resolved.parent == _resolve_forgiving(mr):
+        root, base_given = _resolve_forgiving(mr), mr                    # <managed_root>/<id> (ADR-2321 Decision 4 (a))
     if resolved == root or root not in resolved.parents:
         raise ProjectPathError("the location must be inside this tenant's projects root")
     home = _resolve_forgiving(corvin_home())
@@ -323,7 +574,7 @@ def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanage
     # no symlink anywhere between the projects root and the target, judged on the path AS GIVEN
     # (resolve() would silently follow it to a place that looks harmless)
     cur = Path(os.path.abspath(given))
-    base = Path(os.path.abspath(projects_root(tenant_id)))
+    base = Path(os.path.abspath(base_given))
     try:
         parts = cur.relative_to(base).parts
     except ValueError:
@@ -362,8 +613,18 @@ def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanage
     return resolved
 
 
+def _heal_storage(tenant_id: str, lst: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """An entry without ``storage`` gets ``managed`` when its resolved path lies in the managed root, else ``own`` (Decision 9)."""
+    if any("storage" not in e for e in lst):
+        mr = known_managed_root(tenant_id)
+        for e in lst:
+            if "storage" not in e and isinstance(e.get("path"), str):
+                e["storage"] = storage_of(tenant_id, e["path"], managed=mr) if mr is not None else "own"
+    return lst
+
+
 def entries(tenant_id: str) -> list[dict[str, Any]]:
-    return [e for e in load(tenant_id).get("projects", []) if isinstance(e, dict)]
+    return _heal_storage(tenant_id, [e for e in load(tenant_id).get("projects", []) if isinstance(e, dict)])
 
 
 def get(tenant_id: str, project_id: str) -> Optional[dict[str, Any]]:
@@ -389,7 +650,7 @@ def register(tenant_id: str, project_id: str, path: Path, template: Optional[str
         if len(lst) >= MAX_PROJECTS:
             raise RegistryError(f"at most {MAX_PROJECTS} projects per tenant")
         entry = {"id": project_id, "path": str(resolved), "template": template or "",
-                 "added_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                 "added_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "storage": storage_of(tenant_id, resolved)}
         data["projects"] = lst + [entry]
         data.setdefault("schema", SCHEMA)
         _save(tenant_id, data)
@@ -409,15 +670,17 @@ def unregister(tenant_id: str, project_id: str) -> bool:
 
 
 def rebuild(tenant_id: str) -> dict[str, Any]:
-    """Restore the index from the directories (ADR-2315 Decision 1): every direct child of the
-    projects root whose ``project.yaml`` names THIS tenant is registered if it is not yet. Never
-    removes an entry; never touches a directory. Returns ``{added, kept, skipped}``."""
-    root = projects_root(tenant_id)
+    """Restore the index from the directories (ADR-2315 Decision 1, ADR-2321 Decision 9): every direct child of the managed root
+    AND of the projects root whose ``project.yaml`` names THIS tenant is registered if it is not yet. An ``own`` project elsewhere
+    is re-found only by adopt. Never removes an entry; never touches a directory. Returns ``{added, kept, skipped}``."""
     added, skipped = [], []
-    try:
-        children = sorted(d for d in root.iterdir() if d.is_dir() and not is_link(d))
-    except OSError:
-        return {"added": [], "kept": len(entries(tenant_id)), "skipped": []}
+    children: list[Path] = []
+    roots = [r for r in (known_managed_root(tenant_id), projects_root(tenant_id)) if r is not None]
+    for root in roots:
+        try:
+            children += sorted(d for d in root.iterdir() if d.is_dir() and not is_link(d) and not d.name.startswith("."))
+        except OSError:
+            continue
     for d in children:
         try:
             man = manifest.load(d)
@@ -450,6 +713,7 @@ def relocate(tenant_id: str, project_id: str, new_path: Path) -> dict[str, Any]:
         for e in lst:
             if e.get("id") == project_id:
                 e["path"] = str(resolved)
+                e["storage"] = storage_of(tenant_id, resolved)       # moved into/out of the managed root (ADR-2321 Decision 11)
                 hit = e
         if hit is None:
             raise RegistryError("no such project")

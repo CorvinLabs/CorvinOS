@@ -58,10 +58,41 @@ pass its 32-char rule), `title`, `tenant`, `template` (`<id>@<n>`), `docs_mode` 
 default `nested`, see ADR-2315 amendment), `features` (id -> bool), optional `videos`, `directory.peers`.
 No secret and no machine-local path. Unknown top-level keys are kept on rewrite.
 
-The registry holds `{"schema": 1, "projects": [{id, path, template, added_at}]}` and is rebuilt from
+The registry holds `{"schema": 1, "projects": [{id, path, template, added_at, storage}]}` and is rebuilt from
 the directories by `registry.rebuild(tenant)` (adds, never removes, never touches a directory). The
 operator's `projects_root` lives in a SEPARATE file so that deleting the index never loses the place
 `rebuild` has to look in. `corvin_console.kb_projection.project_kbs` reads this same shape.
+
+**Storage kinds (ADR-2321 Decisions 1, 3, 9).** Every entry has `storage`: `managed` (its folder lies directly
+in the tenant's managed root) or `own` (anywhere else; every pre-ADR-2321 project, e.g. `~/projects/x`, reads
+`own` and is never moved or touched). The built-in `corvin` tile is `builtin`. The kind is derived from the path
+(`registry.storage_of`), healed on read for an entry without it and written back on the next save; `relocate`
+recomputes it. A NEW project's place, first match wins (`registry.default_location`): an explicit folder from
+the client; `default_storage: root` -> `<projects_root>/<id>`; `default_storage: managed` (the shipped default)
+-> `<managed_root>/<id>`. `rebuild` scans the managed root AND the projects root (direct children, dot-named
+ones skipped, `project.yaml` naming this tenant); an `own` project elsewhere is re-found only by adopt.
+
+**Settings, schema 2 (ADR-2321 Decision 8).** `<tenant_home>/projects/settings.json` (0o600):
+`{"schema": 2, "default_storage": "managed"|"root", "projects_root"?, "managed_root", "workspace_key"}`.
+A schema-1 file (`{"projects_root": …}`) or none reads `default_storage = root` when a root is set, else
+`managed`; the value is fixed at the first write, so a tenant that had set a root keeps creating there.
+`registry.write_settings(tenant, **changes)` is the ONE writer: read-merge-write under the registry lock,
+unknown keys kept, `default_storage: root` without a root refused (`root_required`). `set_projects_root`
+merges through it, so `PUT /projects/root` keeps `default_storage`, `managed_root` and `workspace_key`.
+A tenant without `settings.json` (the default `~/projects` was never set explicitly) reads `managed`: its new
+projects go to the workspace from now on, its existing ones stay where they are.
+
+**Workspace binding (ADR-2321 Decision 7).** `registry.ensure_managed_root` creates the managed parent and the
+key directory 0o700 (re-applied when wider; a link is refused), writes the key into `settings.json` and the
+marker `workspace.json` `{"schema": 1, "tenant", "workspace_key", "corvin_home": "<resolved>"}`. Rules:
+(a) marker names this tenant, key and home -> used; (b) another home that no longer exists (a moved
+`CORVIN_HOME`) -> the marker is rewritten, `project.storage_changed outcome=rebound`; (c) another home that
+still exists (a copied install) -> `workspace_foreign`, 422 "This workspace belongs to another Corvin
+installation.", nothing written; (d) another tenant or key -> `workspace_foreign`; (e) no key in
+`settings.json` -> the managed parent's children are scanned for a marker naming this tenant AND this home
+(`outcome=recovered`), else a new key. Every binding outcome is audited BEFORE the write. `GET /projects` binds
+the workspace on read and reports `workspace: ok|foreign|unavailable`. `registry.rekey_workspace` starts a new
+workspace (`outcome=rekeyed`; the Settings action, T-0387/T-0408).
 
 ## Locations a client may name (`registry.validate_location`)
 
@@ -117,9 +148,9 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 
 | Method, path | Purpose |
 |---|---|
-| `GET /` | the tenant's projects (state `ok`/`missing`/`invalid`, active features) + `projects_root` |
+| `GET /` | the tenant's projects (state `ok`/`missing`/`invalid`, active features, `storage` `managed`/`own`/`builtin`, `display_path` `Corvin workspace › <id>` / `~/…` / OS form) + `default_storage`, `managed_root`, `projects_root`, `projects_root_set`, `workspace` (`ok`/`foreign`/`unavailable`); binds the managed workspace on read (ADR-2321) |
 | `GET /templates` | templates, features (requires/suggests), the tenant plugins each needs and their state; `available:false` + reason when the template plugin is not enabled for the tenant |
-| `POST /plan` | `{template, title, [project_id, location, features, docs_mode]}`: NO write; returns the file list with owners, `pulled` dependencies, warnings, conflicts, plugin states, `plan_id` (15 min, in memory); audit `project.plan_created` |
+| `POST /plan` | `{template, title, [project_id, location, features, docs_mode]}`: no project write; without `location` the place follows `default_storage` (`<managed_root>/<id>` or `<projects_root>/<id>`); returns `location`, `storage`, the file list with owners, `pulled` dependencies, warnings, conflicts, plugin states, `plan_id` (15 min, in memory); audit `project.plan_created`; 422 `workspace_foreign` when the workspace belongs to another installation |
 | `POST /` | `{plan_id}`: re-validates location, catalogue version and plugins, then writes `project.yaml`, registers, applies, seeds the KB; 201 |
 | `POST /adopt` | `{location}`: registers an existing directory whose `project.yaml` names this tenant; writes nothing in it |
 | `GET /{id}`, `GET /{id}/health` | detail with the feature catalogue (dependants, plugin states, suggestions); a checklist of real checks (manifest, features closed, generated files in sync, tenant plugins, `kb check`) - never a score |
@@ -143,8 +174,12 @@ whose health shows what is missing. A project can never enable a tenant plugin: 
 **Audit (audit-first, fail-closed).** `project.plan_created`, `project.created` (`outcome`
 `requested` before, `applied`/`error` after), `project.adopted`, `project.opened`,
 `project.feature_toggled` (one per feature, `to` on/off), `project.repaired`,
-`project.registry_removed`, `project.blocked` (a refusal; best effort). Allowlist: `project_id`,
-`feature`, `to`, `template`, `files` (count), `reason_class`, `outcome`, `tenant_id` - never a path.
+`project.registry_removed`, `project.blocked` (a refusal; best effort; its `reason_class` is the class of the
+refusal), `project.storage_changed` (WARNING; `to` managed|root, `outcome`
+requested|applied|rebound|recovered|rekeyed|error - never a path or a workspace key). Allowlist: `project_id`,
+`feature`, `to`, `template`, `files` (count), `reason_class`, `outcome`, `tenant_id`, `storage` (managed|own on
+`project.plan_created`/`project.created`) - never a path. A `ProjectPathError` answers 422
+`{message, reason_class}` with the exception's own class.
 `project.feature_files_removed` and `project.video_created` are registered with their tasks.
 
 ## Console panel (T-0357)

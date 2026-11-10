@@ -80,3 +80,40 @@ def ctx_for(pid: str, root: Path, tenant: str = "_default") -> dict[str, str]:
     return {"project.id": pid, "project.title": pid.title(), "project.tenant": tenant,
             "paths.python": "/usr/bin/python3", "paths.repo": "/opt/corvinos", "paths.corvin_home": "/opt/corvin_home",
             "paths.docs": str(root / "docs"), "paths.kb_engine": "/opt/knowledge/scripts/kb.py"}
+
+
+_HOME_KEYS = ("HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "XDG_DATA_HOME")
+
+
+def home_env_for(tmp: Path) -> dict[str, str]:
+    """ADR-2321 Decision 10a / REVIEW-0062 N1: the test's temp dir is the OWN home, so the location rule judges a projects root
+    under it like any folder in a home (no test-only mode in the rule). On every platform ``XDG_DATA_HOME``; on Windows also the
+    profile and the two AppData variables."""
+    tmp = Path(tmp)
+    env = {"HOME": str(tmp), "XDG_DATA_HOME": str(tmp / "data")}
+    if os.name == "nt":
+        env.update(USERPROFILE=str(tmp), LOCALAPPDATA=str(tmp / "AppData" / "Local"),
+                   APPDATA=str(tmp / "AppData" / "Roaming"))
+    return env
+
+
+class _HomeEnv:
+    def __init__(self, tmp: Path):
+        self.env = home_env_for(tmp)
+        self.saved: dict[str, str | None] = {}
+
+    def __enter__(self):
+        self.saved = {k: os.environ.get(k) for k in _HOME_KEYS}
+        os.environ.update(self.env)
+        return self
+
+    def __exit__(self, *exc):
+        for k, v in self.saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        return False
+
+
+def sandbox_home_env(tmp: Path) -> _HomeEnv:
+    """Context manager: point HOME (USERPROFILE, LOCALAPPDATA, APPDATA on Windows) and XDG_DATA_HOME into *tmp*; restored on exit.
+    Every test that builds its own projects sandbox with ``tempfile.mkdtemp()`` instead of :class:`Sandbox` uses it."""
+    return _HomeEnv(tmp)

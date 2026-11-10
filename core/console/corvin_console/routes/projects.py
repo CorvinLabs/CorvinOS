@@ -111,7 +111,10 @@ def _call(fn, *args, **kwargs) -> Any:
     except svc.ProjectsError as exc:
         raise HTTPException(status_code=exc.status, detail={"message": str(exc), "reason_class": exc.reason_class})
     except registry.ProjectPathError as exc:
-        raise HTTPException(status_code=422, detail={"message": str(exc), "reason_class": "path_rule"})
+        detail = {"message": str(exc), "reason_class": getattr(exc, "reason_class", "path_rule")}
+        if getattr(exc, "warnings", None):
+            detail["warnings"] = list(exc.warnings)
+        raise HTTPException(status_code=422, detail=detail)
     except registry.RegistryError as exc:
         raise HTTPException(status_code=409, detail={"message": str(exc), "reason_class": "registry"})
     except (F.FragmentError, manifest.ManifestError, UnsafePath) as exc:
