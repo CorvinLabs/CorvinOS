@@ -168,7 +168,16 @@ def _isolated_bridge_outbox(monkeypatch):
 @pytest.fixture(autouse=True)
 def _live_state_tripwire(request: pytest.FixtureRequest):
     before = _protected_state()
+    data_before = _data_dir_entries()
     yield
+    data_after = _data_dir_entries() if data_before is not None else None
+    if data_before is not None and data_after is not None:
+        added = {d: sorted(data_after.get(d, frozenset()) - names) for d, names in data_before.items()}
+        added.update({d: sorted(names) for d, names in data_after.items() if d not in data_before})
+        added = {d: n for d, n in added.items() if n}
+        if added:
+            pytest.fail("this test wrote into the real Corvin workspace (ADR-2321; sandbox XDG_DATA_HOME / LOCALAPPDATA / HOME "
+                        "instead):\n  " + "\n  ".join(f"{d}: new {n}" for d, n in added.items()), pytrace=False)
     if before is None:
         return
     after = _protected_state()
@@ -289,8 +298,11 @@ _REAL_VOICE_CONFIG = _REAL_CONFIG / "corvin-voice"
 #: checkout is the install (measured on a clean worktree run: those files appeared
 #: during the gateway, top-level and plugin groups). The runner exports it for every
 #: suite since 55b2d42ec; pytest did not.
+#: ``XDG_DATA_HOME`` (and on Windows ``LOCALAPPDATA``/``APPDATA``) since T-0383 (ADR-2321, REVIEW-0062 N5): the managed
+#: project workspace lives in the platform data directory (``core.paths.user_dirs``), outside ``CORVIN_HOME``, so a test
+#: that creates a project with the default storage would otherwise write into the operator's REAL workspace.
 _ISOLATED_KEYS = ("CORVIN_HOME", "XDG_CONFIG_HOME", "CORVIN_AUDIT_ANCHOR_KEY", "CORVIN_PLUGIN_SLOT_DIR",
-                  "CORVIN_PROJECT_ROOT")
+                  "CORVIN_PROJECT_ROOT", "XDG_DATA_HOME") + (("LOCALAPPDATA", "APPDATA") if _sys.platform == "win32" else ())
 _REAL_PLUGIN_SLOT = _REPO_ROOT / "corvin_operator" / "skill-forge" / "skills" / "dyn"
 
 # The console/gateway DNS-rebinding guard (corvin_console/host_guard.py, review SRF-1)
@@ -392,6 +404,46 @@ def _is_tmp_path(p: Path) -> bool:
 _PROTECTED_HOMES = _discover_protected_homes()
 
 
+def _discover_real_data_projects() -> "tuple[Path, ...]":
+    """The REAL ``<data dir>/corvin/projects`` of every platform form (ADR-2321 Decision 7), resolved ONCE before any env
+    change, like the protected homes. ``CORVIN_TEST_REAL_DATA_DIRS`` adds more (the tripwire's own test plants one in tmp)."""
+    homes = {_REAL_HOME}
+    try:
+        import pwd as _pwd  # noqa: PLC0415
+        homes.add(Path(_pwd.getpwuid(_os.getuid()).pw_dir))
+    except Exception:  # noqa: BLE001 - no pwd on Windows
+        pass
+    cands: "list[Path]" = []
+    for h in homes:
+        cands += [h / ".local" / "share" / "corvin" / "projects",
+                  h / "Library" / "Application Support" / "Corvin" / "projects",
+                  h / "AppData" / "Local" / "Corvin" / "projects"]
+    for key, sub in (("XDG_DATA_HOME", ("corvin", "projects")), ("LOCALAPPDATA", ("Corvin", "projects"))):
+        v = _os.environ.get(key, "").strip()
+        if v and not _is_tmp_path(_norm(v)):
+            cands.append(_norm(v).joinpath(*sub))
+    for extra in _os.environ.get("CORVIN_TEST_REAL_DATA_DIRS", "").split(_os.pathsep):
+        if extra.strip():
+            cands.append(_norm(extra.strip()))
+    return tuple(dict.fromkeys(_norm(c) for c in cands))
+
+
+_REAL_DATA_PROJECTS = _discover_real_data_projects()
+_REAL_APPDATA = tuple(_norm(v) for v in (_os.environ.get("APPDATA", "").strip(),) if v and not _is_tmp_path(_norm(v)))
+
+
+def _data_dir_entries() -> "dict[str, frozenset[str]] | None":
+    """Direct entries of each real workspace parent (read-only). None when a listing cannot be taken."""
+    out: "dict[str, frozenset[str]]" = {}
+    try:
+        for d in _REAL_DATA_PROJECTS:
+            if d.is_dir():
+                out[str(d)] = frozenset(q.name for q in d.iterdir())
+    except Exception:  # noqa: BLE001 - same contract as _protected_state: a guard that cannot look stands down
+        return None
+    return out
+
+
 # String forms for the per-test hot path: ``Path.is_relative_to`` / ``resolve``
 # cost ~15 us per call and the guard makes hundreds per test.
 _PROTECTED_HOME_STRS = tuple(str(h) for h in _PROTECTED_HOMES)
@@ -427,6 +479,12 @@ def _unsafe(key: str, value: "str | None") -> bool:
         return _under(p, _REPO_ROOT) or p == _REPO_ROOT  # the checkout IS the live install
     if key == "XDG_CONFIG_HOME":
         return p == _REAL_CONFIG or _under(_REAL_CONFIG, p)
+    if key in ("XDG_DATA_HOME", "LOCALAPPDATA"):
+        sub = ("corvin", "projects") if key == "XDG_DATA_HOME" else ("Corvin", "projects")
+        mine = p.joinpath(*sub)
+        return any(mine == rd or _under(rd, p) for rd in _REAL_DATA_PROJECTS)
+    if key == "APPDATA":
+        return any(p == a or _under(a, p) for a in _REAL_APPDATA) or any(_under(rd, p) for rd in _REAL_DATA_PROJECTS)
     if key == "CORVIN_AUDIT_ANCHOR_KEY":
         return _under(p, _REAL_VOICE_CONFIG)
     return False
@@ -445,7 +503,11 @@ def _install_session_sandbox() -> "tuple[Path, bool, dict[str, str]]":
         "CORVIN_AUDIT_ANCHOR_KEY": str(sandbox / "anchor" / "audit_anchor.key"),
         "CORVIN_PLUGIN_SLOT_DIR": str(sandbox / "plugin_slot"),
         "CORVIN_PROJECT_ROOT": str(sandbox / "project_root"),
+        "XDG_DATA_HOME": str(sandbox / "data"),
     }
+    if _sys.platform == "win32":
+        defaults["LOCALAPPDATA"] = str(sandbox / "AppData" / "Local")
+        defaults["APPDATA"] = str(sandbox / "AppData" / "Roaming")
     for key, default in defaults.items():
         if _unsafe(key, _os.environ.get(key)):
             _os.environ[key] = default

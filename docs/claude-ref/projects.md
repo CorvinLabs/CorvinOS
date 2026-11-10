@@ -20,6 +20,36 @@ template catalogue is the first-party plugin `project_templates` (T-0354, T-0356
 | Registry file | `<tenant_home>/projects/registry.json` (0o600, dir 0o700) |
 | Operator's projects root | `<tenant_home>/projects/settings.json` (`projects_root`, default `~/projects`) |
 | Proof | `tests/e2e/test_projects_registry_e2e.py`, `test_projects_fragments_e2e.py`, `test_projects_api_e2e.py`, `test_project_templates_catalogue_e2e.py` (the REAL catalogue) |
+| Platform data directory, managed workspace path, user places, drives, the lists the location rule judges against | `core/paths/user_dirs.py` (ADR-2321 Decision 7, stdlib only, Python 3.11-safe) |
+
+### The managed workspace (ADR-2321 Decision 7)
+
+A tenant's *Corvin workspace* lives in the platform's per-user data directory, OUTSIDE `CORVIN_HOME`:
+
+| Platform | `managed_root` |
+|---|---|
+| Linux | `$XDG_DATA_HOME/corvin/projects/<key>/` (default `~/.local/share/corvin/projects/<key>/`) |
+| macOS | `~/Library/Application Support/Corvin/projects/<key>/` |
+| Windows | `%LOCALAPPDATA%\Corvin\projects\<key>\` |
+
+`user_dirs.managed_parent()` is `<data>/corvin/projects/`; `<key>` is an opaque `w-<10 lowercase hex>`
+(`user_dirs.new_workspace_key()`, `secrets.token_hex(5)`). The key rule: never a tenant id, never a word the
+path gate's `_looks_protected` matches, never derived from where `CORVIN_HOME` lies; it is stored in the tenant's
+`settings.json` (`workspace_key`) and in the workspace marker. `user_dirs.managed_projects_root(key)` refuses
+anything that is not `w-<10 hex>`. The module also answers the lists the location rule uses:
+`system_prefixes()` (Decision 10 check 6; `/opt`, `/srv`, `/media` deliberately absent),
+`is_under_system_prefix()` (given and resolved form; the own home's subtree is exempt when the home itself lies
+below a prefix, and so is a path strictly below `/run/media/<own user>/<label>`), `home_roots()`,
+`app_data_dirs()`, `platform_links()`, `user_places()`, `drives()` (never raises; a mapped network drive is a
+`drive` with note `network`, never probed there) and `display_path()`.
+
+**Tests never reach the real workspace.** The repo-root `conftest.py` puts `XDG_DATA_HOME` (on Windows also
+`LOCALAPPDATA`/`APPDATA`) into the session sandbox for every test process, and its tripwire lists the real
+`<data dir>/corvin/projects` of every platform form (resolved once, before any env change) around every test: a
+new entry there fails the test ("wrote into the real Corvin workspace"). `corvin_operator/bridges/run-all-tests.sh`
+exports the same for plain-script suites. `HOME` stays the operator's (the live suites need `~/.claude`); on macOS
+the data dir follows `HOME`, so there the guard is the tripwire plus the projects test `Sandbox`, which moves `HOME`.
+Proof: `tests/projects/test_user_dirs.py`, `tests/security/test_conftest_data_dir_sandbox.py`.
 
 ## The directory is the truth
 

@@ -34,6 +34,16 @@ mkdir -p "$CORVIN_HOME"
 # can still fall through to keyless edge-tts with fixture text.
 export XDG_CONFIG_HOME="$_SUITE_SANDBOX/xdg_config"
 mkdir -p "$XDG_CONFIG_HOME"
+# The platform data directory holds the managed project workspace (ADR-2321, core/paths/user_dirs.py,
+# <XDG_DATA_HOME>/corvin/projects); a plain-script suite that creates a project must never reach the real one.
+# On Windows (Git Bash) the same holds for LOCALAPPDATA/APPDATA.
+export XDG_DATA_HOME="$_SUITE_SANDBOX/xdg_data"
+mkdir -p "$XDG_DATA_HOME"
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    export LOCALAPPDATA="$_SUITE_SANDBOX/AppData/Local" APPDATA="$_SUITE_SANDBOX/AppData/Roaming"
+    mkdir -p "$LOCALAPPDATA" "$APPDATA" ;;
+esac
 unset VOICE_CONFIG_DIR OPENAI_API_KEY CORVIN_TTS_OPENAI_KEY ELEVENLABS_API_KEY
 # A run started from a bridge turn inherits the turn's messenger origin; the
 # orchestration MCP suite asserts "no origin" (review 2026-11-05).
