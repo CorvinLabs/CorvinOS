@@ -619,14 +619,20 @@ tenant's expired jobs; class gate per project from the registry's protection rec
 "Secret projects cannot be exported."; `confidential` without `confirm: true` -> 409 `confirm_required` "This project is
 confidential. Confirm that you want to export it."); a passphrase without `gpg` -> 409 `gpg_missing`; one of TWO export
 slots (`threading.BoundedSemaphore(2)`, none free -> 429 `busy` at once, never waiting); the walk sizes the export; audit
-`project.exported outcome=requested` (audit-first, fail-closed 503); <= 100 MiB uncompressed -> built in the worker thread
-the route awaits (`asyncio.to_thread`) and streamed back (`application/zip`, or `application/pgp-encrypted` for
+`project.exported outcome=requested` (audit-first, fail-closed 503); <= 100 MiB uncompressed -> built on the share pool
+thread the route awaits (`routes/projects.py::_on_share_pool`) and streamed back (`application/zip`, or `application/pgp-encrypted` for
 `….zip.gpg`; `Content-Disposition: attachment; filename=corvin-project-<id>-<yyyymmdd>.zip`, a set
 `corvin-projects-<yyyymmdd>.zip`), its temp directory removed after the response; above -> 202 `{job_id, warnings}` and
-a job on `loop_health.share_pool()` (2 long-lived threads, pre-warmed from both hosts' lifespan) with `job.json` and the
+a job on `loop_health.share_pool()` with `job.json` and the
 file under `<tenant_home>/projects/exports/<job_id>/` (dir 0o700, files 0o600), TTL 24 h, swept by the projector tick
 (`projects_service.sweep_share`, bounded, skipped while `loop_health.host_saturated()`) and by every export request.
-A refusal of the build (`secret_shape`, `too_large`, …) answers 409 with the Decision 17 sentence, `project.exported
+**Share pool (REVIEW-0064 #3).** Export (build or job hand-over), export preview, import validate and import apply all
+run on `loop_health.share_pool()` - `SHARE_POOL_WORKERS = 8` long-lived threads (2 export + 2 validate + 2 apply slots
+plus 2 spare, so a call refused 429 at once never waits behind the long ones), pre-warmed from both hosts' lifespan -
+awaited by the route in a copy of the request's context (`_on_share_pool`; the refusal session reaches the service as with
+`asyncio.to_thread`), never on the default executor where every awaited audit-chain write runs (ADR-2322 Decision 8's
+rationale: a 500 MiB extraction or a 300 s git unbundle into a slow share must not hold an audit write). Pinned by
+`test_projects_share_e2e.py::SharePool`. A refusal of the build (`secret_shape`, `too_large`, …) answers 409 with the Decision 17 sentence, `project.exported
 outcome=error` and `project.export_refused`, and nothing stays under `exports/`. Passphrase (8-128 chars): `gpg --homedir
 <private temp> --batch --pinentry-mode loopback --symmetric --cipher-algo AES256 --passphrase-fd 0` (gpg 2.x needs the
 loopback pinentry for `--passphrase-fd`); the plain ZIP is deleted. A large sparse file is stored, not deflated (a first
@@ -697,7 +703,7 @@ tick (`sweep_share`) and by every validate request.
 `POST /-/import/{staging_id}/apply` confirms what the report proposed: `project` names the bundle's card (optional for a
 one-project bundle), `project_id` the id it gets here (default: the bundle's), `location` an own folder (default: the place
 of ADR-2321 Decision 3 for that id), `parts` lets the user skip the git history or the knowledge base (a part the bundle
-does not carry cannot be chosen). It runs in an awaited worker thread, in one of two apply slots (429 `busy` at once), under
+does not carry cannot be chosen). It runs on the share pool (awaited, `_on_share_pool`), in one of two apply slots (429 `busy` at once), under
 the per-project file lock of the NEW id (`projects_service.import_apply` -> `_apply_into`):
 
 1. **Re-validate** the staged file (`bundle.validate`, V1-V6 - nothing trusted before validation; a refusal deletes the

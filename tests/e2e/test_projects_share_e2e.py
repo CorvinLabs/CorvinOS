@@ -1134,5 +1134,40 @@ class Duplicate(ApplyBase):
             self.assertEqual(c.own.post(f"{_URL}/{pid}/duplicate", json={"project_id": "x-copy"}).status_code, 403)
 
 
+class SharePool(ApplyBase):
+    # REVIEW-0064 #3: export, export preview, import validate and import apply run on loop_health.share_pool(), never on the
+    # default executor where the awaited audit writes go; the request's refusal session still reaches the service
+    def test_long_share_work_runs_on_the_share_pool_with_the_request_context(self):
+        import functools
+        import threading
+        from corvin_console import loop_health
+        seen: dict[str, tuple[str, object]] = {}
+
+        def spy(name, real):
+            @functools.wraps(real)
+            def run(*a, **kw):
+                seen[name] = (threading.current_thread().name, c.svc.REFUSAL_SESSION.get(None))
+                return real(*a, **kw)
+            return run
+
+        with self.ctx() as c:
+            pid, _root = self.make(c, "Pooled")
+            names = ("export_projects", "export_preview", "import_validate", "import_apply")
+            with contextlib.ExitStack() as st:
+                for n in names:
+                    st.enter_context(mock.patch.object(c.svc, n, spy(n, getattr(c.svc, n))))
+                self.assertEqual(c.own.get(f"{_X}/preview", params={"ids": pid}).status_code, 200)
+                data = self.bundle_bytes(c, pid)
+                rep = self.stage(c, data)
+                r = self.apply(c, rep["staging_id"])
+                self.assertEqual(r.status_code, 201, r.text[:300])
+            self.assertEqual(set(seen), set(names))
+            for n, (thread, sid) in seen.items():
+                self.assertTrue(thread.startswith("corvin-share"), (n, thread))
+                self.assertIsNotNone(sid, f"{n}: the refusal session did not reach the worker")
+            self.assertGreaterEqual(loop_health.SHARE_POOL_WORKERS,
+                                    c.svc.EXPORT_SLOTS + c.svc._validate_slots._initial_value + c.svc.IMPORT_APPLY_SLOTS + 1)
+
+
 if __name__ == "__main__":
     unittest.main()

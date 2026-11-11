@@ -349,7 +349,7 @@ async def browse_clear_recent(rec: SessCsrf) -> dict:
 
 
 # ── share: export (ADR-2323 Decision 12, T-0397) ──────────────────────────────────────────────────────────────────────────
-# The service does the work in a worker thread the route awaits (asyncio.to_thread): the class gate, one of two export slots
+# The service does the work on loop_health.share_pool() the route awaits (_on_share_pool): the class gate, one of two export slots
 # (429 at once), the walk, and either the build (<= 100 MiB, streamed back as a file) or a background job (202).
 
 class ExportParts(BaseModel):
@@ -382,12 +382,24 @@ def _file_answer(res: dict) -> Any:
                         headers=_warn_header(res.get("warnings") or []), background=bg)
 
 
+async def _on_share_pool(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run long share work (export, export preview, import validate, import apply) on ``loop_health.share_pool()``, awaited,
+    in a copy of the request's context (the refusal session variable reaches the service as with ``asyncio.to_thread``) -
+    never on the default executor, where the awaited audit-chain writes run (REVIEW-0064 #3)."""
+    import contextvars  # noqa: PLC0415
+    import functools  # noqa: PLC0415
+    from .. import loop_health  # noqa: PLC0415
+    ctx = contextvars.copy_context()
+    fut = loop_health.share_pool().submit(ctx.run, functools.partial(_call, fn, *args, **kwargs))
+    return await asyncio.wrap_future(fut)
+
+
 @collection.post("/export")
 async def export_projects(body: ExportBody, rec: SessCsrf) -> Any:
     from fastapi.responses import JSONResponse  # noqa: PLC0415
     parts = body.parts.model_dump() if body.parts is not None else None
-    res = await asyncio.to_thread(_call, svc.export_projects, rec.tenant_id, list(body.project_ids), parts,
-                                  confirm=body.confirm, passphrase=body.passphrase)
+    res = await _on_share_pool(svc.export_projects, rec.tenant_id, list(body.project_ids), parts,
+                               confirm=body.confirm, passphrase=body.passphrase)
     if res["kind"] == "job":
         return JSONResponse(status_code=202, content={"job_id": res["job_id"], "warnings": res["warnings"]})
     return _file_answer(res)
@@ -409,7 +421,7 @@ async def export_preview(rec: Sess, ids: str = "", parts: Optional[str] = None) 
         if not on <= {"kb", "git_history", "generated"}:
             raise HTTPException(status_code=422, detail={"message": "unknown part", "reason_class": "invalid"})
         chosen = {"kb": "kb" in on, "git_history": "git_history" in on, "generated": "generated" in on}
-    return await asyncio.to_thread(_call, svc.export_preview, rec.tenant_id, _ids_param(ids), chosen)
+    return await _on_share_pool(svc.export_preview, rec.tenant_id, _ids_param(ids), chosen)
 
 
 @collection.get("/exports/{job_id}")
@@ -507,7 +519,7 @@ async def import_validate(request: Request, rec: SessCsrf) -> dict:
         if isinstance(exc, MultipartParseError):
             raise HTTPException(status_code=400, detail={"message": svc.IMPORT_MESSAGES["no_file"], "reason_class": "no_file"}) from None
         raise
-    return await asyncio.to_thread(_call, svc.import_validate, rec.tenant_id, handle.staging_id)
+    return await _on_share_pool(svc.import_validate, rec.tenant_id, handle.staging_id)
 
 
 @collection.get("/import/{staging_id}")
@@ -540,11 +552,11 @@ class ApplyBody(BaseModel):
 
 @collection.post("/import/{staging_id}/apply", status_code=201)
 async def import_apply(staging_id: str, body: ApplyBody, rec: SessCsrf) -> dict:
-    """Import, second half (ADR-2323 Decision 13, T-0400/T-0411/T-0412): in an awaited worker thread, one of two apply slots
+    """Import, second half (ADR-2323 Decision 13, T-0400/T-0411/T-0412): awaited on the share pool, one of two apply slots
     (429 ``busy`` at once), under the project lock of the new id. 201 with ``{project, warnings, notes, origin}``."""
-    return await asyncio.to_thread(_call, svc.import_apply, rec.tenant_id, staging_id, project=body.project,
-                                   project_id=body.project_id, location=body.location,
-                                   parts=body.parts.model_dump() if body.parts is not None else None, title=body.title)
+    return await _on_share_pool(svc.import_apply, rec.tenant_id, staging_id, project=body.project,
+                                project_id=body.project_id, location=body.location,
+                                parts=body.parts.model_dump() if body.parts is not None else None, title=body.title)
 
 
 @collection.delete("/import/{staging_id}", status_code=204)

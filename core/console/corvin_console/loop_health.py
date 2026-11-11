@@ -26,7 +26,8 @@ This module, wired from the console lifespan:
 * ``host_saturated`` — asked ONLY by optional background work (the KB projector's
   cadence, starting a new SkillForge fork). Audit, tripwires, the integrity scan, the
   learning brake (anomaly monitor) and canary rollback never ask it;
-* ``share_pool`` / ``prewarm_share_pool`` — the 2-thread pool of background project exports (ADR-2323)
+* ``share_pool`` / ``prewarm_share_pool`` — the 8-thread pool of project export, export preview, import validate and import
+  apply (ADR-2323, REVIEW-0064 #3); never the default executor the audit writes use
 * ``browse_pool`` / ``prewarm_browse_pool`` — the folder browser's dedicated 4-thread pool
   (ADR-2322 Decision 8), pre-warmed after the default pool; listings never use the default
   executor;
@@ -212,16 +213,20 @@ async def prewarm_browse_pool(*, gap_s: float = PREWARM_GAP_S, hold_max_s: float
 
 # ── the project-share pool (ADR-2323 Decision 12): background export jobs ──────
 
-#: threads of the export-job pool: equal to the two export slots, so an admitted job never waits for a thread
-SHARE_POOL_WORKERS = 2
+#: threads of the share pool (REVIEW-0064 #3): the two export slots (a synchronous build or a background job), the two import
+#: validate slots and the two import apply slots, plus two spare threads so a call that is refused at once (429 ``busy``) or an
+#: export handing its job over never waits behind six long-held ones. Long share work (up to 500 MiB extraction, a 300 s git
+#: unbundle/fsck) therefore never holds a thread of the default executor, where every awaited audit-chain write runs
+#: (ADR-2322 Decision 8's rationale, applied to share). projects_service pins the sum in a test.
+SHARE_POOL_WORKERS = 8
 
 _share_pool: Optional[ThreadPoolExecutor] = None
 _share_pool_lock = threading.Lock()
 
 
 def share_pool() -> ThreadPoolExecutor:
-    """The long-lived pool background project exports run on (never a thread per request); pre-warmed from both hosts'
-    lifespan by :func:`prewarm_share_pool`."""
+    """The long-lived pool project export, export preview, import validate/apply and background export jobs run on (never a
+    thread per request, never the default executor); pre-warmed from both hosts' lifespan by :func:`prewarm_share_pool`."""
     global _share_pool
     with _share_pool_lock:
         if _share_pool is None:
