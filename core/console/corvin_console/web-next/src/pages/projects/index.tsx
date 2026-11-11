@@ -9,7 +9,7 @@
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Blocks, Download, FolderKanban, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, Blocks, Download, FolderKanban, Plus, RefreshCw, Trash2, Upload, ArrowRight } from "lucide-react";
 import { NewProjectDialog } from "./wizard-dialog";
 import { AdoptSection, DefaultPlaceDialog } from "./manage";
 import { ExportDialog, ImportDialog } from "./share-dialogs";
@@ -37,16 +37,17 @@ function ProjectCard({ p, where, selected, onSelect }: { p: ProjectSummary; wher
   const chips = featureChips(p);
   const off = offFeatures(p);
   return (
-    <Card className="min-w-0" data-testid="project-card" data-project-id={p.id} data-state={p.state}>
+    <Card className="group relative min-w-0 cursor-pointer transition-colors hover:bg-accent/40 focus-within:ring-2 focus-within:ring-ring"
+      data-testid="project-card" data-project-id={p.id} data-state={p.state}>
       <CardContent className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold" data-testid="project-title">
               {onSelect && (
-                <input type="checkbox" className="h-4 w-4 shrink-0" checked={selected} onChange={onSelect}
+                <input type="checkbox" className="relative z-10 h-4 w-4 shrink-0" checked={selected} onChange={onSelect}
                   aria-label={`Select ${p.title ?? p.id} for export`} data-testid="project-select" />
               )}
-              <Link to={`/app/projects/${encodeURIComponent(p.id)}`} className="min-w-0 truncate hover:underline" title={p.title ?? p.id}
+              <Link to={`/app/projects/${encodeURIComponent(p.id)}`} className="min-w-0 truncate hover:underline after:absolute after:inset-0 after:content-[''] focus:outline-none" title={p.title ?? p.id}
                 data-testid="project-open">{p.title ?? p.id}</Link>
               {p.builtin && <Badge variant="secondary" data-testid="project-builtin">Built in</Badge>}
             </h2>
@@ -66,7 +67,7 @@ function ProjectCard({ p, where, selected, onSelect }: { p: ProjectSummary; wher
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             <span>{st.detail}</span>
             {p.state === "missing" && !p.builtin && (
-              <Link to={`/app/projects/${encodeURIComponent(p.id)}?tab=settings`} className="ml-auto shrink-0 text-xs underline" data-testid="project-locate">
+              <Link to={`/app/projects/${encodeURIComponent(p.id)}?tab=settings`} className="relative z-10 ml-auto shrink-0 text-xs underline" data-testid="project-locate">
                 Locate folder…
               </Link>
             )}
@@ -98,6 +99,11 @@ function ProjectCard({ p, where, selected, onSelect }: { p: ProjectSummary; wher
             <span className={cn("min-w-0 truncate", w.kind !== "builtin" && "font-mono")} title={w.title} data-testid="project-path">{w.text}</span>
           </dd>
         </dl>
+        {/* the whole tile opens the project (the title link stretches over it); this line only says so, for touch and for first-time users */}
+        <p className="flex items-center justify-end gap-1 text-xs font-medium text-primary" aria-hidden="true" data-testid="project-open-hint">
+          {p.state === "ok" ? "Open project" : "Open details"}
+          <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+        </p>
       </CardContent>
     </Card>
   );

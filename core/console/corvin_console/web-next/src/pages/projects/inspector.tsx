@@ -22,6 +22,7 @@ import { TABS, conflictOf, healthHeadline, parseTab, rowState, tabGate, videoNam
 import { ComputeTab, DirectoryTab, DocsTab, FeatureOff, KnowledgeTab, StructureTab, TasksTab, VideosTab } from "./inspector-tabs";
 import { stateOf } from "./encodings";
 import { SettingsSections } from "./settings-sections";
+import { Glance } from "./inspector-glance";
 import { AccessBadge, ClassBadge } from "./badges";
 import { accessOf, classOf, roleLabel } from "./roles";
 
@@ -125,6 +126,7 @@ export default function ProjectInspectorPage() {
 
       {ready && (
         <>
+          <Glance d={d} />
           {notice && (
             <p role="status" className="rounded border border-amber-600/50 p-2 text-sm" data-testid="feature-notice">
               {notice} <button type="button" className="ml-2 text-xs underline" onClick={() => setNotice(null)}>Dismiss</button>
@@ -219,8 +221,9 @@ function NewVideoCard({ projectId, videosOn, csrf, onCreated }: { projectId: str
 
 function BackLink() {
   return (
-    <Link to="/app/projects" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline">
-      <ArrowLeft className="h-4 w-4" aria-hidden /> Projects
+    <Link to="/app/projects" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline"
+      aria-label="Back to all projects" data-testid="inspector-back">
+      <ArrowLeft className="h-4 w-4" aria-hidden /> All projects
     </Link>
   );
 }
@@ -238,9 +241,14 @@ function OverviewTab({ projectId, builtin, videosOn, csrf, onChanged }: { projec
         void qc.invalidateQueries({ queryKey: ["task-tracking", "items", `project:${projectId}`] });
       }} />}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className={cn("text-sm font-medium", head.ok ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300")} data-testid="health-headline">
-          {health.isLoading ? "Checking…" : head.text}
-        </p>
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <p className={cn("text-sm font-medium", head.ok ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300")} data-testid="health-headline">
+            {health.isLoading ? "Checking…" : head.text}
+          </p>
+          {!builtin && (health.data?.checks ?? []).some((c) => !c.ok) && (
+            <Link to={`/app/projects/${encodeURIComponent(projectId)}?tab=settings`} className="text-sm underline" data-testid="health-fix-link">Open Settings to repair</Link>
+          )}
+        </div>
         <Button variant="outline" size="sm" onClick={() => void health.refetch()} disabled={health.isFetching}>
           <RefreshCw className={cn("mr-2 h-4 w-4", health.isFetching && "animate-spin")} aria-hidden /> Check again
         </Button>
@@ -260,6 +268,8 @@ function OverviewTab({ projectId, builtin, videosOn, csrf, onChanged }: { projec
 }
 
 const CHECK_LABEL: Record<string, string> = {
+  path_under_base: "Folder is where it belongs", no_engine_copy: "No engine copy inside the project",
+  import_leftovers: "No unfinished import beside it", pending_import: "No import left half-done", hint_source: "Path rules available",
   protection: "Protection setting",
   path_exists: "Folder exists", manifest: "project.yaml", features_closed: "Features complete",
   generated_files_in_sync: "Generated files up to date", tenant_plugins: "Plugins enabled",

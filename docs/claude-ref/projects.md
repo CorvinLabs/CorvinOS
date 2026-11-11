@@ -903,6 +903,20 @@ needs more asks first and then sends `accept_dependencies`; a feature whose tena
 switched on and says why), **Settings** (seven sections since T-0387, see "Settings sections, Where and the default
 place" below; Move and Locate folder choose the folder in the folder picker, § Picker). Pure decisions in `pages/projects/inspector-logic.ts` (unit-tested).
 
+**From the tile to the details (2026-11-11).** A project tile is ONE link: the title is the link and stretches over the whole tile
+(`after:absolute after:inset-0`), so a click anywhere opens `/app/projects/<id>`; controls inside the tile (the selection checkbox, "Locate
+folder...") sit above the overlay (`relative z-10`) and keep their own job. The tile ends with a visible hint ("Open project", or "Open
+details" when the project is not usable), so it says that it opens without a hover. The detail page leads with an **At a glance** strip
+(`pages/projects/inspector-glance.tsx`, pure rules in `inspector-logic.ts`: `glanceTiles`, `tasksGlance`, `knowledgeGlance`, `videosGlance`,
+`changesGlance`): open tasks (`GET /task-tracking/items?scope=project:<id>`, `bound` for Corvin itself; the server-scoped `summary`), knowledge
+entries and videos (the same `GET /projects/{id}/structure` the Structure tab reads, one cached request), and files not committed
+(`GET /projects/{id}/changes`). A tile whose source is off is not drawn; a number still loading is a skeleton; one that cannot be loaded says
+"Could not load" with a retry instead of a zero; a tile that leads somewhere is a link to its tab, the changes tile only informs. Corvin itself
+shows tasks and knowledge, never changes. The way back is named "All projects". A failing health check shows an "Open Settings to repair" link, and
+the check ids carry plain names (`CHECK_LABEL`). Proof: `tests/e2e/projects-open.spec.ts` (8, served bundle, network stubbed),
+`tests/e2e/projects-open-live.spec.ts` (live, real projects, both themes at 1280 and 375 px, screenshots to `SHOTS_DIR`), unit tests in
+`tests/unit/projects-inspector.test.ts` ("at a glance").
+
 **Also built** (T-0359): Structure (`GET /projects/{id}/structure`, read-only, two levels, .git left out, symlinks listed
 never followed), Docs (knowledge-base counts from the same read), Knowledge (opens the project's graph with
 `?scope=project:<id>`), Tasks (the project's items from `GET /task-tracking/items?scope=project:<id>`, a link to the

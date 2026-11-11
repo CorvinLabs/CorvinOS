@@ -3,7 +3,8 @@
  * 409 means for the user, and which tabs exist. The page only draws these.
  */
 import { ApiError } from "@/lib/api/client";
-import type { FeatureRow, HealthCheck, ProjectDetail, WorkspaceState } from "@/lib/api/projects";
+import type { ChangeList, FeatureRow, HealthCheck, ProjectDetail, VideoRow, WorkspaceState } from "@/lib/api/projects";
+import type { Summary } from "@/lib/api/task-tracking";
 import { featureLabel } from "./encodings";
 
 export type Tab = "overview" | "structure" | "docs" | "knowledge" | "tasks" | "videos" | "directory" | "compute" | "features" | "settings";
@@ -237,4 +238,60 @@ export function doctorSummary(checks: HealthCheck[]): string {
   const failed = real.filter((c) => !c.ok);
   if (failed.length === 0) return `${real.length} checks, none failed`;
   return `${real.length} checks, ${failed.length} failed — ${failed[0].detail}`;
+}
+
+
+// ── "At a glance": the few numbers a project owner wants before opening a tab ─────────────────────────────────────────────────
+// Every number comes from an endpoint that already exists (task summary, structure, change list); nothing here is invented. A tile
+// whose source is off is not drawn at all: there is nothing to count, and a zero would claim otherwise.
+
+export type GlanceId = "tasks" | "knowledge" | "videos" | "changes";
+export interface GlanceTile { id: GlanceId; label: string; /** the tab the tile leads to, null = the tile only informs */ tab: Tab | null }
+export interface GlanceValue { value: string; detail: string }
+
+export function glanceTiles(d: Pick<ProjectDetail, "active" | "kb" | "builtin">): GlanceTile[] {
+  const active = d.active ?? [];
+  const out: GlanceTile[] = [];
+  if (d.kb === true && active.includes("tasks")) out.push({ id: "tasks", label: "Tasks", tab: "tasks" });
+  // the Knowledge tab needs the graph feature; with only the knowledge base on, the numbers lead to the Docs tab instead of a dead end
+  if (d.kb === true) out.push({ id: "knowledge", label: "Knowledge", tab: active.includes("graph") ? "knowledge" : "docs" });
+  if (active.includes("videos")) out.push({ id: "videos", label: "Videos", tab: "videos" });
+  if (!d.builtin) out.push({ id: "changes", label: "Changes", tab: null });
+  return out;
+}
+
+/** The task board of a project: its open tasks first, because that is the question ("what is left?"). */
+export function tasksGlance(s: Summary): GlanceValue {
+  return { value: String(s.open), detail: `open · ${s.in_progress} in progress · ${s.blocked} blocked` };
+}
+
+// singular, plural: "1 epic", "2 epics" - a count that reads wrong makes the whole tile look unreliable
+const KB_KIND: Record<string, [string, string]> = { initiatives: ["initiative", "initiatives"], epics: ["epic", "epics"], tasks: ["task", "tasks"],
+  decisions: ["decision", "decisions"], concepts: ["concept", "concepts"], ideas: ["idea", "ideas"], plans: ["plan", "plans"], reviews: ["review", "reviews"],
+  notes: ["note", "notes"],
+  // the folder names the server counts (projects_service structure): shown as the words a person would use
+  "implementation-plans": ["plan", "plans"], "adversarial-reviews": ["review", "reviews"] };
+const kindName = (k: string, n: number): string => { const w = KB_KIND[k]; return w ? w[n === 1 ? 0 : 1] : k; };
+
+/** All knowledge-base entries, with the three biggest kinds named. */
+export function knowledgeGlance(counts: Record<string, number> | undefined): GlanceValue {
+  const rows = Object.entries(counts ?? {}).filter(([, n]) => Number.isFinite(n) && n > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const total = rows.reduce((n, [, c]) => n + c, 0);
+  if (total === 0) return { value: "0", detail: "nothing written yet" };
+  return { value: String(total), detail: rows.slice(0, 3).map(([k, n]) => `${n} ${kindName(k, n)}`).join(" · ") };
+}
+
+export function videosGlance(rows: VideoRow[] | undefined): GlanceValue {
+  const list = rows ?? [];
+  if (list.length === 0) return { value: "0", detail: "no video yet" };
+  const both = list.filter((v) => v.de && v.en).length;
+  return { value: String(list.length), detail: both === list.length ? "all with German and English" : `${both} with German and English` };
+}
+
+/** Files that differ from the last commit. `null` when the folder is not a git repository (then there is nothing to say). */
+export function changesGlance(c: Pick<ChangeList, "files" | "truncated" | "has_repository">): GlanceValue | null {
+  if (!c.has_repository) return null;
+  const n = c.files.length;
+  if (n === 0) return { value: "0", detail: "everything is committed" };
+  return { value: c.truncated ? `${n}+` : String(n), detail: n === 1 ? "file not committed yet" : "files not committed yet" };
 }

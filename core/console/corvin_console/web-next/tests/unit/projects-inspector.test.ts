@@ -210,3 +210,65 @@ describe("the Trash (T-0405)", () => {
     expect(trashPager({ entries: [{}, {}], ttl_days: 30 })).toEqual({ label: null, newer: null, older: null });
   });
 });
+
+describe("at a glance", () => {
+  const sum = (over: Partial<import("@/lib/api/task-tracking").Summary> = {}) => ({ open: 3, in_progress: 2, blocked: 1, complete: 9, archived: 0, total: 15, overdue: 0,
+    approvals_pending: 0, done_7d: 4, initiatives_active: 1, ...over });
+
+  it("draws only the tiles whose source is on, and leads each to a tab that exists", async () => {
+    const { glanceTiles } = await import("@/pages/projects/inspector-logic");
+    expect(glanceTiles({ active: ["core"], kb: false, builtin: false }).map((t) => t.id)).toEqual(["changes"]);
+    expect(glanceTiles({ active: ["core", "kb", "tasks", "graph", "videos"], kb: true, builtin: false }).map((t) => [t.id, t.tab])).toEqual(
+      [["tasks", "tasks"], ["knowledge", "knowledge"], ["videos", "videos"], ["changes", null]]);
+    // knowledge base on, graph off: the numbers lead to Docs, not to a "Feature off" page
+    expect(glanceTiles({ active: ["core", "kb"], kb: true, builtin: false }).find((t) => t.id === "knowledge")?.tab).toBe("docs");
+    // tasks need the knowledge base itself, not only the flag
+    expect(glanceTiles({ active: ["core", "tasks"], kb: false, builtin: false }).some((t) => t.id === "tasks")).toBe(false);
+    // Corvin itself is not a git folder of the user's: no changes tile
+    expect(glanceTiles({ active: ["core", "kb", "tasks", "graph"], kb: true, builtin: true }).some((t) => t.id === "changes")).toBe(false);
+  });
+
+  it("every tile's tab is one the tab list offers", async () => {
+    const { glanceTiles, TABS } = await import("@/pages/projects/inspector-logic");
+    for (const t of glanceTiles({ active: ["core", "kb", "tasks", "graph", "videos"], kb: true, builtin: false })) {
+      if (t.tab) expect(TABS.some((x) => x.id === t.tab)).toBe(true);
+    }
+  });
+
+  it("tasks: open first, then in progress and blocked", async () => {
+    const { tasksGlance } = await import("@/pages/projects/inspector-logic");
+    expect(tasksGlance(sum())).toEqual({ value: "3", detail: "open · 2 in progress · 1 blocked" });
+    expect(tasksGlance(sum({ open: 0, in_progress: 0, blocked: 0 })).value).toBe("0");
+  });
+
+  it("knowledge: the total, the three biggest kinds, and an honest empty line", async () => {
+    const { knowledgeGlance } = await import("@/pages/projects/inspector-logic");
+    expect(knowledgeGlance({ tasks: 5, decisions: 2, concepts: 2, notes: 1, empty: 0 })).toEqual({ value: "10", detail: "5 tasks · 2 concepts · 2 decisions" });
+    expect(knowledgeGlance({ epics: 1, initiatives: 1, tasks: 1 }).detail).toBe("1 epic · 1 initiative · 1 task");   // singular reads right
+    expect(knowledgeGlance({ epics: 1, tasks: 2 }).detail).toBe("2 tasks · 1 epic");
+    // the real keys of the live server (a folder name is never shown as such)
+    expect(knowledgeGlance({ concepts: 16, "implementation-plans": 1, "adversarial-reviews": 2, decisions: 0 })).toEqual(
+      { value: "19", detail: "16 concepts · 2 reviews · 1 plan" });
+    expect(knowledgeGlance({ unknown_kind: 2 }).detail).toBe("2 unknown_kind");                                        // an unknown kind is shown as is
+    expect(knowledgeGlance({})).toEqual({ value: "0", detail: "nothing written yet" });
+    expect(knowledgeGlance(undefined).value).toBe("0");
+    expect(knowledgeGlance({ tasks: Number.NaN, notes: 4 }).value).toBe("4");
+  });
+
+  it("videos: how many, and how many carry both languages", async () => {
+    const { videosGlance } = await import("@/pages/projects/inspector-logic");
+    const v = (de: boolean, en: boolean) => ({ name: "x", de, en, folder: "x", state: "ok", folder_exists: true });
+    expect(videosGlance([])).toEqual({ value: "0", detail: "no video yet" });
+    expect(videosGlance([v(true, true), v(true, false)])).toEqual({ value: "2", detail: "1 with German and English" });
+    expect(videosGlance([v(true, true)]).detail).toBe("all with German and English");
+  });
+
+  it("changes: nothing to say outside a repository; a cut list says so", async () => {
+    const { changesGlance } = await import("@/pages/projects/inspector-logic");
+    expect(changesGlance({ files: [], truncated: false, has_repository: false })).toBeNull();
+    expect(changesGlance({ files: [], truncated: false, has_repository: true })).toEqual({ value: "0", detail: "everything is committed" });
+    const f = { path: "a" } as never;
+    expect(changesGlance({ files: [f], truncated: false, has_repository: true })).toEqual({ value: "1", detail: "file not committed yet" });
+    expect(changesGlance({ files: [f, f], truncated: true, has_repository: true })).toEqual({ value: "2+", detail: "files not committed yet" });
+  });
+});
