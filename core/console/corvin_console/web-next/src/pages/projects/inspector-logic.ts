@@ -144,8 +144,62 @@ export function settingsSections(d: ProjectDetail, ctx: { workspace?: WorkspaceS
   if (ok || d.state === "invalid") out.push(sec("maintenance", { repair: ok ? ON : off("Repair needs a readable project.yaml.") }));
   // Export always opens: its dialog says why a secret project cannot leave; a secret project is never duplicated either
   if (ok) out.push(sec("share", { export: ON, duplicate: d.classification === "secret" ? off("Secret projects cannot be duplicated.") : ON }));
-  out.push(sec("danger", { remove: ON, delete: managed ? off("Available in a later update") : off("(not available: own folder)") }));
+  // Deleting files exists only for a project in the Corvin workspace whose folder is there (ADR-2321 Decision 6); an own folder
+  // has no delete row at all - Corvin never deletes in a folder it does not own
+  out.push(sec("danger", managed && ok ? { remove: ON, delete: ON } : { remove: ON }));
   return out;
+}
+
+// ── the Trash (T-0405, ADR-2321 Decision 12) ─────────────────────────────────────────────────────────
+
+/** Deploy marker of the trash UI (a string literal only this code contains). */
+export const MARKER_TRASH = "Move to Trash";
+export const TRASH_DAYS = 30;
+export const DELETE_ROW_TEXT = "Delete project files — only for projects in the Corvin workspace; goes to Trash for 30 days.";
+export const DELETE_SENTENCE = "The folder moves to Corvin's trash for 30 days; restore it from the Projects page.";
+export const PURGE_SENTENCE = "This removes the folder and every file in it for good. It cannot be undone.";
+
+/** The typed confirmation: the exact id, nothing trimmed, no case folding (the server compares the same way). */
+export function confirmMatches(typed: string, id: string): boolean {
+  return typed === id && id.length > 0;
+}
+
+const DAY_MS = 86_400_000;
+
+/** `deleted_at` + 30 days as an ISO timestamp, or null for a missing or unreadable date. */
+export function restorableUntil(deletedAt: string | null | undefined, days: number = TRASH_DAYS): string | null {
+  if (!deletedAt) return null;
+  const t = Date.parse(deletedAt);
+  if (Number.isNaN(t)) return null;
+  return new Date(t + days * DAY_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** A date for the Trash rows, pinned to en-US and UTC so every viewer reads the same day ("Nov 11, 2026"). */
+export function trashDate(iso: string | null | undefined): string {
+  if (!iso) return "unknown";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "unknown";
+  return new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(t));
+}
+
+export interface TrashRow {
+  entry: string; id: string; title: string; deleted: string; until: string; canAct: boolean; note: string | null;
+}
+
+/** The Trash section's rows, newest first. The restore deadline comes from the server when it sent one, else from `deleted_at`. */
+export function trashRows(entries: { entry: string; id: string; title: string; deleted_at: string | null; restorable_until: string | null; pending: boolean }[] | undefined): TrashRow[] {
+  return [...(entries ?? [])]
+    .sort((a, b) => String(b.deleted_at ?? "").localeCompare(String(a.deleted_at ?? "")) || b.entry.localeCompare(a.entry))
+    .map((e) => ({
+      entry: e.entry, id: e.id, title: e.title || e.id, deleted: trashDate(e.deleted_at),
+      until: trashDate(e.restorable_until ?? restorableUntil(e.deleted_at)),
+      canAct: !e.pending, note: e.pending ? "Still being moved to the Trash; try again in a moment." : null,
+    }));
+}
+
+/** "Trash (n)" - shown only when there is something in it. */
+export function trashLinkLabel(n: number | undefined): string | null {
+  return n && n > 0 ? `Trash (${n})` : null;
 }
 
 /** The Maintenance line: "<n> checks, <m> failed — <first failed detail>". Notes are observations, not checks. */

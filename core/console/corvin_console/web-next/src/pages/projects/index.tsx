@@ -4,14 +4,17 @@
  * Data: GET /v1/console/projects and /projects/templates (routes/projects.py). The list is the
  * registry's index; a project whose folder is gone is SHOWN as missing, never dropped. Nothing here is
  * sample data: no project, no card. A card's title opens the project's inspector (/app/projects/:id).
+ * ?view=trash shows the Trash (managed projects whose files were deleted, restorable for 30 days; trash-section.tsx).
  */
-import { Link } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Blocks, Download, FolderKanban, Plus, RefreshCw, Upload } from "lucide-react";
+import { AlertTriangle, Blocks, Download, FolderKanban, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { NewProjectDialog } from "./wizard-dialog";
 import { AdoptSection, DefaultPlaceDialog } from "./manage";
 import { ExportDialog, ImportDialog } from "./share-dialogs";
+import { TrashSection } from "./trash-section";
+import { trashLinkLabel } from "./inspector-logic";
 import { exportSelectedLabel, pruneSelected, selectable, toggleSelected } from "./share-logic";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -111,6 +114,11 @@ export default function ProjectsPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
+  const [params, setParams] = useSearchParams();
+  const showTrash = params.get("view") === "trash";
+  const setTrash = (on: boolean) => setParams(on ? { view: "trash" } : {}, { replace: false });
+  const routeNotice = (useLocation().state as { notice?: string } | null)?.notice ?? null;
+  const trashLabel = trashLinkLabel(projects.data?.trash_count);
   const all = projects.data ? sortProjects(projects.data.projects) : [];
   const mine = all.filter((p) => !p.builtin);                      // Corvin itself is always there; "empty" is about the user's own projects
   const where: WhereContext = { projects_root: projects.data?.projects_root, projects_root_set: projects.data?.projects_root_set };
@@ -145,6 +153,11 @@ export default function ProjectsPage() {
           <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} data-testid="import-start">
             <Upload className="mr-2 h-4 w-4" aria-hidden /> Import project…
           </Button>
+          {trashLabel && !showTrash && (
+            <Button variant="ghost" size="sm" onClick={() => setTrash(true)} data-testid="trash-link">
+              <Trash2 className="mr-2 h-4 w-4" aria-hidden /> {trashLabel}
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={() => { void projects.refetch(); void templates.refetch(); }}
           disabled={projects.isFetching} aria-label="Refresh projects">
           <RefreshCw className={cn("mr-2 h-4 w-4", projects.isFetching && "animate-spin")} aria-hidden /> Refresh
@@ -154,7 +167,7 @@ export default function ProjectsPage() {
       <NewProjectDialog open={wizardOpen} onOpenChange={setWizardOpen} />
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} ids={selected} label={all.find((p) => p.id === selected[0])?.title ?? selected[0] ?? ""} />
-      {selected.length > 0 && (
+      {!showTrash && selected.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border p-2 text-sm" role="region" aria-label="Selected projects" data-testid="selection-bar">
           <span data-testid="selection-count">{selected.length} selected</span>
           <Button size="sm" onClick={() => setExportOpen(true)} data-testid="export-selected">
@@ -165,15 +178,19 @@ export default function ProjectsPage() {
       )}
       {projects.data && <DefaultPlaceDialog open={placeOpen} onOpenChange={setPlaceOpen} list={projects.data as ProjectList} />}
 
-      {loadError && (
+      {routeNotice && !showTrash && <p role="status" className="rounded-lg border p-3 text-sm" data-testid="projects-notice">{routeNotice}</p>}
+
+      {showTrash && <TrashSection onBack={() => setTrash(false)} />}
+
+      {!showTrash && loadError && (
         <div role="alert" className="rounded-lg border border-red-500/40 p-3 text-sm text-red-700 dark:text-red-300" data-testid="projects-error">
           {loadError}
         </div>
       )}
 
-      {projects.isLoading && <Skeleton className="h-32 w-full" data-testid="projects-loading" />}
+      {!showTrash && projects.isLoading && <Skeleton className="h-32 w-full" data-testid="projects-loading" />}
 
-      {mine.length > 1 && (present.roles.length > 1 || present.classes.length > 1 || kinds.length > 1) && (
+      {!showTrash && mine.length > 1 && (present.roles.length > 1 || present.classes.length > 1 || kinds.length > 1) && (
         <div className="flex flex-wrap items-center gap-3 text-sm" role="group" aria-label="Filter projects" data-testid="projects-filter">
           {present.roles.length > 1 && (
             <label className="flex items-center gap-2">Role
@@ -206,13 +223,13 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      {all.length > 0 && list.length === 0 && (
+      {!showTrash && all.length > 0 && list.length === 0 && (
         <p className="text-sm text-muted-foreground" data-testid="filter-empty">
           No project matches this filter. <button type="button" className="underline" onClick={() => { setFilter(NO_FILTER); setWhereSel("all"); }}>Show all</button>
         </p>
       )}
 
-      {list.length > 0 && (
+      {!showTrash && list.length > 0 && (
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2" aria-label="Projects" data-testid="projects-list">
           {list.map((p) => (
             <ProjectCard key={p.id} p={p} where={where} selected={selected.includes(p.id)}
@@ -221,7 +238,7 @@ export default function ProjectsPage() {
         </section>
       )}
 
-      {projects.data && mine.length === 0 && (
+      {!showTrash && projects.data && mine.length === 0 && (
         <Card data-testid="projects-empty">
           <CardContent className="space-y-3 p-8 text-center">
             <FolderKanban className="mx-auto h-8 w-8 text-muted-foreground" aria-hidden />

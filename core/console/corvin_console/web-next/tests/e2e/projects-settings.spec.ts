@@ -11,6 +11,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { enterPath, stubPicker } from "./projects-picker-stub";
 
 const OUT = process.env.SHOTS_DIR ?? "/tmp/phase2-shots";
+const TRASH_OUT = process.env.TRASH_SHOTS_DIR ?? "/tmp/phase5-shots";
 const ID = "alpha";
 const OK = {
   id: ID, path: "/home/u/.local/share/corvin/projects/w-0123456789/alpha", template: "research@1", state: "ok", title: "Alpha research",
@@ -65,7 +66,7 @@ async function noIds(page: Page) {
   expect(text).not.toMatch(/ADR-\d|CONCEPT-\d|REVIEW-\d|T-0\d{3}/);
 }
 
-test("a managed project shows the seven sections in order; delete is a later update, Share offers Export and Duplicate", async ({ page }) => {
+test("a managed project shows the seven sections in order; delete is offered, Share offers Export and Duplicate", async ({ page }) => {
   await stub(page, OK);
   await page.goto(`/console/app/projects/${ID}?tab=settings`);
   const titles = page.getByTestId("settings-section").locator("h2");
@@ -76,21 +77,75 @@ test("a managed project shows the seven sections in order; delete is a later upd
   await expect(page.getByTestId("doctor-summary")).toHaveText("3 checks, 1 failed — out of sync (repair fixes): ['CLAUDE.md']");
   await expect(page.getByTestId("share-export")).toBeEnabled();
   await expect(page.getByTestId("share-duplicate")).toBeEnabled();
-  await expect(page.getByTestId("delete-files")).toBeDisabled();
-  await expect(page.getByTestId("delete-row")).toContainText("Available in a later update");
+  await expect(page.getByTestId("delete-files")).toBeEnabled();
+  await expect(page.getByTestId("delete-row")).toContainText("Delete project files — only for projects in the Corvin workspace; goes to Trash for 30 days.");
   await expect(page.getByTestId("locate-box")).toHaveCount(0);
   await noIds(page);
 });
 
-test("an own folder's delete row says it is not available, and a hint word in its path is warned about", async ({ page }) => {
+test("an own folder has no delete row at all (only Remove from the list), and a hint word in its path is warned about", async ({ page }) => {
   const warn = "The assistant may refuse some shell commands in a folder whose path contains 'forge'.";
   await stub(page, { ...OK, path: "/home/u/code/forge-lab", storage: "own", display_path: "~/code/forge-lab",
     location_warnings: [{ class: "hint_word", message: warn }] });
   await page.goto(`/console/app/projects/${ID}?tab=settings`);
   await expect(page.getByTestId("storage-badge").first()).toHaveText("Own folder");
-  await expect(page.getByTestId("delete-row")).toContainText("(not available: own folder)");
+  await expect(page.getByTestId("remove-start")).toBeVisible();
+  await expect(page.getByTestId("delete-row")).toHaveCount(0);
   await expect(page.getByTestId("delete-files")).toHaveCount(0);
   await expect(page.getByTestId("location-warning")).toHaveText(warn);
+});
+
+test("Delete project files: Move to Trash enables only on the exact id, sends it, and the list opens with Trash (1)", async ({ page }) => {
+  const st = await stub(page, OK);
+  const sent: unknown[] = [];
+  let trashed = false;
+  await page.unroute(/\/v1\/console\/projects$/);
+  await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: { projects_root: "/home/u/projects", projects_root_set: false,
+    default_storage: "managed", managed_root: "/home/u/.local/share/corvin/projects/w-0123456789", workspace: "ok",
+    projects: trashed ? [] : [OK], trashed: trashed ? [{ id: ID, path: "", template: "research@1", state: "trashed", storage: "trashed", title: "Alpha research", reason: "In Trash" }] : [],
+    trash_count: trashed ? 1 : 0 } }));
+  await page.route(new RegExp(`/v1/console/projects/${ID}/files$`), (r) => {
+    sent.push({ method: r.request().method(), body: r.request().postDataJSON() });
+    trashed = true;
+    return r.fulfill({ json: { project_id: ID, trash_entry: `${ID}-20261111T070000Z`, deleted_at: "2026-11-11T07:00:00Z",
+      restorable_until: "2026-12-11T07:00:00Z", warnings: [] } });
+  });
+  await page.goto(`/console/app/projects/${ID}?tab=settings`);
+  await page.getByTestId("delete-files").click();
+  const dlg = page.getByTestId("delete-dialog");
+  await expect(dlg.getByTestId("delete-sentence")).toHaveText("The folder moves to Corvin's trash for 30 days; restore it from the Projects page.");
+  const submit = dlg.getByTestId("delete-submit");
+  await expect(submit).toHaveText("Move to Trash");
+  await expect(submit).toBeDisabled();
+  await dlg.getByTestId("delete-confirm").fill("alph");
+  await expect(submit).toBeDisabled();
+  await dlg.getByTestId("delete-confirm").fill("Alpha");
+  await expect(submit).toBeDisabled();
+  await dlg.getByTestId("delete-confirm").fill(ID);
+  await expect(submit).toBeEnabled();
+  await dlg.getByTestId("delete-cancel").click();
+  await expect(dlg).toHaveCount(0);
+  expect(sent).toEqual([]);                                                   // Cancel sends nothing
+  await page.getByTestId("delete-files").click();
+  await page.getByTestId("delete-confirm").fill(ID);
+  await page.getByTestId("delete-submit").click();
+  await expect(page).toHaveURL(/\/console\/app\/projects$/);
+  await expect(page.getByTestId("trash-link")).toHaveText("Trash (1)");
+  await expect(page.getByTestId("projects-notice")).toContainText("Alpha research was moved to the Trash");
+  expect(sent).toEqual([{ method: "DELETE", body: { confirm_id: ID } }]);
+  expect(st.removed).toBe(0);                                                 // not the remove-from-list route
+});
+
+test("a refused delete keeps the dialog open with the server's sentence", async ({ page }) => {
+  await stub(page, OK);
+  await page.route(new RegExp(`/v1/console/projects/${ID}/files$`), (r) => r.fulfill({ status: 409,
+    json: { detail: { message: "Only projects in the Corvin workspace can be deleted here; this one lives in your own folder.", reason_class: "not_managed" } } }));
+  await page.goto(`/console/app/projects/${ID}?tab=settings`);
+  await page.getByTestId("delete-files").click();
+  await page.getByTestId("delete-confirm").fill(ID);
+  await page.getByTestId("delete-submit").click();
+  await expect(page.getByTestId("delete-error")).toContainText("Only projects in the Corvin workspace can be deleted here");
+  await expect(page.getByTestId("delete-dialog")).toBeVisible();
 });
 
 test("rename offers Undo for 10 s, and Undo sends the old title back", async ({ page }) => {
@@ -192,6 +247,21 @@ for (const t of ["light", "dark"] as const) {
       await page.getByTestId("location-section").scrollIntoViewIfNeeded();
       expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
       await page.screenshot({ path: path.join(OUT, `settings-move-confirm-${t}-${s.name}.png`) });
+    });
+    test(`the Danger zone delete dialog at ${s.name} px (${t})`, async ({ page }) => {
+      await theme(page, t);
+      await page.setViewportSize({ width: s.width, height: s.height });
+      await stub(page, OK);
+      await page.goto(`/console/app/projects/${ID}?tab=settings`);
+      await page.getByTestId("danger-section").scrollIntoViewIfNeeded();
+      fs.mkdirSync(TRASH_OUT, { recursive: true });
+      await page.screenshot({ path: path.join(TRASH_OUT, `danger-zone-${t}-${s.name}.png`) });
+      await page.getByTestId("delete-files").click();
+      await page.getByTestId("delete-confirm").fill(ID);
+      await expect(page.getByTestId("delete-submit")).toBeEnabled();
+      await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running"));   // the dialog's open animation
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: path.join(TRASH_OUT, `delete-dialog-${t}-${s.name}.png`) });
     });
     test(`the missing-folder Location box at ${s.name} px (${t})`, async ({ page }) => {
       await theme(page, t);

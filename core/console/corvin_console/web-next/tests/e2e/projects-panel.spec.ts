@@ -8,7 +8,11 @@
  * no ADR id or plugin index id is rendered, and the page fits a 375 px phone in both themes.
  */
 import { enterPath, stubPicker } from "./projects-picker-stub";
+import fs from "node:fs";
+import path from "node:path";
 import { test, expect, type Page } from "@playwright/test";
+
+const TRASH_OUT = process.env.TRASH_SHOTS_DIR ?? "/tmp/phase5-shots";
 
 const LIST = {
   projects_root: "/home/u/projects",
@@ -221,6 +225,114 @@ for (const theme of ["light", "dark"] as const) {
       await page.getByTestId("picker-choose").click();
       await expect(page.getByTestId("place-root-folder-value")).toHaveText("/home/u/code/work");
       await page.screenshot({ path: `${out}/default-place-chosen-${theme}-${s.name}.png`, fullPage: false });
+    });
+  }
+}
+
+// ── the Trash (T-0405, ADR-2321 Decision 12) ─────────────────────────────────────────────────────────
+
+const ENTRY = "old-notes-20261111T070000Z";
+const TRASH_ROW = { entry: ENTRY, id: "old-notes", title: "Old notes", deleted_at: "2026-11-11T07:00:00Z", restorable_until: "2026-12-11T07:00:00Z", pending: false };
+const RESTORED = { id: "old-notes", path: "/home/u/.local/share/corvin/projects/w-0123456789/old-notes", template: "research@1", state: "ok",
+  title: "Old notes", storage: "managed", display_path: "Corvin workspace › old-notes", active: ["core"], features: { core: true } };
+
+async function stubTrash(page: Page, opts: { entries?: typeof TRASH_ROW[]; restoreStatus?: number } = {}) {
+  const st = { entries: [...(opts.entries ?? [TRASH_ROW])], restored: [] as string[], purged: [] as unknown[] };
+  await page.route(/\/v1\/console\/projects\/templates/, (r) => r.fulfill({ json: { available: true, templates: [], features: [] } }));
+  await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: { projects_root: "/home/u/projects", default_storage: "managed",
+    managed_root: "/home/u/.local/share/corvin/projects/w-0123456789", workspace: "ok",
+    projects: [LIST.projects[0], ...(st.restored.length ? [RESTORED] : [])], trashed: [], trash_count: st.entries.length } }));
+  await page.route(/\/v1\/console\/projects\/-\/trash$/, (r) => r.fulfill({ json: { entries: st.entries, ttl_days: 30 } }));
+  await page.route(/\/v1\/console\/projects\/-\/trash\/[^/]+\/restore$/, (r) => {
+    if (opts.restoreStatus) return r.fulfill({ status: opts.restoreStatus, json: { detail: {
+      message: "A folder named old-notes is already in the Corvin workspace; move it away, then restore.", reason_class: "folder_not_empty" } } });
+    const entry = decodeURIComponent(new URL(r.request().url()).pathname.split("/").slice(-2)[0]);
+    st.restored.push(entry);
+    st.entries = st.entries.filter((e) => e.entry !== entry);
+    return r.fulfill({ json: { ...RESTORED, warnings: [] } });
+  });
+  await page.route(/\/v1\/console\/projects\/-\/trash\/[^/]+$/, (r) => {
+    if (r.request().method() !== "DELETE") return r.fallback();
+    const entry = decodeURIComponent(new URL(r.request().url()).pathname.split("/").pop() ?? "");
+    st.purged.push({ entry, body: r.request().postDataJSON() });
+    st.entries = st.entries.filter((e) => e.entry !== entry);
+    return r.fulfill({ json: { entry, purged: true } });
+  });
+  return st;
+}
+
+test("Trash (n) appears only when something is in it, and Restore brings the card back", async ({ page }) => {
+  const st = await stubTrash(page);
+  await page.goto("/console/app/projects");
+  await expect(page.getByTestId("trash-link")).toHaveText("Trash (1)");
+  await page.getByTestId("trash-link").click();
+  await expect(page).toHaveURL(/view=trash/);
+  const row = page.getByTestId("trash-row");
+  await expect(row).toHaveCount(1);
+  await expect(row.getByTestId("trash-title")).toHaveText("Old notes");
+  await expect(row.getByTestId("trash-id")).toHaveText("old-notes");
+  await expect(row.getByTestId("trash-deleted")).toHaveText("Nov 11, 2026");
+  await expect(row.getByTestId("trash-until")).toHaveText("Dec 11, 2026");
+  await expect(page.getByTestId("project-card")).toHaveCount(0);                // the Trash replaces the list
+  await row.getByTestId("trash-restore").click();
+  await expect(page.getByTestId("trash-note")).toHaveText("Old notes was restored to the Corvin workspace.");
+  await expect(page.getByTestId("trash-empty")).toHaveText("Trash is empty.");
+  expect(st.restored).toEqual([ENTRY]);
+  await page.getByTestId("trash-back").click();
+  await expect(page).not.toHaveURL(/view=trash/);
+  await expect(page.locator('[data-testid="project-card"][data-project-id="old-notes"]')).toBeVisible();
+  await expect(page.getByTestId("trash-link")).toHaveCount(0);
+  await noIds(page);
+});
+
+test("with an empty Trash there is no Trash link; ?view=trash says Trash is empty", async ({ page }) => {
+  await stubTrash(page, { entries: [] });
+  await page.goto("/console/app/projects");
+  await expect(page.getByTestId("project-card").first()).toBeVisible();
+  await expect(page.getByTestId("trash-link")).toHaveCount(0);
+  await page.goto("/console/app/projects?view=trash");
+  await expect(page.getByTestId("trash-empty")).toHaveText("Trash is empty.");
+});
+
+test("Delete permanently needs the typed id and sends it; a refused restore shows the server's sentence on the row", async ({ page }) => {
+  const st = await stubTrash(page, { restoreStatus: 409 });
+  await page.goto("/console/app/projects?view=trash");
+  await page.getByTestId("trash-restore").click();
+  await expect(page.getByTestId("trash-row-error")).toContainText("A folder named old-notes is already in the Corvin workspace");
+  await page.getByTestId("trash-purge").click();
+  const dlg = page.getByTestId("purge-dialog");
+  await expect(dlg.getByTestId("purge-sentence")).toHaveText("This removes the folder and every file in it for good. It cannot be undone.");
+  await expect(dlg.getByTestId("purge-submit")).toBeDisabled();
+  await dlg.getByTestId("purge-confirm").fill("old-note");
+  await expect(dlg.getByTestId("purge-submit")).toBeDisabled();
+  await dlg.getByTestId("purge-confirm").fill("old-notes");
+  await expect(dlg.getByTestId("purge-submit")).toBeEnabled();
+  await dlg.getByTestId("purge-submit").click();
+  await expect(page.getByTestId("trash-note")).toHaveText("Old notes was deleted permanently.");
+  await expect(page.getByTestId("trash-empty")).toBeVisible();
+  expect(st.purged).toEqual([{ entry: ENTRY, body: { confirm_id: "old-notes" } }]);
+});
+
+for (const t of ["light", "dark"] as const) {
+  for (const s of [{ name: "1280", width: 1280, height: 900 }, { name: "375", width: 375, height: 812 }]) {
+    test(`the Trash section at ${s.name} px (${t})`, async ({ page }) => {
+      await page.addInitScript((v) => { try { localStorage.setItem("corvin-theme", v); localStorage.setItem("corvin-dark-default-v2", "1"); } catch { /* ignore */ } }, t);
+      await page.setViewportSize({ width: s.width, height: s.height });
+      await stubTrash(page, { entries: [TRASH_ROW, { ...TRASH_ROW, entry: "billing-20261109T120000Z", id: "billing", title: "Billing rework",
+        deleted_at: "2026-11-09T12:00:00Z", restorable_until: "2026-12-09T12:00:00Z" }] });
+      await page.goto("/console/app/projects");
+      await expect(page.getByTestId("trash-link")).toHaveText("Trash (2)");
+      await expect(page.locator("html")).toHaveAttribute("data-theme", t);
+      fs.mkdirSync(TRASH_OUT, { recursive: true });
+      await page.screenshot({ path: path.join(TRASH_OUT, `list-trash-link-${t}-${s.name}.png`) });
+      await page.getByTestId("trash-link").click();
+      await expect(page.getByTestId("trash-row")).toHaveCount(2);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: path.join(TRASH_OUT, `trash-section-${t}-${s.name}.png`), fullPage: true });
+      await page.getByTestId("trash-purge").first().click();
+      await page.getByTestId("purge-confirm").fill("old-notes");
+      await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running"));   // the dialog's open animation
+      await page.screenshot({ path: path.join(TRASH_OUT, `purge-dialog-${t}-${s.name}.png`) });
     });
   }
 }

@@ -26,7 +26,7 @@ import { GraphCanvas } from "./GraphCanvas";
 import { DocumentPane } from "./DocumentPane";
 import { listProjects } from "@/lib/api/projects";
 import { ScopeSelect } from "@/pages/projects/scope-select";
-import { graphScopes, listedProjects, mergeGraphs, resolveScope, scopeLabel, scopeParam, selectableProjects } from "@/pages/projects/scope";
+import { graphScopes, listedProjects, mergeGraphs, resolveScope, scopeLabel, scopeList, scopeParam, selectableProjects } from "@/pages/projects/scope";
 import { buildLinkIndex } from "./link-resolver";
 import { neighbourhood, newestDecisionKey, searchNodes } from "./graph-model";
 
@@ -91,7 +91,7 @@ export function CorvinKnowledgePage() {
   // view joins them (labels qualified with the project id, islands never joined by an invented edge).
   const [scopeParams, setScopeParams] = useSearchParams();
   const projectsQ = useQuery({ queryKey: ["projects", "list"], queryFn: ({ signal }) => listProjects(signal), retry: false });
-  const projectList = projectsQ.isLoading ? undefined : (projectsQ.data?.projects ?? []);
+  const projectList = projectsQ.isLoading ? undefined : (scopeList(projectsQ.data) ?? []);
   const pickable = selectableProjects(projectList);
   const { scope, note: scopeNote, pending: scopePending } = resolveScope(scopeParams.get("scope"), projectList, "graph");
   const scopeKey = scopeParam(scope);

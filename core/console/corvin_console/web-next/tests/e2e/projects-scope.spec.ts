@@ -129,3 +129,19 @@ test("the counters and the repository line name the chosen knowledge base", asyn
   await page.getByTestId("scope-select").selectOption("bound");
   await expect(page.getByTestId("knowledge-repo")).toContainText("Corvin · Repository: /k");
 });
+
+test("a project in the Trash is listed in the switcher as unavailable: In Trash, with a link to the Trash (T-0405)", async ({ page }) => {
+  await stub(page);
+  await page.unroute(/\/v1\/console\/projects$/);
+  await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: { ...PROJECTS, trash_count: 1,
+    trashed: [{ id: "gone", path: "", template: "blank@1", state: "trashed", storage: "trashed", title: "Old study", reason: "In Trash" }] } }));
+  await page.goto("/console/app/initiatives");
+  const opt = page.locator('[data-testid="scope-select"] option[value="project:gone"]');
+  await expect(opt).toHaveText("Old study (In Trash)");
+  await expect(opt).toHaveAttribute("disabled", "");                         // toBeDisabled() reads an <option> as enabled
+  const line = page.getByTestId("scope-unavailable");
+  await expect(line).toContainText("Old study (In Trash)");
+  await expect(line.getByRole("link", { name: "Old study" })).toHaveAttribute("href", "/console/app/projects?view=trash");
+  await page.goto("/console/app/initiatives?scope=project:gone");
+  await expect(page.getByTestId("scope-note")).toHaveText("Old study cannot be shown: In Trash. Showing All knowledge bases instead.");
+});

@@ -87,7 +87,8 @@ test("phase 1 on the running console: create in the workspace, settings sections
     await expect(page.getByTestId("settings-section").locator("h2"))
       .toHaveText(["General", "Location", "Protection", "Use in a chat", "Maintenance", "Share", "Danger zone"], { timeout: 30_000 });
     await expect(page.getByTestId("location-path")).toHaveText(`Corvin workspace › ${ID}`);
-    await expect(page.getByTestId("delete-row")).toContainText("Available in a later update");
+    await expect(page.getByTestId("delete-row")).toContainText("goes to Trash for 30 days");
+    await expect(page.getByTestId("delete-files")).toBeEnabled();
     await expect(page.getByTestId("doctor-summary")).toContainText(/\d+ checks, /, { timeout: 60_000 });
     await shot(page, "live-settings-light-1280");
     await page.setViewportSize({ width: 375, height: 812 });

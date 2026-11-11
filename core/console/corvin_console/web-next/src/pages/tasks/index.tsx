@@ -34,7 +34,7 @@ import {
 import { cn } from "@/lib/utils";
 import { listProjects } from "@/lib/api/projects";
 import { ScopeSelect } from "@/pages/projects/scope-select";
-import { listedProjects, resolveScope, scopeLabel, scopeParam } from "@/pages/projects/scope";
+import { listedProjects, resolveScope, scopeLabel, scopeList, scopeParam } from "@/pages/projects/scope";
 import { RunningNow, SourceNotes, TaskTable, TypeChips } from "./activity-parts";
 import { CreateDialog } from "./create-dialog";
 import { DetailDrawer } from "./detail-drawer";
@@ -142,7 +142,7 @@ export default function TasksPage() {
   // other change (setQuery rebuilds the whole query string, so it is carried over explicitly below).
   const scopeRaw = params.get("scope");
   const projectsQ = useQuery({ queryKey: ["projects", "list"], queryFn: ({ signal }) => listProjects(signal), retry: false });
-  const projectList = projectsQ.isLoading ? undefined : (projectsQ.data?.projects ?? []);
+  const projectList = projectsQ.isLoading ? undefined : (scopeList(projectsQ.data) ?? []);
   const { scope, note: scopeNote, pending: scopePending } = resolveScope(scopeRaw, projectList, "tasks");
   const scopeKey = scope.kind === "all" ? "" : scopeParam(scope);
   // the name every number on the page is qualified with: the counters and the list come from this scope only

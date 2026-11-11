@@ -12,6 +12,7 @@ export const STATE_META: Record<ProjectState, { label: string; tone: Tone }> = {
   missing: { label: "Directory missing", tone: "bad" },
   invalid: { label: "project.yaml not usable", tone: "bad" },
   pending: { label: "Setting up", tone: "warn" },
+  trashed: { label: "In Trash", tone: "warn" },
 };
 
 /** Display names of the template fragments the UI knows; any other id is shown as its own words. */

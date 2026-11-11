@@ -16,10 +16,17 @@ export function projectUnavailableReason(p: ProjectSummary): string | null {
   if (p.state === "missing") return p.reason ? `folder missing: ${p.reason}` : "folder missing";
   if (p.state === "invalid") return p.reason ? `invalid: ${p.reason}` : "invalid project.yaml";
   if (p.state === "pending") return p.pending === "import" ? "Being imported" : "still being created";
+  if (p.state === "trashed") return "In Trash";
   if (p.state !== "ok") return p.reason ?? p.state;
   if (p.features && p.features.kb !== true) return "no knowledge base - switch it on in Settings";
   if (p.kb !== true) return p.features?.kb === true ? "knowledge base not created yet" : "no knowledge base - switch it on in Settings";
   return null;
+}
+
+/** The list the switcher works on: every project plus the ones in the Trash (listed, never selectable: "In Trash"). */
+export function scopeList(data: { projects?: ProjectSummary[]; trashed?: ProjectSummary[] } | undefined): ProjectSummary[] | undefined {
+  if (!data) return undefined;
+  return [...(data.projects ?? []), ...(data.trashed ?? [])];
 }
 
 /** Every project the switcher lists (the built-in Corvin project IS the "bound" scope, labelled "Corvin"). */
@@ -53,7 +60,7 @@ export function scopeOptions(list: ProjectSummary[] | undefined): ScopeOption[] 
     const title = p.title || p.id;
     const page = `/app/projects/${encodeURIComponent(p.id)}`;
     return { value: `project:${p.id}`, label: reason ? `${title} (${reason})` : title, title, disabled: reason !== null, reason,
-      projectId: p.id, fixHref: reason === null ? null : p.state === "ok" ? `${page}?tab=settings` : page };
+      projectId: p.id, fixHref: reason === null ? null : p.state === "ok" ? `${page}?tab=settings` : p.state === "trashed" ? "/app/projects?view=trash" : page };
   })];
 }
 

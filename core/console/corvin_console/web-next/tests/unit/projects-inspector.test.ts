@@ -2,7 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api/client";
 import type { FeatureRow, ProjectDetail } from "@/lib/api/projects";
-import { conflictOf, doctorSummary, healthHeadline, parseTab, rowState, settingsSections } from "@/pages/projects/inspector-logic";
+import { MARKER_TRASH, confirmMatches, conflictOf, doctorSummary, healthHeadline, parseTab, restorableUntil, rowState, settingsSections, trashDate,
+  trashLinkLabel, trashRows } from "@/pages/projects/inspector-logic";
 
 const row = (over: Partial<FeatureRow>): FeatureRow => ({ id: "kb", title: "kb", description: "", active: true, requires: ["core"],
   suggests: [], dependants: [], plugins: [], ...over });
@@ -115,9 +116,11 @@ describe("settings sections (T-0387)", () => {
     expect(act(s, "share", "export")).toEqual({ enabled: true, note: null });
     expect(act(s, "share", "duplicate")).toEqual({ enabled: false, note: "Secret projects cannot be duplicated." });
   });
-  it("delete is a row for a managed project (later update) and an explained absence for an own folder", () => {
-    expect(act(base, "danger", "delete")).toEqual({ enabled: false, note: "Available in a later update" });
-    expect(act({ ...base, storage: "own" }, "danger", "delete")).toEqual({ enabled: false, note: "(not available: own folder)" });
+  it("delete is on for a ready managed project and not offered at all for an own folder or a missing one (T-0405)", () => {
+    expect(act(base, "danger", "delete")).toEqual({ enabled: true, note: null });
+    expect(act({ ...base, storage: "own" }, "danger", "delete")).toBeUndefined();
+    expect(act({ ...base, storage: "own" }, "danger", "remove")).toEqual({ enabled: true, note: null });
+    expect(act({ ...base, state: "missing" }, "danger", "delete")).toBeUndefined();
   });
   it("missing: the folder can be located, the project removed from the list, nothing that needs the folder is offered", () => {
     const m: ProjectDetail = { ...base, state: "missing", title: undefined, reason: "the directory does not exist" };
@@ -151,5 +154,42 @@ describe("settings sections (T-0387)", () => {
     expect(doctorSummary([{ id: "a", ok: true, detail: "x", at: "" }, { id: "b", ok: false, detail: "generated CLAUDE.md out of date", at: "" },
       { id: "c", ok: false, detail: "z", at: "" }, { id: "n", ok: true, note: true, detail: "hint", at: "" }]))
       .toBe("3 checks, 2 failed — generated CLAUDE.md out of date");
+  });
+});
+
+describe("the Trash (T-0405)", () => {
+  it("the typed confirmation is the exact id: no trimming, no case folding, never empty", () => {
+    expect(confirmMatches("alpha", "alpha")).toBe(true);
+    expect(confirmMatches("alpha ", "alpha")).toBe(false);
+    expect(confirmMatches("Alpha", "alpha")).toBe(false);
+    expect(confirmMatches("alph", "alpha")).toBe(false);
+    expect(confirmMatches("", "")).toBe(false);
+    expect(MARKER_TRASH).toBe("Move to Trash");
+  });
+  it("restorable until is 30 days after the deletion; an unreadable date has none", () => {
+    expect(restorableUntil("2026-11-11T07:00:00Z")).toBe("2026-12-11T07:00:00Z");
+    expect(restorableUntil("2026-02-10T23:30:00Z")).toBe("2026-03-12T23:30:00Z");
+    expect(restorableUntil(null)).toBeNull();
+    expect(restorableUntil("yesterday")).toBeNull();
+  });
+  it("dates are pinned to en-US and UTC", () => {
+    expect(trashDate("2026-11-11T23:59:00Z")).toBe("Nov 11, 2026");
+    expect(trashDate(undefined)).toBe("unknown");
+  });
+  it("rows are newest first, use the server's deadline when it sent one, and a pending entry cannot be acted on", () => {
+    const rows = trashRows([
+      { entry: "a-20261101T000000Z", id: "a", title: "Alpha", deleted_at: "2026-11-01T00:00:00Z", restorable_until: "2026-12-01T00:00:00Z", pending: false },
+      { entry: "b-20261105T000000Z", id: "b", title: "", deleted_at: "2026-11-05T00:00:00Z", restorable_until: null, pending: true },
+    ]);
+    expect(rows.map((r) => r.id)).toEqual(["b", "a"]);
+    expect(rows[0]).toMatchObject({ title: "b", deleted: "Nov 5, 2026", until: "Dec 5, 2026", canAct: false });
+    expect(rows[0].note).toContain("Still being moved");
+    expect(rows[1]).toMatchObject({ title: "Alpha", until: "Dec 1, 2026", canAct: true, note: null });
+    expect(trashRows(undefined)).toEqual([]);
+  });
+  it("the Trash link is shown only when something is in it", () => {
+    expect(trashLinkLabel(0)).toBeNull();
+    expect(trashLinkLabel(undefined)).toBeNull();
+    expect(trashLinkLabel(1)).toBe("Trash (1)");
   });
 });

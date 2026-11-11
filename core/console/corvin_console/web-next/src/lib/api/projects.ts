@@ -6,7 +6,7 @@
  */
 import { ApiError, BASE, api, isCsrfError, notifyCsrfError } from "./client";
 
-export type ProjectState = "ok" | "missing" | "invalid" | "pending";
+export type ProjectState = "ok" | "missing" | "invalid" | "pending" | "trashed";
 export type Role = "software" | "data_science" | "marketing" | "product" | "sales" | "legal" | "video" | "research" | "knowledge";
 export type DataClass = "public" | "internal" | "confidential" | "secret";
 export type Access = "read" | "write";
@@ -35,7 +35,7 @@ export interface ProjectSummary {
   classification?: DataClass;
   assistant_access?: Access;
   /** Where the folder lives: in the Corvin workspace, in a folder of the user's own, or Corvin itself. */
-  storage?: Storage;
+  storage?: Storage | "trashed";
   /** The path shortened for display (`Corvin workspace › alpha`, `~/code/alpha`, `D:\work\alpha`); `path` is the full one. */
   display_path?: string;
 }
@@ -54,6 +54,10 @@ export interface ProjectList {
   /** false: `projects_root` is only the fallback (~/projects), the user never chose a projects folder */
   projects_root_set?: boolean;
   workspace?: WorkspaceState;
+  /** Projects whose folder is in the Trash (state `trashed`, reason "In Trash"): never in `projects`, listed for the scope switcher. */
+  trashed?: ProjectSummary[];
+  /** Entries in the Trash (GET /projects/-/trash). */
+  trash_count?: number;
 }
 
 export interface PluginNeed {
@@ -225,6 +229,35 @@ export function openProject(id: string, csrf: string): Promise<{ command: string
 /** Removes the registry entry ONLY. The directory and every file stay. */
 export function removeProjectFromList(id: string, csrf: string): Promise<{ removed: string; files_deleted: boolean }> {
   return api(`/projects/${encodeURIComponent(id)}`, { method: "DELETE", csrf });
+}
+
+/** One entry of the Trash: a managed project's folder kept for 30 days (ADR-2321 Decision 12). */
+export interface TrashEntry {
+  entry: string;
+  id: string;
+  title: string;
+  deleted_at: string | null;
+  restorable_until: string | null;
+  /** true while the move into the Trash has not finished: it cannot be restored or deleted yet. */
+  pending: boolean;
+}
+export interface TrashList { entries: TrashEntry[]; ttl_days: number }
+
+export function deleteProjectFiles(id: string, confirmId: string, csrf: string):
+  Promise<{ project_id: string; trash_entry: string; deleted_at: string; restorable_until: string; warnings: string[] }> {
+  return api(`/projects/${encodeURIComponent(id)}/files`, { method: "DELETE", body: { confirm_id: confirmId }, csrf });
+}
+
+export function listTrash(signal?: AbortSignal): Promise<TrashList> {
+  return api<TrashList>("/projects/-/trash", { signal });
+}
+
+export function restoreTrashEntry(entry: string, csrf: string): Promise<ProjectDetail & { warnings: string[] }> {
+  return api(`/projects/-/trash/${encodeURIComponent(entry)}/restore`, { method: "POST", csrf });
+}
+
+export function purgeTrashEntry(entry: string, confirmId: string, csrf: string): Promise<{ entry: string; purged: boolean }> {
+  return api(`/projects/-/trash/${encodeURIComponent(entry)}`, { method: "DELETE", body: { confirm_id: confirmId }, csrf });
 }
 
 export interface NewVideoResult {

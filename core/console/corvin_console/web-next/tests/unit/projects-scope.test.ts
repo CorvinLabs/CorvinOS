@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ProjectSummary } from "@/lib/api/projects";
 import {
   graphScopes, mergeGraphs, parseScope, projectUnavailableReason, qualify, resolveScope, scopeLabel, scopeOptions, scopeParam,
-  selectableProjects,
+  scopeList, selectableProjects,
 } from "@/pages/projects/scope";
 
 const p = (over: Partial<ProjectSummary>): ProjectSummary => ({ id: "alpha", path: "/p", template: "t@1", state: "ok", kb: true, ...over });
@@ -18,6 +18,17 @@ describe("which projects can be chosen", () => {
     expect(projectUnavailableReason(p({ state: "pending", pending: "import", kb: undefined }))).toBe("Being imported");
     expect(projectUnavailableReason(p({ state: "pending" }))).toBe("still being created");
     expect(selectableProjects([p({ id: "i", state: "pending", pending: "import" })])).toEqual([]);
+  });
+  it("a project in the Trash is listed as unavailable with \"In Trash\" and links to the Trash (T-0405)", () => {
+    const t = p({ id: "gone", title: "Gone", state: "trashed", storage: "trashed", kb: undefined, reason: "In Trash" });
+    expect(projectUnavailableReason(t)).toBe("In Trash");
+    const list = scopeList({ projects: [p({ id: "a" })], trashed: [t] });
+    expect(list?.map((x) => x.id)).toEqual(["a", "gone"]);
+    expect(selectableProjects(list).map((x) => x.id)).toEqual(["a"]);
+    const opt = scopeOptions(list).find((o) => o.projectId === "gone");
+    expect(opt).toMatchObject({ label: "Gone (In Trash)", disabled: true, reason: "In Trash", fixHref: "/app/projects?view=trash" });
+    expect(scopeList(undefined)).toBeUndefined();
+    expect(scopeList({ projects: [p({ id: "a" })] })?.map((x) => x.id)).toEqual(["a"]);
   });
 });
 

@@ -813,10 +813,28 @@ storage `managed`/`own`/builtin). Order and what each action touches:
 | Use in a chat | `AttachSection` (unchanged) | `ok`; the only section of Corvin itself |
 | Maintenance | "<n> checks, <m> failed — <first failed detail>" (`doctorSummary`; doctor notes are not counted) + "Open Overview"; Repair preview -> apply (`POST /{id}/repair`) | `ok`, `invalid` (repair off: needs a readable project.yaml) |
 | Share | "Export…" (the Export dialog, § Share in the console) and "Duplicate…" (the Duplicate dialog); a `secret` project's Duplicate is off with "Secret projects cannot be duplicated." | `ok` |
-| Danger zone | "Remove from the list — the folder and every file stay." two clicks (`DELETE /{id}`); "Delete project files…" disabled "Available in a later update" for `managed` (E-059), "(not available: own folder)" for `own` | always |
+| Danger zone | "Remove from the list — the folder and every file stay." two clicks (`DELETE /{id}`); for a ready `managed` project also "Delete project files — only for projects in the Corvin workspace; goes to Trash for 30 days." with **Delete project files…** (§ Trash in the console); an `own` (or missing) project has no delete row at all | always |
 
 A `missing` or `invalid` project shows these sections under its state card (General, Location, [Maintenance], Danger zone), so
 "Locate folder…" and "Remove from the list" are reachable without the tabs.
+
+**Trash in the console** (T-0405, `settings-sections.tsx` Danger zone, `trash-section.tsx`, pure logic in `inspector-logic.ts`:
+`settingsSections`, `confirmMatches`, `restorableUntil`, `trashDate`, `trashRows`, `trashLinkLabel`). "Delete project files…"
+opens a dialog: "The folder moves to Corvin's trash for 30 days; restore it from the Projects page.", a field "Type the project id
+<id> to confirm" and **Move to Trash**, enabled only on the exact id (no trimming, no case folding); Cancel sends nothing; a
+refusal stays in the dialog as the server's sentence. Success sends `DELETE /{id}/files`, drops the cached detail and opens the list
+with the notice "<title> was moved to the Trash. You can restore it there for 30 days." The list header shows **Trash (n)** only
+when `trash_count > 0`; it opens `?view=trash` (the Trash replaces the cards; "Back to projects" and the browser's back return).
+Each row: title, id, "Deleted <date> · restorable until <date>" (en-US, UTC), **Restore** (primary; a refusal such as
+`folder_not_empty` is shown on the row) and **Delete permanently…** (a dialog with "This removes the folder and every file in it
+for good. It cannot be undone." and the typed id). A pending entry cannot be acted on and says so. Empty: "Trash is empty.";
+loading: a skeleton; a load error: the server's message. The scope switcher of the Tasks board and the Knowledge Graph lists a
+trashed project (`GET /projects` → `trashed`, `scope.scopeList`) disabled as "<title> (In Trash)", linking to the Trash.
+Proof: `tests/unit/projects-inspector.test.ts`, `projects-scope.test.ts`; stubbed `tests/e2e/projects-settings.spec.ts`,
+`projects-panel.spec.ts`, `projects-scope.spec.ts` (screenshots of the Danger zone, both dialogs, the Trash section and the
+Trash link at 1280/375 in both themes: `TRASH_SHOTS_DIR`, default `/tmp/phase5-shots`); live (opt-in, in
+`LIVE_ONLY_SPEC_GLOBS`): `tests/e2e/projects-trash-live.spec.ts` creates the throwaway managed project `p5-trash-live`, deletes
+it to the Trash, restores it byte-identical, deletes it permanently, and checks every other project and trash entry is unchanged.
 
 **List** (`index.tsx`): the header sentence `defaultPlaceSentence()` - "New projects go to the Corvin workspace." or "New
 projects go to <projects_root>." - with **Change…**, which opens **Default place for new projects** (`DefaultPlaceDialog` in

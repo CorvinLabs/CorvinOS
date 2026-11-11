@@ -1,17 +1,19 @@
 /**
  * The project Settings tab as sections (T-0387, CONCEPT-0131 § C1/C2): General · Location · Protection · Use in a chat ·
  * Maintenance · Share · Danger zone. Which sections and actions are drawn is `settingsSections()` (inspector-logic.ts, unit-tested);
- * this file only draws them. Every action goes through the server, which judges it again. Nothing here deletes a file.
+ * this file only draws them. Every action goes through the server, which judges it again. The only file deletion is "Delete project
+ * files…" of a project in the Corvin workspace: it moves the folder to the Trash for 30 days (ADR-2321 Decision 12).
  */
 import { useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
-import { getHealth, listProjects, openProject, rekeyWorkspace, relocateProject, removeProjectFromList, repairProject, type OpenCommands, type ProjectDetail } from "@/lib/api/projects";
+import { deleteProjectFiles, getHealth, listProjects, openProject, rekeyWorkspace, relocateProject, removeProjectFromList, repairProject, type OpenCommands, type ProjectDetail } from "@/lib/api/projects";
 import { cn } from "@/lib/utils";
 import { templateLabel, whereLabel } from "./encodings";
-import { doctorSummary, settingsSections, type ActionGate, type SectionId } from "./inspector-logic";
+import { DELETE_ROW_TEXT, DELETE_SENTENCE, MARKER_TRASH, confirmMatches, doctorSummary, settingsSections, type ActionGate, type SectionId } from "./inspector-logic";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AttachSection, MoveFlow, ProtectionSection, RenameField } from "./manage";
 import { StorageBadge } from "./badges";
 import { roleLabel } from "./roles";
@@ -297,24 +299,69 @@ function Share({ d, actions }: { d: ProjectDetail; actions: Partial<Record<strin
 }
 
 function Danger({ d, csrf, actions, onRemoved }: { d: ProjectDetail; csrf: string; actions: Partial<Record<string, ActionGate>>; onRemoved: (msg: string) => void }) {
-  const managed = d.storage === "managed";
+  const [open, setOpen] = useState(false);
   return (
     <div className="space-y-3">
       {actions.remove && <RemoveRow projectId={d.id} csrf={csrf} onDone={onRemoved} />}
       {actions.delete && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" data-testid="delete-row">
-          <p className="text-sm text-muted-foreground">Delete project files — only for projects in the Corvin workspace; goes to Trash for 30 days.</p>
-          {managed ? (
-            <span title={actions.delete.note ?? undefined} className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
-              <Button size="sm" variant="outline" disabled data-testid="delete-files">Delete project files…</Button>
-              <span className="text-xs text-muted-foreground">{actions.delete.note}</span>
-            </span>
-          ) : (
-            <span className="shrink-0 text-xs text-muted-foreground">{actions.delete.note}</span>
-          )}
+          <p className="text-sm">{DELETE_ROW_TEXT}</p>
+          <Button size="sm" variant="outline" className="self-start border-red-500/40 text-red-700 hover:bg-red-500/10 dark:text-red-300 sm:self-auto"
+            disabled={!actions.delete.enabled} onClick={() => setOpen(true)} data-testid="delete-files">Delete project files…</Button>
         </div>
       )}
+      {actions.delete && <DeleteFilesDialog d={d} csrf={csrf} open={open} onOpenChange={setOpen} />}
     </div>
+  );
+}
+
+/** The typed-id dialog: "Move to Trash" is enabled only on the exact id; on success the list opens and shows "Trash (n)". */
+function DeleteFilesDialog({ d, csrf, open, onOpenChange }: { d: ProjectDetail; csrf: string; open: boolean; onOpenChange: (o: boolean) => void }) {
+  const [typed, setTyped] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const mut = useMutation({
+    mutationFn: () => deleteProjectFiles(d.id, typed, csrf),
+    onMutate: () => setError(null),
+    onSuccess: () => {
+      qc.removeQueries({ queryKey: KEY(d.id) });
+      qc.removeQueries({ queryKey: HEALTH(d.id) });
+      void qc.invalidateQueries({ queryKey: LIST });
+      void qc.invalidateQueries({ queryKey: ["projects", "trash"] });
+      void qc.invalidateQueries({ queryKey: ["projects", "chat-attachment"] });   // the server detached every chat from it
+      onOpenChange(false);
+      navigate("/app/projects", { state: { notice: `${d.title || d.id} was moved to the Trash. You can restore it there for 30 days.` } });
+    },
+    onError: (e) => setError(explain(e)),
+  });
+  const ok = confirmMatches(typed, d.id);
+  const close = (o: boolean) => { if (mut.isPending) return; if (!o) { setTyped(""); setError(null); } onOpenChange(o); };
+  return (
+    <Dialog open={open} onOpenChange={close}>
+      {open && (
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md" data-testid="delete-dialog">
+          <DialogHeader>
+            <DialogTitle className="break-words pr-6">Delete the files of "{d.title || d.id}"?</DialogTitle>
+            <DialogDescription data-testid="delete-sentence">{DELETE_SENTENCE}</DialogDescription>
+          </DialogHeader>
+          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (ok && !mut.isPending) mut.mutate(); }}>
+            <label className="block text-sm">Type the project id <span className="font-mono font-semibold">{d.id}</span> to confirm
+              <input className="mt-1 w-full rounded border bg-background px-2 py-1 font-mono text-sm" value={typed} maxLength={28} spellCheck={false}
+                autoComplete="off" autoFocus onChange={(e) => { setTyped(e.target.value); setError(null); }} disabled={mut.isPending}
+                aria-label="Project id" data-testid="delete-confirm" />
+            </label>
+            {error && <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="delete-error">{error}</p>}
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button type="button" size="sm" variant="ghost" onClick={() => close(false)} disabled={mut.isPending} data-testid="delete-cancel">Cancel</Button>
+              <Button type="submit" size="sm" variant="destructive" disabled={!ok || mut.isPending} data-testid="delete-submit">
+                {mut.isPending ? "Moving…" : MARKER_TRASH}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      )}
+    </Dialog>
   );
 }
 
