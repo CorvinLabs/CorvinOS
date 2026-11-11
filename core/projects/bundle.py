@@ -426,6 +426,125 @@ def _create_history_bundle(repo: Path, target: Path) -> None:
             raise BundleRefused("unreadable", detail="the history bundle names a ref other than a branch or a tag")
 
 
+# ── the history gate (T-0410, ADR-2323 Decision 12) ─────────────────────────────────────────────────────────────────────
+
+def scan_history(repo: Path, *, prefix: str = "", limit: int = 100) -> list[str]:
+    """Every object of ``rev-list --objects --branches --tags`` - exactly the refs the bundle carries - read through ONE
+    ``cat-file --batch`` process, both under ``neutral_git_args`` + ``neutral_git_env`` (no filter, textconv or hook can run).
+    A tree entry or blob path that ``bundle_rules.history_secret_path`` names, or a blob <= 1 MiB with a credential shape,
+    is a finding: its path (``prefix`` + path), never the commit or the match. Budget: ``max_history_objects`` objects and
+    ``max_history_read_bytes`` read; beyond -> ``too_large`` naming the ``git_history`` part."""
+    import threading  # noqa: PLC0415
+    r = _git(repo, "rev-list", "--objects", "--branches", "--tags", timeout=_GIT_TIMEOUT)
+    if r.returncode != 0:
+        raise BundleRefused("unreadable", detail="git could not list the history")
+    objs: list[tuple[str, Optional[str]]] = []
+    for line in r.stdout.decode("utf-8", "surrogateescape").splitlines():
+        sha, _sp, path = line.partition(" ")
+        if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+            continue
+        objs.append((sha, path if _sp else None))
+        if len(objs) > LIMITS["max_history_objects"]:
+            raise BundleRefused("too_large", part="git_history")
+    findings: list[str] = []
+
+    def found(path: str) -> None:
+        shown = prefix + path
+        if shown not in findings:
+            findings.append(shown)
+
+    proc = _git(repo, "cat-file", "--batch", popen=True)
+    feed_err: list[BaseException] = []
+
+    def feed() -> None:
+        try:
+            for sha, _p in objs:
+                proc.stdin.write(sha.encode() + b"\n")
+            proc.stdin.close()
+        except (BrokenPipeError, OSError) as exc:
+            feed_err.append(exc)
+    t = threading.Thread(target=feed, name="bundle-history-feed", daemon=True)
+    t.start()
+    read = 0
+    out = proc.stdout
+    try:
+        for sha, path in objs:
+            header = out.readline()
+            parts = header.split()
+            if len(parts) != 3 or parts[1] == b"missing":
+                raise BundleRefused("unreadable", detail="git could not read an object of the history")
+            kind, size = parts[1], int(parts[2])
+            read += size
+            if read > LIMITS["max_history_read_bytes"]:
+                raise BundleRefused("too_large", part="git_history")
+            if kind == b"blob" and size <= LIMITS["max_history_blob_scan_bytes"]:
+                data = _read_exact(out, size)
+                if path and bundle_rules.history_secret_path(path):
+                    found(path)
+                else:
+                    try:
+                        _secrets.scan_bytes(data, path or "")
+                    except BundleCheckError:
+                        found(path or "(unnamed blob)")
+            elif kind == b"tree":
+                data = _read_exact(out, size)
+                base = (path + "/") if path else ""
+                for name in _tree_names(data, len(sha) // 2):
+                    if bundle_rules.history_secret_path(base + name):
+                        found(base + name)
+            else:
+                if kind == b"blob" and path and bundle_rules.history_secret_path(path):
+                    found(path)
+                _skip(out, size)
+            out.read(1)                                              # the LF after every object
+            if len(findings) >= limit:
+                break
+    finally:
+        with contextlib.suppress(OSError):
+            proc.kill()
+        proc.wait(timeout=30)
+        t.join(timeout=5)
+    return findings
+
+
+def _read_exact(fh, n: int) -> bytes:
+    buf = bytearray()
+    while len(buf) < n:
+        b = fh.read(n - len(buf))
+        if not b:
+            raise BundleRefused("unreadable", detail="git stopped while reading the history")
+        buf += b
+    return bytes(buf)
+
+
+def _skip(fh, n: int) -> None:
+    while n > 0:
+        b = fh.read(min(n, _CHUNK))
+        if not b:
+            raise BundleRefused("unreadable", detail="git stopped while reading the history")
+        n -= len(b)
+
+
+def _tree_names(data: bytes, idlen: int = 20) -> list[str]:
+    """Entry names of a raw tree object: ``<mode> <name>\\0<binary id>`` repeated (the id is 20 bytes, 32 with SHA-256)."""
+    names: list[str] = []
+    i = 0
+    while i < len(data):
+        sp = data.find(b" ", i)
+        nul = data.find(b"\0", sp + 1)
+        if sp < 0 or nul < 0:
+            break
+        names.append(data[sp + 1:nul].decode("utf-8", "surrogateescape"))
+        i = nul + 1 + idlen
+    return names
+
+
+def history_gate(repo: Path, prefix: str = "") -> None:
+    hits = scan_history(repo, prefix=prefix, limit=1)
+    if hits:
+        raise BundleRefused("secret_in_history", hits[0])
+
+
 # ── preview and build ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def _manifest_bytes(man: dict[str, Any]) -> bytes:
@@ -476,6 +595,7 @@ def preview(tenant_id: str, project_ids: list[str], parts: Parts, *, history_ava
         root, e, man = _project(tenant_id, pid)
         w = _walk(pid, root, parts)
         commits: Optional[int] = None
+        findings = 0
         history_ok = False
         if parts.git_history and history_available and _is_repo(root):
             head = _history_usable(root, warnings)
@@ -484,13 +604,18 @@ def preview(tenant_id: str, project_ids: list[str], parts: Parts, *, history_ava
                 r = _git(root, "rev-list", "--count", "HEAD", timeout=60)
                 with contextlib.suppress(ValueError):
                     commits = int(r.stdout.decode().strip()) if r.returncode == 0 else None
+                for _inner, repo, key in _history_repos(root):
+                    try:
+                        findings += len(scan_history(repo, prefix="docs/" if key == "docs_head" else ""))
+                    except BundleRefused:
+                        findings += 1
         note = None if history_available else "unavailable"
         rows = _parts_rows(w, parts, {"x": 1} if history_ok else {}, note)
         kb_entries = sum(1 for f in w.files if f.part == "kb" and f.rel.endswith(".md"))
         nbytes = sum(len(_manifest_bytes(man)) if f.rel == manifest.FILE else f.size for f in w.files)
         out.append({**_project_head(tenant_id, pid, man, e), "parts": rows, "left_out": w.left_out,
                     "counts": {"files": len(w.files), "bytes": nbytes},
-                    "commits": commits, "kb_entries": kb_entries})
+                    "commits": commits, "kb_entries": kb_entries, "history_findings": findings})
     return {"projects": out, "notes": list(NOTES), "warnings": list(dict.fromkeys(warnings))}
 
 
@@ -645,9 +770,10 @@ def _write_zip(tenant_id, loaded, walks, parts: Parts, histories, tmp_zip: Path,
 
 def build(tenant_id: str, project_ids: list[str], parts: Parts, *, out: Path,
           progress: Optional[Callable[[int, int], None]] = None,
-          history_scan: Optional[Callable[[Path], None]] = None) -> BuildResult:
+          history_scan: Optional[Callable[[Path, str], None]] = None) -> BuildResult:
     """Build the bundle into *out* (written through a private temp file in the same directory; nothing remains on a
-    refusal). ``history_scan(repo)`` is the history gate (T-0410); it runs before anything is written."""
+    refusal). The history gate (T-0410, :func:`history_gate`; ``history_scan`` replaces it in tests only) runs on every
+    repository whose history is included, before anything is written."""
     out = Path(out)
     ids = _ids(project_ids)
     warnings: list[str] = []
@@ -678,8 +804,7 @@ def build(tenant_id: str, project_ids: list[str], parts: Parts, *, out: Path,
                         if key == "head":
                             break
                         continue
-                    if history_scan is not None:
-                        history_scan(repo)
+                    (history_scan or history_gate)(repo, "docs/" if key == "docs_head" else "")
                     target = work / f"{pid}-{key}.bundle"
                     _create_history_bundle(repo, target)
                     rows.append((inner, target, key, head))

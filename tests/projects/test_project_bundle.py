@@ -445,6 +445,109 @@ class Build(BundleBase):
             self.assertEqual(len([n for n in self.names(z) if n.lower().endswith("/same.txt")]), 1)
 
 
+
+class HistoryScan(BundleBase):
+    """T-0410 / ADR-2323 Decision 12: never-list paths and secret shapes anywhere in the exported history refuse."""
+
+    def _refused(self, pid):
+        with self.assertRaises(bundle.BundleRefused) as exc:
+            self.build([pid], git_history=True)
+        self.assertEqual(list(self.out.iterdir()), [])
+        return exc.exception
+
+    # AC1 + AC2 + AC3
+    def test_a_deleted_env_file_in_history_refuses_and_exports_without_history(self):
+        pid, root = self.project()
+        (root / ".gitignore").unlink()
+        (root / ".env").write_text("TOKEN=1\n")
+        _gitc(root, "add", "-f", ".env")
+        _gitc(root, "commit", "-q", "-m", "add env")
+        sha = _gitc(root, "rev-parse", "HEAD").strip()
+        _gitc(root, "rm", "-q", "--cached", ".env")
+        (root / ".env").unlink()
+        _commit_all(root, "remove env")
+        err = self._refused(pid)
+        self.assertEqual((err.reason_class, err.path), ("secret_in_history", ".env"))
+        self.assertEqual(err.message, ".env in the git history looks like it contains a secret. Export without git history, "
+                                      "or remove it from the history yourself.")
+        self.assertNotIn(sha[:7], err.message)
+        z, _ = self.build([pid], name="nohist.zip", git_history=False)
+        self.assertTrue(bundle.validate(z, None)["ok"])
+        self.assertEqual(bundle.preview("_default", [pid], bundle.Parts())["projects"][0]["history_findings"], 1)
+
+    def test_a_jwt_in_an_old_version_of_a_file_refuses_naming_only_the_path(self):
+        pid, root = self.project()
+        (root / "notes.md").write_text(f"token {JWT}\n")
+        _commit_all(root, "oops")
+        (root / "notes.md").write_text("clean now\n")
+        _commit_all(root, "clean")
+        err = self._refused(pid)
+        self.assertEqual((err.reason_class, err.path), ("secret_in_history", "notes.md"))
+        for piece in (JWT[:10], JWT[-10:]):
+            self.assertNotIn(piece, err.message)
+            self.assertNotIn(piece, str(err))
+
+    def test_tracked_fragment_files_under_dot_corvin_do_not_refuse_the_history(self):
+        pid, root = self.project("Agentic", template="agentic")
+        (root / ".corvin" / "forge").mkdir(parents=True, exist_ok=True)
+        (root / ".corvin" / "forge" / "README.md").write_text("forge\n")
+        _commit_all(root, "tracked")
+        z, _ = self.build([pid], git_history=True)
+        self.assertTrue(bundle.validate(z, None)["ok"])
+
+    # AC4
+    def test_a_planted_filter_driver_never_runs_during_the_scan(self):
+        pid, root = self.project()
+        flag = self.tmp / "filter-ran"
+        (root / ".gitattributes").write_text("* filter=evil diff=evil\n")
+        (root / "a.txt").write_text("a\n")
+        _commit_all(root, "attrs")
+        for k in ("clean", "smudge", "process"):
+            _gitc(root, "config", f"filter.evil.{k}", f"sh -c 'touch {flag}; cat'")
+        _gitc(root, "config", "diff.evil.textconv", f"sh -c 'touch {flag}; cat'")
+        _gitc(root, "config", "core.fsmonitor", f"sh -c 'touch {flag}'")
+        z, _ = self.build([pid], git_history=True)
+        bundle.preview("_default", [pid], bundle.Parts())
+        self.assertFalse(flag.exists())
+        self.assertIn(f"projects/{pid}/{bundle_rules.HISTORY_BUNDLE}", self.names(z))
+
+    # AC4a (N4)
+    def test_a_token_only_on_a_remote_tracking_ref_does_not_travel_and_on_a_branch_refuses(self):
+        up = self.tmp / "upstream"
+        up.mkdir()
+        _gitc(up, "init", "-q", "-b", "main")
+        (up / "u.txt").write_text("u\n")
+        _commit_all(up, "u")
+        _gitc(up, "checkout", "-q", "-b", "x")
+        (up / "leak.md").write_text(f"{JWT}\n")
+        _commit_all(up, "leak")
+        _gitc(up, "checkout", "-q", "main")
+        pid, root = self.project()
+        _gitc(root, "remote", "add", "origin", str(up))
+        _gitc(root, "fetch", "-q", "origin")
+        z, _ = self.build([pid], git_history=True)
+        with zipfile.ZipFile(z) as zf:
+            (self.tmp / "h.bundle").write_bytes(zf.read(f"projects/{pid}/{bundle_rules.HISTORY_BUNDLE}"))
+        heads = _gitc(self.tmp, "bundle", "list-heads", str(self.tmp / "h.bundle"))
+        self.assertNotIn("refs/remotes", heads)
+        check = self.tmp / "check"
+        _gitc(self.tmp, "init", "-q", str(check))
+        _gitc(check, "bundle", "unbundle", str(self.tmp / "h.bundle"))
+        blobs = subprocess.run(["git", "-C", str(check), "cat-file", "--batch-all-objects", "--batch"], capture_output=True).stdout
+        self.assertGreater(len(blobs), 0)
+        self.assertNotIn(JWT.encode(), blobs)
+        z.unlink()
+        _gitc(root, "branch", "x", "origin/x")
+        err = self._refused(pid)
+        self.assertEqual((err.reason_class, err.path), ("secret_in_history", "leak.md"))
+
+    def test_the_history_budget_names_the_git_history_part(self):
+        pid, root = self.project()
+        with mock.patch.dict(bundle.LIMITS_MUTABLE, {"max_history_objects": 2}):
+            err = self._refused(pid)
+        self.assertEqual((err.reason_class, err.part), ("too_large", "git_history"))
+
+
 # ── T-0398: validation V1-V6 and the hostile corpus ──────────────────────────────────────────────────────────────────────
 
 import builtins  # noqa: E402

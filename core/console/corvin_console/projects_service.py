@@ -2056,8 +2056,9 @@ EXPORT_SLOTS = 2
 _export_slots = threading.BoundedSemaphore(EXPORT_SLOTS)
 _running_jobs: set[tuple[str, str]] = set()
 _running_lock = threading.Lock()
-#: REVIEW-0062 N11: the git_history part ships with its secret scan (T-0410)
-GIT_HISTORY_AVAILABLE = False
+#: REVIEW-0062 N11: the git_history part ships with its secret scan (T-0410: bundle.build runs bundle.history_gate on every
+#: repository whose history it includes); default on (ADR-2323 Decision 8)
+GIT_HISTORY_AVAILABLE = True
 HISTORY_UNAVAILABLE = "Git history export is not available yet."
 EXPORT_MESSAGES = {
     "classification": "Secret projects cannot be exported.",
@@ -2274,7 +2275,7 @@ def _do_build(tenant_id: str, ids: list[str], parts: Any, jobdir: Path, passphra
 
 
 def _history_gate() -> dict[str, Any]:
-    """The history secret scan of T-0410 (none while the part is unavailable)."""
+    """The history secret scan of T-0410 is bundle.build's own default gate (bundle.history_gate); nothing is overridden."""
     return {}
 
 

@@ -271,24 +271,45 @@ class Export(ShareBase):
                 r = self.export(c, [pid], client=c.other, headers=c.oh)
             self.assertEqual(r.status_code, 404, r.text[:200])
 
-    # AC7a (N11) - replaced by T-0410's history tests once the scan lands
-    def test_git_history_is_not_available_yet_and_says_so(self):
-        from core.projects import bundle
+    # T-0410 (replaces T-0397 AC7a): the history part ships with its scan, default on
+    def test_git_history_travels_by_default_and_the_preview_counts_findings(self):
+        from core.projects import bundle, bundle_rules
         with self.ctx() as c:
             pid, root = self.create(c)
-            r = self.export(c, [pid], parts={"git_history": True})
+            r = self.export(c, [pid])
             self.assertEqual(r.status_code, 200, r.text[:300])
-            self.assertIn("Git history export is not available yet.", r.headers.get("x-corvin-export-warnings", ""))
+            self.assertNotIn("x-corvin-export-warnings", r.headers)
             z = self.tmp / "h.zip"
             z.write_bytes(r.content)
             with zipfile.ZipFile(z) as zf:
-                self.assertFalse([n for n in zf.namelist() if ".corvin-export" in n])
-                env = json.loads(zf.read(bundle.ENVELOPE_NAME))
-            part = [p for p in env["projects"][0]["parts"] if p["name"] == "git_history"][0]
-            self.assertFalse(part["included"])
-            pv = c.own.get(f"{_X}/preview", params={"ids": pid}).json()
-            self.assertEqual([p for p in pv["projects"][0]["parts"] if p["name"] == "git_history"][0],
-                             {"name": "git_history", "included": False, "note": "unavailable"})
+                self.assertIn(f"projects/{pid}/{bundle_rules.HISTORY_BUNDLE}", zf.namelist())
+            self.assertTrue(bundle.validate(z, None)["ok"])
+            pv = c.own.get(f"{_X}/preview", params={"ids": pid}).json()["projects"][0]
+            self.assertTrue([p for p in pv["parts"] if p["name"] == "git_history"][0]["included"])
+            self.assertEqual(pv["history_findings"], 0)
+
+    # T-0410 AC5
+    def test_a_secret_in_history_is_409_and_recorded_without_a_path(self):
+        with self.ctx() as c:
+            pid, root = self.create(c)
+            (root / "old-notes.md").write_text(f"t {JWT}\n")
+            _commit_all(root, "leak")
+            (root / "old-notes.md").write_text("clean\n")
+            _commit_all(root, "clean")
+            r = self.export(c, [pid])
+            self.assertEqual(r.status_code, 409, r.text[:300])
+            d = r.json()["detail"]
+            self.assertEqual(d["reason_class"], "secret_in_history")
+            self.assertTrue(d["message"].startswith("old-notes.md in the git history looks like it contains a secret."))
+            self.assertNotIn(JWT[:12], r.text)
+            refused = [self.details(e) for e in self.events(c, "project.export_refused")]
+            self.assertEqual([x["reason_class"] for x in refused], ["secret_in_history"])
+            self.assertNotIn("old-notes", self.chain_text(c))
+            self.assertFalse([e for e in self.events(c, "project.exported") if self.details(e).get("outcome") == "applied"])
+            r2 = self.export(c, [pid], parts={"git_history": False})
+            self.assertEqual(r2.status_code, 200)
+            pv = c.own.get(f"{_X}/preview", params={"ids": pid}).json()["projects"][0]
+            self.assertEqual(pv["history_findings"], 1)
 
     def test_export_needs_csrf(self):
         with self.ctx() as c:
