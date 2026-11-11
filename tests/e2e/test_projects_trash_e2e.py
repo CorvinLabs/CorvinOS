@@ -415,6 +415,35 @@ class Sweep(TrashBase):
             self.assertIn("sweep_trash(tenant_id, busy=busy)", src)
 
 
+class Paging(TrashBase):
+    # REVIEW-0063 m6: the listing pages over every entry (offset/limit through the route), the count is the whole trash
+    def test_the_route_pages_through_the_whole_trash_and_ignores_foreign_names(self):
+        import time as _time
+        with self.ctx() as c:
+            pid, _root = self.create(c, "Pager")
+            first = self.delete(c, pid)
+            self.assertEqual(first.status_code, 200, first.text)
+            t = Path(c.own.get(_URL).json()["managed_root"]) / ".trash"
+            now = _time.time()
+            for i in range(204):
+                ts = now - (i + 2) * 60
+                name = f"x{i:03d}-{_time.strftime('%Y%m%dT%H%M%SZ', _time.gmtime(ts))}"
+                (t / name / "project").mkdir(parents=True)
+                (t / name / "trash.json").write_text(json.dumps({"schema": 1, "id": f"x{i:03d}", "title": "x",
+                                                                 "deleted_ts": ts, "state": "trashed"}))
+            for i in range(50):
+                (t / f"Foreign {i}").mkdir()
+            r = c.own.get(_T)
+            self.assertEqual(r.status_code, 200, r.text)
+            body = r.json()
+            self.assertEqual((body["total"], len(body["entries"]), body["next_offset"]), (205, 200, 200))
+            self.assertEqual(body["entries"][0]["id"], pid)                         # newest first
+            r2 = c.own.get(_T, params={"offset": 200, "limit": 200})
+            self.assertEqual((len(r2.json()["entries"]), r2.json()["next_offset"]), (5, None))
+            self.assertEqual(c.own.get(_URL).json()["trash_count"], 205)
+            self.assertEqual(c.own.get(_T, params={"limit": 0}).status_code, 422)
+
+
 class Erasure(TrashBase):
     # ADR-2321 Decision 13: L-projects deletes nothing, trash included; the 30-day sweep bounds it
     def test_an_art17_run_leaves_the_trash_alone_and_reports_skipped(self):

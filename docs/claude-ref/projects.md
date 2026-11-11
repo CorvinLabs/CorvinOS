@@ -377,7 +377,7 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 | `POST /{id}/open` | audit `project.opened`; returns the context and a terminal command (`chat_attachment: false` until ADR-2317's spike) |
 | `DELETE /{id}` | removes the registry entry ONLY; the directory stays |
 | `DELETE /{id}/files` | `{confirm_id}` (CSRF): a MANAGED project's folder goes to the trash for 30 days (§ Trash); 200 `{project_id, trash_entry, deleted_at, restorable_until, warnings}`; 409 `not_managed` (an `own` project: "Only projects in the Corvin workspace can be deleted here; this one lives in your own folder."), `confirm_mismatch` ("Type the project id exactly to confirm."), `builtin`, `missing`, `cross_device`, `in_trash` |
-| `GET /-/trash` | `{entries: [{entry, id, title, deleted_at, restorable_until, pending}], ttl_days: 30}`, newest first |
+| `GET /-/trash[?offset=0&limit=200]` | `{entries: [{entry, id, title, deleted_at, restorable_until, pending}], ttl_days: 30, total, offset, limit, next_offset}`, newest first by the deletion time in the entry name, one page of at most 200 (`limit` 1-200, else 422); `next_offset` is null on the last page (REVIEW-0063 m6) |
 | `POST /-/trash/{entry}/restore` | (CSRF) back to `<managed_root>/<id>`; 200 the project detail (+ `repaired_files`, `warnings`); 409 `folder_not_empty` when that place is taken, `id_taken` when another project now has the id; 422 `path_rule` for a name that is not a trash entry or a link; 404 unknown / another tenant's |
 | `DELETE /-/trash/{entry}` | `{confirm_id}` (CSRF): permanent removal; 200 `{entry, purged: true}`; 409 `confirm_mismatch`, `pending`; 422 `path_rule`; 404 |
 | `PUT /settings/storage` | `{default_storage: managed\|root, projects_root?}`: where NEW projects go; moves nothing; audit-first `project.storage_changed` requested/applied; 200 `{default_storage, projects_root, managed_root, outside: [ids]}`; 409 `root_required` ("Choose a folder of your own before switching to it."); a bad root is the rule's 422. `{rekey: true}` starts a new workspace for a copied installation (binding rule (c), `outcome=rekeyed`); 409 `not_foreign` ("This workspace belongs to this installation.") while the workspace is this installation's (ADR-2321 Decisions 8, 16) |
@@ -458,10 +458,15 @@ back. The registry entry becomes `storage: trashed`, `trash_entry: <name>`, `pat
 attachment of the project is dropped; audit `applied`.
 
 **A trashed project is invisible outside the trash:** `GET /projects` leaves it out of `projects` and lists it in
-`trashed` (`state: trashed`, `reason: "In Trash"`, for the scope switcher) with `trash_count` (the entries of
-`/-/trash`); every per-project route answers 409 `in_trash`; the projector (`kb_projection.project_kbs`), the chat
+`trashed` (`state: trashed`, `reason: "In Trash"`, for the scope switcher) with `trash_count` (every directory in
+`.trash/` whose NAME is an entry name - no sidecar read, foreign names never counted); every per-project route answers 409 `in_trash`; the projector (`kb_projection.project_kbs`), the chat
 attachment (`attachment.prompt_addition`), the export (`bundle._project`), the activity stream and the turn tracker skip
 it. Its id stays taken until the entry is restored or purged.
+
+**An entry is bound to its name (REVIEW-0063 m8, `_entry_sidecar`):** a sidecar whose `id` is not the id the entry name
+carries is not an entry - it is not listed, not restored, purged or swept (404). Restore also requires that a trashed
+registry entry for the id names THIS entry as its `trash_entry` (else 409 `id_taken` "another trash entry holds this
+project; restore that one", audited `project.blocked` `trash_entry_mismatch`).
 
 **Restore** (`restore_project`): the entry name must match `<id>-<stamp>[-n]` and lie directly in `.trash/` with no link
 on the way (`fsutil.ensure_inside`; else 422 `path_rule`); `<managed_root>/<id>` must not exist (409
@@ -477,15 +482,20 @@ with no link component; the registry entry is removed (the id is free again). On
 a junction without descending (Python >= 3.8; the junction half of the test runs on the Windows VM).
 
 **Sweep** (`sweep_trash`, called by the projector tick in `kb_projection._loop` - its own thread, never the event loop):
-entries whose `deleted_ts` is older than 30 days, oldest first, at most 10 per tick (`TRASH_SWEEP_LIMIT`), scanning at
-most 200 directory entries; skipped while `loop_health.host_saturated()`; a `pending` entry is never swept; each removal
+entries whose `deleted_ts` is older than 30 days, oldest first, at most 10 per tick (`TRASH_SWEEP_LIMIT`). The candidates
+come from the WHOLE trash (REVIEW-0063 m6): every name that matches the entry pattern (up to `TRASH_NAME_CAP` = 100 000
+names looked at, foreign names never counted), sorted by the deletion time the name carries; only names past the TTL are
+candidates, and only the sidecar reads are capped (200 per tick, `TRASH_SCAN_LIMIT`) - so the 30-day bound holds however
+many young entries or junk names lie in `.trash/` (a hostile same-user writer can still keep 200 old-named entries with
+broken sidecars in the way); skipped while `loop_health.host_saturated()`; a `pending` entry is never swept; each removal
 is audited like a permanent delete. The clock is `projects_service._now()` (tests pass `now=`).
 
 Proof: `tests/e2e/test_projects_trash_e2e.py` (real HTTP, two tenants): delete -> list/trash/attachment/409, restore
 byte-identical with a green doctor; own project 409 `not_managed`; wrong id; a planted folder blocks restore; a project
 named `trash`; purge removes only that entry; names outside the trash and a planted symlink entry are 422 `path_rule`;
 purge and sweep leave a symlinked outside directory byte-identical; sweep at +29 d keeps, at +31 d removes, busy skips,
-pending stays, bounded per tick, the other tenant's trash untouched; erasure leaves the trash; both events registered,
+pending stays, bounded per tick, the other tenant's trash untouched, the route pages over 205 entries with 50 foreign names
+(`Paging`; the 300-junk / 400-young / 40-old / planted-sidecar cases in `tests/projects/test_trash_review_0063.py`); erasure leaves the trash; both events registered,
 no path and no entry name in the chain, the chain verifies.
 
 ## Share: the project bundle `corvin.project-bundle` v1 (ADR-2323, E-058)

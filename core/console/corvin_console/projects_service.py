@@ -1009,7 +1009,7 @@ def list_projects(tenant_id: str) -> dict[str, Any]:
         trashed.append(s)
     return {**loc,
             "projects": [_builtin_first(tenant_id), *[_summary(tenant_id, e) for e in ents if not registry.is_trashed(e)]],
-            "trashed": trashed, "trash_count": len(_trash_scan(tenant_id))}
+            "trashed": trashed, "trash_count": trash_count(tenant_id)}
 
 
 def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
@@ -1216,7 +1216,8 @@ def remove_from_registry(tenant_id: str, project_id: str) -> dict[str, Any]:
 TRASH_DIR = ".trash"
 TRASH_TTL_S = 30 * 86400.0
 TRASH_SWEEP_LIMIT = 10                       # entries removed per projector tick
-TRASH_SCAN_LIMIT = 200                       # directory entries looked at per listing / tick
+TRASH_SCAN_LIMIT = 200                       # sidecars read per listing page / sweep tick (REVIEW-0063 m6: never a name window)
+TRASH_NAME_CAP = 100_000                     # names of .trash looked at at all (a bound on memory, far above any real trash)
 _TRASH_SIDECAR = "trash.json"
 _TRASH_FILES = "project"
 _TRASH_ENTRY_RE = re.compile(r"^([a-z0-9][a-z0-9-]{0,27})-(\d{8}T\d{6}Z)(?:-([2-9]|[1-9]\d))?$")
@@ -1267,6 +1268,16 @@ def _trash_entry_dir(tenant_id: str, entry: str) -> Path:
     return d
 
 
+def _entry_sidecar(d: Path) -> Optional[dict[str, Any]]:
+    """The sidecar of a trash entry, only when its ``id`` is the id the entry's NAME carries (REVIEW-0063 m8): a planted entry
+    cannot restore, purge or be swept under another project's id."""
+    m = _TRASH_ENTRY_RE.match(d.name)
+    side = _read_sidecar(d)
+    if m is None or side is None or side["id"] != m.group(1):
+        return None
+    return side
+
+
 def _read_sidecar(d: Path) -> Optional[dict[str, Any]]:
     p = d / _TRASH_SIDECAR
     if is_link(p):
@@ -1293,34 +1304,61 @@ def _trash_row(entry: str, side: dict[str, Any]) -> dict[str, Any]:
             "pending": side.get("state") != "trashed"}
 
 
-def _trash_scan(tenant_id: str) -> list[tuple[Path, dict[str, Any]]]:
-    """(entry dir, sidecar) of this tenant's trash, bounded; links, junctions, foreign names and unreadable sidecars are skipped."""
+def _trash_names(tenant_id: str) -> list[tuple[str, Path]]:
+    """``(name timestamp, entry dir)`` of every directory in this tenant's ``.trash`` whose NAME is a trash entry name, oldest
+    first (REVIEW-0063 m6: only matching names count - junk names never fill a window; the order is the deletion time the
+    name carries, not the directory's order). Links and junctions are skipped; no sidecar is read here. At most
+    ``TRASH_NAME_CAP`` names are looked at."""
     try:
         t = _trash_root(tenant_id)
     except UnsafePath:
         return []
     if t is None or not t.is_dir():
         return []
-    out: list[tuple[Path, dict[str, Any]]] = []
+    out: list[tuple[str, Path]] = []
     try:
         with os.scandir(t) as it:
-            ents = [e for _, e in zip(range(TRASH_SCAN_LIMIT), it)]
+            for _n, e in zip(range(TRASH_NAME_CAP), it):
+                m = _TRASH_ENTRY_RE.match(e.name)
+                if m is None or e.is_symlink() or dirent_is_junction(e) or not e.is_dir(follow_symlinks=False):
+                    continue
+                out.append((m.group(2), Path(e.path)))
     except OSError:
-        return []
-    for e in ents:
-        if not _TRASH_ENTRY_RE.match(e.name) or e.is_symlink() or dirent_is_junction(e) or not e.is_dir(follow_symlinks=False):
-            continue
-        side = _read_sidecar(Path(e.path))
-        if side is not None:
-            out.append((Path(e.path), side))
+        return out
+    out.sort(key=lambda x: (x[0], x[1].name))
     return out
 
 
-def list_trash(tenant_id: str) -> dict[str, Any]:
-    """``GET /projects/-/trash``: newest first."""
-    rows = [_trash_row(d.name, side) for d, side in _trash_scan(tenant_id)]
-    rows.sort(key=lambda r: (str(r.get("deleted_at") or ""), r["entry"]), reverse=True)
-    return {"entries": rows, "ttl_days": int(TRASH_TTL_S // 86400)}
+def _trash_scan(tenant_id: str, *, newest_first: bool = False, offset: int = 0,
+                limit: int = TRASH_SCAN_LIMIT) -> list[tuple[Path, dict[str, Any]]]:
+    """(entry dir, sidecar) of this tenant's trash in the order of the names' deletion time, the sidecars of at most *limit*
+    names from *offset* read; an unreadable sidecar or one whose id is not the name's (:func:`_entry_sidecar`) is skipped."""
+    names = _trash_names(tenant_id)
+    if newest_first:
+        names.reverse()
+    out: list[tuple[Path, dict[str, Any]]] = []
+    for _ts, d in names[max(offset, 0):max(offset, 0) + max(limit, 0)]:
+        side = _entry_sidecar(d)
+        if side is not None:
+            out.append((d, side))
+    return out
+
+
+def trash_count(tenant_id: str) -> int:
+    """How many entries the trash holds (matching names; no sidecar is read)."""
+    return len(_trash_names(tenant_id))
+
+
+def list_trash(tenant_id: str, *, offset: int = 0, limit: int = TRASH_SCAN_LIMIT) -> dict[str, Any]:
+    """``GET /projects/-/trash[?offset=&limit=]``: newest first (by the deletion time in the entry name), one page of at most
+    ``TRASH_SCAN_LIMIT`` entries; ``total`` counts every entry, ``next_offset`` is None on the last page."""
+    offset = max(int(offset), 0)
+    limit = min(max(int(limit), 1), TRASH_SCAN_LIMIT)
+    total = trash_count(tenant_id)
+    rows = [_trash_row(d.name, side) for d, side in _trash_scan(tenant_id, newest_first=True, offset=offset, limit=limit)]
+    nxt = offset + limit if offset + limit < total else None
+    return {"entries": rows, "ttl_days": int(TRASH_TTL_S // 86400), "total": total, "offset": offset, "limit": limit,
+            "next_offset": nxt}
 
 
 def _trash_name(t: Path, project_id: str, ts: float) -> str:
@@ -1417,7 +1455,7 @@ def _audit_tenant_error(tenant_id: str, project_id: str) -> None:
 def restore_project(tenant_id: str, entry: str) -> dict[str, Any]:
     """``POST /projects/-/trash/{entry}/restore``: rename the folder back to ``<managed_root>/<id>`` when that place is free."""
     d = _trash_entry_dir(tenant_id, entry)
-    side = _read_sidecar(d)
+    side = _entry_sidecar(d)
     if side is None:
         raise NotFound("no such trash entry")
     return _restore_locked(tenant_id, side["id"], entry)
@@ -1426,7 +1464,7 @@ def restore_project(tenant_id: str, entry: str) -> dict[str, Any]:
 @_project_locked
 def _restore_locked(tenant_id: str, project_id: str, entry: str) -> dict[str, Any]:
     d = _trash_entry_dir(tenant_id, entry)                          # again under the lock
-    side = _read_sidecar(d)
+    side = _entry_sidecar(d)
     if side is None or side["id"] != project_id:
         raise NotFound("no such trash entry")
     files = d / _TRASH_FILES
@@ -1435,6 +1473,10 @@ def _restore_locked(tenant_id: str, project_id: str, entry: str) -> dict[str, An
     e = registry.get(tenant_id, project_id)
     if e is not None and not registry.is_trashed(e):
         raise Conflict("another project already uses this id; remove it from the list first", "id_taken")
+    if e is not None and e.get("trash_entry") != entry:
+        # REVIEW-0063 m8: the list names ANOTHER trash entry for this id - this one is not that project's
+        _audit_refusal(tenant_id, "trash_entry_mismatch", project_id)
+        raise Conflict("another trash entry holds this project; restore that one", "id_taken")
     mr = registry.known_managed_root(tenant_id)
     assert mr is not None
     target = mr / project_id
@@ -1491,7 +1533,7 @@ def _remove_entry(tenant_id: str, d: Path, side: dict[str, Any]) -> None:
 def purge_trash_entry(tenant_id: str, entry: str, *, confirm_id: str) -> dict[str, Any]:
     """``DELETE /projects/-/trash/{entry}``: remove one entry for good; the typed id must match."""
     d = _trash_entry_dir(tenant_id, entry)
-    side = _read_sidecar(d)
+    side = _entry_sidecar(d)
     if side is None:
         raise NotFound("no such trash entry")
     if confirm_id != side["id"]:
@@ -1503,7 +1545,7 @@ def purge_trash_entry(tenant_id: str, entry: str, *, confirm_id: str) -> dict[st
 @_project_locked
 def _purge_locked(tenant_id: str, project_id: str, entry: str) -> dict[str, Any]:
     d = _trash_entry_dir(tenant_id, entry)
-    side = _read_sidecar(d)
+    side = _entry_sidecar(d)
     if side is None or side["id"] != project_id:
         raise NotFound("no such trash entry")
     if side.get("state") != "trashed":
@@ -1523,15 +1565,23 @@ def sweep_trash(tenant_id: str, *, busy: bool = False, now: Optional[float] = No
         return {"purged": 0, "skipped": "busy"}
     now = _now() if now is None else now
     purged = 0
-    for d, side in sorted(_trash_scan(tenant_id), key=lambda x: float(x[1].get("deleted_ts") or 0)):
-        if purged >= TRASH_SWEEP_LIMIT:
+    reads = 0
+    # REVIEW-0063 m6: candidates are the names whose deletion time is past the TTL, oldest first, from the WHOLE trash; only the
+    # sidecar reads are capped per tick (TRASH_SCAN_LIMIT), so the 30-day bound holds however many entries the trash holds
+    cutoff = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now - TRASH_TTL_S))
+    for name_ts, d in _trash_names(tenant_id):
+        if purged >= TRASH_SWEEP_LIMIT or reads >= TRASH_SCAN_LIMIT or name_ts >= cutoff:
             break
+        reads += 1
+        side = _entry_sidecar(d)
+        if side is None:
+            continue
         ts = side.get("deleted_ts")
         if side.get("state") != "trashed" or not isinstance(ts, (int, float)) or now - float(ts) <= TRASH_TTL_S:
             continue
         try:
             with _project_lock_of(tenant_id, side["id"]):
-                again = _read_sidecar(d)
+                again = _entry_sidecar(d)
                 if again is None or again.get("state") != "trashed":
                     continue
                 _remove_entry(tenant_id, d, again)

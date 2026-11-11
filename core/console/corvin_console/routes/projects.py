@@ -12,7 +12,7 @@ import json
 import time
 from typing import Annotated, Any, AsyncIterator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -549,8 +549,8 @@ class ConfirmBody(BaseModel):
 
 
 @collection.get("/trash")
-async def trash_list(rec: Sess) -> dict:
-    return await asyncio.to_thread(_call, svc.list_trash, rec.tenant_id)
+async def trash_list(rec: Sess, offset: int = Query(0, ge=0, le=10_000_000), limit: int = Query(200, ge=1, le=200)) -> dict:
+    return await asyncio.to_thread(_call, svc.list_trash, rec.tenant_id, offset=offset, limit=limit)
 
 
 @collection.post("/trash/{entry}/restore")
