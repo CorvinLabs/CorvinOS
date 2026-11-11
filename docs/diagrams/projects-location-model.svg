@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" width="1000" height="640" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif">
+  <title>Where projects live: the managed workspace, the projects root and own folders, and the one location rule</title>
+  <desc>A new project goes to the tenant's default storage: the Corvin workspace in the platform data directory (default for a fresh tenant), a stored projects root, or an own folder the user names. The workspace is bound by its marker workspace.json; every client-named place passes registry.validate_location, twelve checks in order, the last of which for a new managed folder is the path gate's hint test. Audit points are marked.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6475"/>
+    </marker>
+    <style>
+      .box{fill:#ffffff;stroke:#c9ced8;stroke-width:1.2}
+      .srv{fill:#f6f2ea;stroke:#c8a66a;stroke-width:1.2}
+      .gate{fill:#fff7e8;stroke:#d08a16;stroke-width:1.4}
+      .bad{fill:#fdf0ee;stroke:#c0503a;stroke-width:1.2}
+      .h{font-size:14px;font-weight:600;fill:#1d2330}
+      .t{font-size:12px;fill:#3b4352}
+      .m{font-size:11px;fill:#5b6475;font-family:ui-monospace, SFMono-Regular, Menlo, monospace}
+      .au{font-size:11px;fill:#8a4f00;font-weight:600}
+      .lane{font-size:12px;font-weight:600;fill:#5b6475;letter-spacing:.06em}
+      .e{stroke:#5b6475;stroke-width:1.4;fill:none;marker-end:url(#a)}
+      .d{stroke:#5b6475;stroke-width:1.2;fill:none;stroke-dasharray:5 4;marker-end:url(#a)}
+    </style>
+  </defs>
+  <rect width="1000" height="640" fill="#fbfaf7"/>
+
+  <text x="24" y="32" class="lane">WHERE A NEW PROJECT GOES (settings.json: default_storage, ADR-2321 Decisions 7, 9, 16)</text>
+  <rect x="24" y="44" width="300" height="104" rx="8" class="srv"/>
+  <text x="36" y="66" class="h">Corvin workspace (managed)</text>
+  <text x="36" y="84" class="t">default of a fresh tenant; outside CORVIN_HOME</text>
+  <text x="36" y="102" class="m">&lt;data&gt;/corvin/projects/w-&lt;10 hex&gt;/&lt;id&gt;</text>
+  <text x="36" y="120" class="t">Linux ~/.local/share · Win %LOCALAPPDATA%</text>
+  <text x="36" y="136" class="t">macOS ~/Library/Application Support</text>
+
+  <rect x="350" y="44" width="300" height="104" rx="8" class="box"/>
+  <text x="362" y="66" class="h">Projects root (root)</text>
+  <text x="362" y="84" class="t">a tenant that had set one keeps creating</text>
+  <text x="362" y="102" class="t">there; grandfathered below the root while</text>
+  <text x="362" y="118" class="t">it resolves where it did when it was set</text>
+  <text x="362" y="136" class="m">projects_root, projects_root_resolved</text>
+
+  <rect x="676" y="44" width="300" height="104" rx="8" class="box"/>
+  <text x="688" y="66" class="h">Own folder (own)</text>
+  <text x="688" y="84" class="t">any folder the rule allows, named in the</text>
+  <text x="688" y="102" class="t">wizard or Add existing folder; never moved,</text>
+  <text x="688" y="118" class="t">never deleted by Corvin (only removed from</text>
+  <text x="688" y="136" class="t">the list); a hint word only warns</text>
+
+  <text x="24" y="182" class="lane">BINDING THE WORKSPACE (registry.ensure_managed_root, on GET /projects)</text>
+  <rect x="24" y="194" width="952" height="84" rx="8" class="gate"/>
+  <text x="36" y="216" class="h">workspace.json {schema, tenant, workspace_key, corvin_home}</text>
+  <text x="36" y="236" class="t">(a) this tenant, key and home: used   (b) another home that no longer exists: rewritten, rebound</text>
+  <text x="36" y="254" class="t">(c) another home that still exists, or (d) another tenant or key: workspace_foreign, nothing written</text>
+  <text x="36" y="270" class="t">(e) no key in settings.json: a marker naming this tenant and home is recovered, else a new key; Settings: rekeyed</text>
+  <text x="760" y="216" class="au">audit project.storage_changed</text>
+  <text x="760" y="230" class="au">BEFORE the write, no path</text>
+
+
+  <text x="24" y="312" class="lane">ONE LOCATION RULE (registry.validate_location; the picker's verdict and the mutation call it)</text>
+  <rect x="24" y="324" width="300" height="196" rx="8" class="gate"/>
+  <text x="36" y="346" class="h">Checks in order, both forms</text>
+  <text x="36" y="364" class="m">1-3 path_rule (UNC, names, length)</text>
+  <text x="36" y="380" class="m">4 top_level   5 corvin_home</text>
+  <text x="36" y="396" class="m">6 system_prefix   7 protected</text>
+  <text x="36" y="412" class="m">8 hidden   10 symlink</text>
+  <text x="36" y="428" class="m">9 other_tenant / workspace_root</text>
+  <text x="36" y="444" class="m">11 nested</text>
+  <text x="36" y="460" class="m">12 per purpose: not_empty, missing,</text>
+  <text x="36" y="476" class="m">   wrong_manifest</text>
+  <text x="36" y="500" class="t">given AND resolved form, every component</text>
+
+  <rect x="350" y="324" width="300" height="196" rx="8" class="gate"/>
+  <text x="362" y="346" class="h">New managed folder: hint test</text>
+  <text x="362" y="364" class="t">create / move / import directly in the</text>
+  <text x="362" y="380" class="t">own managed_root: the path gate's own</text>
+  <text x="362" y="396" class="t">_looks_protected (core/projects/hints.py)</text>
+  <text x="362" y="414" class="m">checkout: corvin_operator/voice/hooks/</text>
+  <text x="362" y="430" class="m">wheel: corvin_core/_vendor/corvin_operator/</text>
+  <text x="362" y="446" class="m">       voice/hooks/path_gate.py</text>
+  <text x="362" y="466" class="m">match       -&gt; 422 hint_word</text>
+  <text x="362" y="482" class="m">not loadable -&gt; 422 hint_source</text>
+  <text x="362" y="500" class="t">+ doctor check, GET / hint_source, one log</text>
+
+  <rect x="676" y="324" width="300" height="88" rx="8" class="bad"/>
+  <text x="688" y="346" class="h">Refusal</text>
+  <text x="688" y="364" class="t">ProjectPathError(reason_class) -&gt; 422 with</text>
+  <text x="688" y="380" class="t">the class's fixed sentence, never a path</text>
+  <text x="688" y="400" class="au">audit project.blocked (reason_class)</text>
+
+  <rect x="676" y="432" width="300" height="88" rx="8" class="srv"/>
+  <text x="688" y="454" class="h">From the verdict to the folder</text>
+  <text x="688" y="472" class="t">make_location: O_NOFOLLOW per component,</text>
+  <text x="688" y="488" class="t">re-checked before register; a swap is</text>
+  <text x="688" y="504" class="t">refused symlink, the made folders removed</text>
+
+  <path d="M324 422 H350" class="e"/>
+  <path d="M650 368 H676" class="e"/>
+  <path d="M650 476 H676" class="e"/>
+
+  <text x="24" y="556" class="lane">THE LIST (registry.json)</text>
+  <rect x="24" y="568" width="952" height="52" rx="8" class="box"/>
+  <text x="36" y="590" class="t">every entry carries storage managed | own (healed from the resolved path when missing); projects registered before the</text>
+  <text x="36" y="608" class="t">workspace existed read own and never move; a trashed entry is storage trashed (see projects-trash-flow.svg)</text>
+</svg>

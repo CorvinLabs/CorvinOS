@@ -97,11 +97,13 @@
   <text x="528" y="452" class="t">never over content</text>
   <text x="528" y="468" class="m">→ folder_not_empty</text>
 
-  <rect x="680" y="396" width="296" height="84" rx="8" class="srv"/>
-  <text x="692" y="418" class="h">5 project.yaml  ·  6 git step</text>
-  <text x="692" y="436" class="t">tenant, id, title, protection written; then per repo</text>
-  <text x="692" y="452" class="m">init --template= · verify · list-heads</text>
-  <text x="692" y="468" class="m">unbundle · fsck · update-ref</text>
+  <rect x="680" y="396" width="296" height="92" rx="8" class="srv"/>
+  <text x="692" y="414" class="h">5 project.yaml  ·  6 git step</text>
+  <text x="692" y="429" class="t">tenant, id, title, protection; then per repo</text>
+  <text x="692" y="443" class="m">init --template= · verify · list-heads</text>
+  <text x="692" y="456" class="m">unbundle · fsck · update-ref --stdin</text>
+  <text x="692" y="469" class="m">symbolic-ref HEAD · read-tree HEAD</text>
+  <text x="692" y="482" class="m">core.symlinks=false · no checkout</text>
 
   <rect x="24" y="500" width="300" height="84" rx="8" class="srv"/>
   <text x="36" y="522" class="h">7 Register  ·  8 Repair</text>
@@ -146,7 +148,7 @@
   <path d="M338 438 H352" class="e"/>
   <path d="M502 438 H516" class="e"/>
   <path d="M666 438 H680" class="e"/>
-  <path d="M828 480 C828 492 174 488 174 500" class="e"/>
+  <path d="M828 488 C828 496 174 492 174 500" class="e"/>
   <path d="M324 542 H344" class="e"/>
   <path d="M644 542 H664" class="e"/>
 </svg>

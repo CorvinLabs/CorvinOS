@@ -44,6 +44,9 @@ user's and are never part of it.
 
 ### The managed workspace (ADR-2321 Decision 7)
 
+Diagram of the location model (default storage, workspace binding, the one location rule with the hint test):
+[`docs/diagrams/projects-location-model.svg`](../diagrams/projects-location-model.svg).
+
 A tenant's *Corvin workspace* lives in the platform's per-user data directory, OUTSIDE `CORVIN_HOME`:
 
 | Platform | `managed_root` |
@@ -459,6 +462,9 @@ requested|applied|rebound|recovered|rekeyed|error - never a path or a workspace 
 `project.browse_refused` (WARNING; `reason_class`, `tenant_id` only - never a path or a name): § Picker.
 
 ## Trash (ADR-2321 Decisions 6, 12; PLAN-0972 phase 5, T-0404)
+
+Diagram (delete, crash recovery, restore, permanent delete, sweep):
+[`docs/diagrams/projects-trash-flow.svg`](../diagrams/projects-trash-flow.svg).
 
 Corvin deletes files only of a MANAGED project (`storage: managed`, a folder directly in the own `managed_root`), only to
 the trash, only with the typed id. An `own` project has no delete path at all: "Remove from the list" stays the only

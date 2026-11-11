@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="1000" height="600" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif">
+  <title>Trash of managed projects: delete to the trash, restore, permanent delete, the 30-day sweep and crash recovery</title>
+  <desc>Only a managed project's folder goes to the trash, only with the typed id. The delete writes a pending sidecar, renames the folder into the entry, updates the list and marks the sidecar trashed, all under the project lock. Restore renames it back; Delete permanently and the sweep remove the entry audit-first; a pending entry a crash left is settled under the project lock by the listing, restore, purge and the sweep. Audit points are marked.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6475"/>
+    </marker>
+    <style>
+      .box{fill:#ffffff;stroke:#c9ced8;stroke-width:1.2}
+      .srv{fill:#f6f2ea;stroke:#c8a66a;stroke-width:1.2}
+      .gate{fill:#fff7e8;stroke:#d08a16;stroke-width:1.4}
+      .bad{fill:#fdf0ee;stroke:#c0503a;stroke-width:1.2}
+      .h{font-size:14px;font-weight:600;fill:#1d2330}
+      .t{font-size:12px;fill:#3b4352}
+      .m{font-size:11px;fill:#5b6475;font-family:ui-monospace, SFMono-Regular, Menlo, monospace}
+      .au{font-size:11px;fill:#8a4f00;font-weight:600}
+      .lane{font-size:12px;font-weight:600;fill:#5b6475;letter-spacing:.06em}
+      .e{stroke:#5b6475;stroke-width:1.4;fill:none;marker-end:url(#a)}
+      .d{stroke:#5b6475;stroke-width:1.2;fill:none;stroke-dasharray:5 4;marker-end:url(#a)}
+    </style>
+  </defs>
+  <rect width="1000" height="600" fill="#fbfaf7"/>
+
+  <text x="24" y="32" class="lane">DELETE (DELETE /projects/{id}/files, typed id, under the project lock)</text>
+  <rect x="24" y="44" width="220" height="96" rx="8" class="gate"/>
+  <text x="36" y="66" class="h">Gate</text>
+  <text x="36" y="84" class="m">builtin · pending (import)</text>
+  <text x="36" y="100" class="m">not_managed (own) · missing</text>
+  <text x="36" y="116" class="m">confirm_mismatch</text>
+  <text x="36" y="132" class="au">audit project.blocked</text>
+
+  <rect x="264" y="44" width="228" height="96" rx="8" class="srv"/>
+  <text x="276" y="66" class="h">1 Sidecar pending</text>
+  <text x="276" y="84" class="m">.trash/&lt;id&gt;-&lt;stamp&gt;/trash.json</text>
+  <text x="276" y="102" class="t">{id, title, deleted_ts,</text>
+  <text x="276" y="118" class="t">original_path, state: pending}</text>
+  <text x="276" y="134" class="au">audit project.deleted requested</text>
+
+  <rect x="512" y="44" width="220" height="96" rx="8" class="srv"/>
+  <text x="524" y="66" class="h">2 One rename</text>
+  <text x="524" y="84" class="m">&lt;managed_root&gt;/&lt;id&gt; -&gt;</text>
+  <text x="524" y="100" class="m">  .trash/&lt;entry&gt;/project/</text>
+  <text x="524" y="118" class="t">same disk; EXDEV -&gt; cross_device,</text>
+  <text x="524" y="134" class="t">entry removed, nothing changed</text>
+
+  <rect x="752" y="44" width="224" height="96" rx="8" class="srv"/>
+  <text x="764" y="66" class="h">3 List  ·  4 Sidecar trashed</text>
+  <text x="764" y="84" class="m">storage: trashed, trash_entry</text>
+  <text x="764" y="102" class="t">a failed list update renames</text>
+  <text x="764" y="118" class="t">back; attachments dropped</text>
+  <text x="764" y="134" class="au">audit project.deleted applied</text>
+
+  <path d="M244 92 H264" class="e"/>
+  <path d="M492 92 H512" class="e"/>
+  <path d="M732 92 H752" class="e"/>
+
+  <text x="24" y="176" class="lane">CRASH RECOVERY (_settle_pending, under the project lock: a pending sidecar seen there is a crash's)</text>
+  <rect x="24" y="188" width="952" height="104" rx="8" class="gate"/>
+  <text x="36" y="210" class="t">crash before 2 (no project/ folder): the entry is removed, the project untouched</text>
+  <text x="36" y="228" class="t">crash between 2 and 3 (the list names the vanished original): set_trashed, then trashed - the confirmed delete is completed</text>
+  <text x="36" y="246" class="t">crash between 3 and 4 (the list names this entry): trashed; anything else: trashed (Restore answers as for any entry)</text>
+  <text x="36" y="266" class="m">who settles: the listing (lock wait 0.2 s, busy -&gt; stays pending), Restore, Delete permanently, the sweep (1 s)</text>
+  <text x="36" y="284" class="au">audit project.deleted recovered BEFORE the list or the entry changes</text>
+
+  <text x="24" y="326" class="lane">THE TRASH (GET /projects/-/trash, newest first, pages of 200: offset, limit, total, next_offset)</text>
+  <rect x="24" y="338" width="300" height="112" rx="8" class="box"/>
+  <text x="36" y="360" class="h">Restore</text>
+  <text x="36" y="378" class="t">the entry is this id's (name bound);</text>
+  <text x="36" y="394" class="t">&lt;managed_root&gt;/&lt;id&gt; must be free</text>
+  <text x="36" y="410" class="m">folder_not_empty · id_taken · missing</text>
+  <text x="36" y="428" class="t">rename back, set_restored, repair</text>
+  <text x="36" y="444" class="au">audit project.restored requested / applied</text>
+
+  <rect x="350" y="338" width="300" height="112" rx="8" class="bad"/>
+  <text x="362" y="360" class="h">Delete permanently</text>
+  <text x="362" y="378" class="t">the typed id must equal the sidecar's</text>
+  <text x="362" y="394" class="t">rmtree of the entry, a direct child of</text>
+  <text x="362" y="410" class="t">.trash/, never through a link; the id</text>
+  <text x="362" y="426" class="t">is free again</text>
+  <text x="362" y="444" class="au">audit project.deleted purged FIRST</text>
+
+  <rect x="676" y="338" width="300" height="112" rx="8" class="srv"/>
+  <text x="688" y="360" class="h">Sweep (projector tick)</text>
+  <text x="688" y="378" class="t">names past 30 days, oldest first, from the</text>
+  <text x="688" y="394" class="t">whole trash; at most 10 removals and 200</text>
+  <text x="688" y="410" class="t">sidecar reads per tick; skipped while</text>
+  <text x="688" y="426" class="m">loop_health.host_saturated()</text>
+  <text x="688" y="444" class="au">audit like a permanent delete</text>
+
+  <text x="24" y="486" class="lane">NOT TOUCHED</text>
+  <rect x="24" y="498" width="952" height="80" rx="8" class="box"/>
+  <text x="36" y="520" class="t">an own folder (no delete path, only Remove from the list) · GDPR Art. 17 erasure (L-projects reports SKIPPED: no per-person key)</text>
+  <text x="36" y="538" class="t">a trashed project is invisible outside the trash: per-project routes 409 in_trash; projector, attachment, export and activity skip it</text>
+  <text x="36" y="556" class="t">no path and no entry name in the audit chain; layout: trash.json BESIDE project/, so a project file of that name is never overwritten</text>
+</svg>
