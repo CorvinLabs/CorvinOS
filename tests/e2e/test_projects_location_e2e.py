@@ -669,7 +669,7 @@ class MoveNamespaceHints(LocationBase):
             pid, src = plan["project_id"], self.tmp / "code" / "stay-put"
             tree, index = _tree(src), c.own.get(f"{_URL}/{pid}").json()["path"]
 
-            def exdev(a, b):
+            def exdev(a, b, **kw):          # the move renames into a directory descriptor (REVIEW-0063 m4)
                 raise OSError(errno.EXDEV, "Invalid cross-device link")
             with mock.patch.object(c.svc.os, "rename", exdev):
                 m = c.own.post(f"{_URL}/{pid}/move", json={"location": str(self.tmp / "other-disk" / "stay-put")}, headers=c.h)

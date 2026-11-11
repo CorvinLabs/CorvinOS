@@ -662,22 +662,36 @@ def _create_project(tenant_id: str, plan_id: str, rec: "PlanRecord") -> dict[str
     _audit(tenant_id, "project.created", outcome="requested", **base)          # audit-first
     outcome = "error"
     try:
-        loc.mkdir(parents=True, exist_ok=True)
-        man = _manifest_for(tenant_id, rec.project_id, rec.title, tpl.id, tpl.version, rec.docs_mode,
-                            plan.features, list(tpl.offered), tpl.videos, rec.role, rec.classification,
-                            rec.assistant_access)
-        manifest.write(loc, man)                                                # the truth first,
+        # REVIEW-0063 m4: made component by component without following a link, then checked to still be where the verdict
+        # put it - a component swapped for a link after validate_location refuses (symlink) instead of creating the project there
         try:
-            registry.register(tenant_id, rec.project_id, loc, man["template"])  # then the index
-        except BaseException:
-            # nothing else was written yet: take the manifest (and the folder this call created) back, so planning again works
-            try:
-                (loc / manifest.FILE).unlink()
-                if not any(loc.iterdir()):
-                    loc.rmdir()
-            except OSError:
-                pass
+            hloc = registry.make_location(loc)
+        except registry.ProjectPathError as exc:
+            _audit_refusal(tenant_id, exc.reason_class, rec.project_id)
             raise
+        try:
+            man = _manifest_for(tenant_id, rec.project_id, rec.title, tpl.id, tpl.version, rec.docs_mode,
+                                plan.features, list(tpl.offered), tpl.videos, rec.role, rec.classification,
+                                rec.assistant_access)
+            manifest.write(loc, man)                                            # the truth first,
+            try:
+                if not registry.location_intact(loc, hloc):                     # re-checked right before it is recorded
+                    _audit_refusal(tenant_id, "symlink", rec.project_id)
+                    raise registry.ProjectPathError(registry.SENTENCES["symlink"], "symlink")
+                registry.register(tenant_id, rec.project_id, loc, man["template"])  # then the index
+            except BaseException:
+                # nothing else was written yet: take the manifest (and the folders this call created) back, so planning again works
+                try:
+                    if hloc.fd is not None:
+                        os.unlink(manifest.FILE, dir_fd=hloc.fd)                # in the folder that was made, never through a link
+                    elif hloc.still_here():
+                        (loc / manifest.FILE).unlink()
+                except OSError:
+                    pass
+                hloc.rollback()
+                raise
+        finally:
+            hloc.close()
         registry.set_protection(tenant_id, rec.project_id, rec.classification, rec.assistant_access)
         try:
             applied = F.apply_plan(plan, loc, {**ctx, "_root": str(loc)}, _runner(tenant_id, loc))
@@ -798,14 +812,31 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
         raise Conflict("the target lies inside the project itself", "move_inside")
     if dest.exists() and any(dest.iterdir()):
         raise Conflict("the target is not empty", "target_exists")
-    _audit(tenant_id, "project.moved", project_id=project_id, outcome="requested")
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.exists():
-            dest.rmdir()                                                # empty by the check above
+        root_ident = (os.lstat(root).st_dev, os.lstat(root).st_ino)
+    except OSError:
+        raise Conflict("the directory could not be moved (it is gone); nothing changed", "move_failed") from None
+    _audit(tenant_id, "project.moved", project_id=project_id, outcome="requested")
+    hpar = None
+    try:
+        # REVIEW-0063 m4: the target's parent is made/opened without following a link and verified; the rename goes INTO that
+        # directory's descriptor (POSIX), and the moved folder must be the project's folder at the judged place afterwards
+        try:
+            hpar = registry.make_location(dest.parent)
+        except registry.ProjectPathError as exc:
+            _audit_refusal(tenant_id, exc.reason_class, project_id)
+            raise
+        if hpar.fd is not None:
+            with contextlib.suppress(FileNotFoundError):
+                os.rmdir(dest.name, dir_fd=hpar.fd)                     # empty by the check above
+        elif dest.exists():
+            dest.rmdir()
         for attempt in range(8):
             try:
-                os.rename(root, dest)
+                if hpar.fd is not None:
+                    os.rename(root, dest.name, dst_dir_fd=hpar.fd)
+                else:
+                    os.rename(root, dest)
                 break
             except PermissionError:
                 # Windows refuses to rename a folder another process uses as its working directory - the activity watcher's git
@@ -813,12 +844,32 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
                 if attempt == 7:
                     raise
                 time.sleep(0.25)
+        try:
+            moved = os.stat(dest.name, dir_fd=hpar.fd, follow_symlinks=False) if hpar.fd is not None else os.lstat(dest)
+            ok = (moved.st_dev, moved.st_ino) == root_ident and registry.location_intact(dest.parent, hpar) and \
+                registry._same_place(dest)
+        except OSError:
+            ok = False
+        if not ok:
+            with contextlib.suppress(OSError):
+                if hpar.fd is not None:
+                    os.rename(dest.name, root, src_dir_fd=hpar.fd)
+                else:
+                    os.rename(dest, root)
+            hpar.rollback()
+            _audit_refusal(tenant_id, "symlink", project_id)
+            raise registry.ProjectPathError(registry.SENTENCES["symlink"], "symlink")
     except OSError as exc:
         if exc.errno == errno.EXDEV or getattr(exc, "winerror", None) == 17:      # ERROR_NOT_SAME_DEVICE: never copy across disks
             _audit_refusal(tenant_id, "cross_device", project_id)
             raise Conflict(CROSS_DEVICE, "cross_device") from None
         _audit_refusal(tenant_id, "move_failed", project_id)
+        if hpar is not None:
+            hpar.rollback()
         raise Conflict(f"the directory could not be moved ({type(exc).__name__}); nothing changed", "move_failed") from None
+    finally:
+        if hpar is not None:
+            hpar.close()
     try:
         registry.relocate(tenant_id, project_id, dest)
     except Exception:  # noqa: BLE001 - the index did not follow: put the folder back (release review R10)
@@ -3302,13 +3353,15 @@ def _apply_steps(tenant_id: str, project_id: str, zip_path: Path, card: dict[str
     tmp: Optional[Path] = None
     try:
         registry.register(tenant_id, pid, loc, template, pending="import")
-        loc.parent.mkdir(parents=True, exist_ok=True)
+        registry.make_location(loc.parent).close()        # REVIEW-0063 m4: made without following a link, then verified
         tmp = b.sibling(loc.parent, pid, b.IMPORTING)
         os.mkdir(tmp, 0o700)
         # (3) extraction, (4) the one rename
         b.extract_project(zip_path, card["id"], tmp, kb=kb, history=hist)
         _place_tree(tmp, loc)
         tmp = None
+        if not registry._same_place(loc):                 # an ancestor became a link meanwhile: never recorded there
+            raise registry.ProjectPathError(registry.SENTENCES["symlink"], "symlink")
     except BaseException as exc:
         if tmp is not None:
             shutil.rmtree(tmp, ignore_errors=True)

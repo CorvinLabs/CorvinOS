@@ -116,7 +116,8 @@ class _Ctx:
         raw = registry._stored_root(registry._read_settings_raw(tenant_id))
         if raw:
             try:
-                self.base = Path(os.path.abspath(registry.projects_root(tenant_id)))
+                gf = registry.grandfather_root(tenant_id, pin=False)  # only while it resolves where it did when set (REVIEW-0063 m5)
+                self.base = gf[0] if gf is not None else None
             except (OSError, ValueError):
                 self.base = None
 

@@ -13,6 +13,7 @@ import os
 import stat
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 #: a reparse tag with this bit set names another place (symlink, junction/mount point, WCI ...)
 _NAME_SURROGATE = 0x20000000
@@ -216,3 +217,122 @@ def file_lock(lock_path: Path, timeout: float = 60.0):
                     fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
             os.close(fd)
+
+
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+
+
+def _fd_dirs() -> bool:
+    """mkdir/open/rmdir relative to a directory descriptor: POSIX (``os.fwalk`` exists exactly where open/stat take
+    ``dir_fd``); never on Windows."""
+    return os.name != "nt" and bool(_O_NOFOLLOW) and bool(_O_DIRECTORY) and hasattr(os, "fwalk")
+
+
+def _ident(st: os.stat_result) -> tuple[int, int]:
+    return st.st_dev, st.st_ino
+
+
+class DirHandle:
+    """A directory made or found by :func:`make_dirs_nofollow`, held open: ``fd`` (POSIX; None on Windows), ``ident``
+    (``st_dev``, ``st_ino``) and ``created`` (the directories this call made, outermost first). :meth:`rollback` removes
+    exactly those (only while empty), :meth:`close` releases the descriptors."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.fd: Optional[int] = None
+        self.ident: tuple[int, int] = (0, 0)
+        self.created: list[tuple[Optional[int], str, Path]] = []   # (parent fd or None, name, full path)
+        self._fds: list[int] = []
+
+    def still_here(self) -> bool:
+        """The path still names the directory this handle holds, and is not a link."""
+        try:
+            st = os.lstat(self.path)
+        except OSError:
+            return False
+        return not is_link(self.path) and stat.S_ISDIR(st.st_mode) and _ident(st) == self.ident
+
+    def rollback(self) -> None:
+        for pfd, name, full in reversed(self.created):
+            with contextlib.suppress(OSError):
+                if pfd is not None:
+                    os.rmdir(name, dir_fd=pfd)
+                elif not is_link(full):
+                    os.rmdir(full)
+        self.created = []
+
+    def close(self) -> None:
+        """Release the descriptors; ``created`` keeps the paths (a later :meth:`rollback` then goes by path)."""
+        self.created = [(None, n, f) for _p, n, f in self.created]
+        for x in [*self._fds, *([self.fd] if self.fd is not None else [])]:
+            with contextlib.suppress(OSError):
+                os.close(x)
+        self._fds = []
+        self.fd = None
+
+
+def make_dirs_nofollow(target: Path, *, mode: int = 0o777) -> DirHandle:
+    """Create *target* - an absolute path whose existing part was judged in its RESOLVED form (no link left in it) - and its
+    missing parents without following a link at any component (REVIEW-0063 m4: ``mkdir(parents=True)`` follows a component
+    swapped for a link after the verdict).
+
+    POSIX: every component from the anchor is opened ``O_DIRECTORY|O_NOFOLLOW`` relative to its parent's descriptor; a missing
+    one is made with ``mkdir(name, dir_fd=parent)`` and opened the same way. A component that is a link (or not a directory)
+    raises :class:`UnsafePath` and the directories made so far are removed. Windows (no ``dir_fd``): each component is checked
+    with :func:`is_link` before and its identity after ``mkdir``; a swap undone between two checks is not seen.
+
+    The caller holds the returned :class:`DirHandle` while it verifies the result and closes it."""
+    target = Path(os.path.abspath(target))
+    h = DirHandle(target)
+    parts = target.parts
+    try:
+        if _fd_dirs():
+            cur = os.open(parts[0], os.O_RDONLY | _O_DIRECTORY | _O_CLOEXEC)
+            try:
+                for i, name in enumerate(parts[1:], start=1):
+                    try:
+                        nxt = os.open(name, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW | _O_CLOEXEC, dir_fd=cur)
+                    except FileNotFoundError:
+                        try:
+                            os.mkdir(name, mode, dir_fd=cur)
+                        except FileExistsError:
+                            pass                                          # made in between: opened (and judged) below
+                        else:
+                            pfd = os.dup(cur)
+                            h._fds.append(pfd)
+                            h.created.append((pfd, name, Path(*parts[:i + 1])))
+                        try:
+                            nxt = os.open(name, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW | _O_CLOEXEC, dir_fd=cur)
+                        except OSError:
+                            raise UnsafePath(f"{Path(*parts[:i + 1])} is a link or not a folder") from None
+                    except OSError:
+                        raise UnsafePath(f"{Path(*parts[:i + 1])} is a link or not a folder") from None
+                    os.close(cur)
+                    cur = nxt
+            except BaseException:
+                os.close(cur)
+                raise
+            h.fd = cur
+            h.ident = _ident(os.fstat(cur))
+        else:
+            cur_p = Path(parts[0])
+            for i, name in enumerate(parts[1:], start=1):
+                cur_p = cur_p / name
+                if is_link(cur_p):
+                    raise UnsafePath(f"{cur_p} is a link")
+                if not cur_p.exists():
+                    try:
+                        os.mkdir(cur_p, mode)
+                        h.created.append((None, name, cur_p))
+                    except FileExistsError:
+                        pass
+                if is_link(cur_p) or not cur_p.is_dir():
+                    raise UnsafePath(f"{cur_p} is a link or not a folder")
+            h.ident = _ident(os.lstat(target))
+    except BaseException:
+        h.rollback()
+        h.close()
+        raise
+    return h

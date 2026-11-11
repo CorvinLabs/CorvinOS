@@ -31,7 +31,7 @@ from core.paths.tenant import corvin_home, tenant_home
 from core.tenants import validate_tenant_id
 
 from . import manifest
-from .fsutil import atomic_write, file_lock, is_link, read_text_any
+from .fsutil import DirHandle, LockBusy, UnsafePath, atomic_write, file_lock, is_link, make_dirs_nofollow, read_text_any
 
 SCHEMA = 1
 #: components that must never be (part of) a project root: version-control internals and the
@@ -445,19 +445,98 @@ def validate_root(tenant_id: str, path: str) -> Path:
     return validate_location(tenant_id, path, purpose="projects_root")
 
 
+#: settings.json: the projects root's resolved form when it was set - grandfathering holds only while it still resolves there
+ROOT_RESOLVED_KEY = "projects_root_resolved"
+
+
+def _same_place(judged: Path) -> bool:
+    """*judged* (a resolved form returned by :func:`validate_location`) still resolves to itself: no component became a link."""
+    now = _resolve_forgiving(judged)
+    if os.name == "nt" and str(now).startswith("\\\\") and not str(judged).startswith("\\\\"):
+        now = Path(os.path.abspath(judged))             # a mapped network drive keeps its letter (10a)
+    return _fold(str(now)) == _fold(str(judged))
+
+
+def make_location(resolved: Path) -> DirHandle:
+    """Create a judged location (create, move target parent, projects root) without following a link (REVIEW-0063 m4): the
+    folders are made component by component with ``fsutil.make_dirs_nofollow`` from the anchor of the RESOLVED form, then the
+    path must still resolve to itself and name the directory that was made. Otherwise the folders this call made are removed
+    and the verdict is ``symlink``. The caller closes the returned handle (and may :meth:`~DirHandle.rollback` it)."""
+    try:
+        h = make_dirs_nofollow(resolved)
+    except UnsafePath:
+        _refuse("symlink")
+    if not _same_place(resolved) or not h.still_here():
+        h.rollback()
+        h.close()
+        _refuse("symlink")
+    return h
+
+
+def location_intact(resolved: Path, h: DirHandle) -> bool:
+    """Right before a judged location is recorded: it still resolves to itself and is still the directory *h* holds."""
+    return _same_place(resolved) and h.still_here()
+
+
 def set_projects_root(tenant_id: str, path: str) -> Path:
     root = validate_root(tenant_id, path)
     try:
-        root.mkdir(parents=True, exist_ok=True)
+        h = make_location(root)
+    except ProjectPathError:
+        raise
     except OSError as exc:
         # a drive that does not exist, a folder without write access (C:\Windows\...), a full disk: the rule, never a 500
         raise ProjectPathError(f"the projects folder could not be created ({type(exc).__name__}); choose a folder you can write to") from None
     try:
-        os.chmod(root, 0o700) if not any(root.iterdir()) else None
-    except OSError:
-        pass
-    write_settings(tenant_id, projects_root=str(root))        # merges: default_storage, workspace_key, managed_root stay (M16)
+        try:
+            os.chmod(root, 0o700) if not any(root.iterdir()) else None
+        except OSError:
+            pass
+        if not location_intact(root, h):
+            h.rollback()
+            _refuse("symlink")
+        # merges: default_storage, workspace_key, managed_root stay (M16); the resolved form binds the grandfathering (m5)
+        write_settings(tenant_id, projects_root=str(root), **{ROOT_RESOLVED_KEY: str(_resolve_forgiving(root))})
+    finally:
+        h.close()
     return root
+
+
+def _pin_root_resolution(tenant_id: str, stored: str, resolved: Path) -> None:
+    """A projects root stored before its resolved form was recorded: record the current one (trust on first use), so a later
+    re-link of an ancestor ends the grandfathering. Best effort and never waiting long: busy -> next time."""
+    try:
+        with file_lock(registry_path(tenant_id).with_name("registry.lock"), timeout=2.0):
+            raw = _read_settings_raw(tenant_id)
+            if _stored_root(raw) == stored and not isinstance(raw.get(ROOT_RESOLVED_KEY), str):
+                _write_settings_locked(tenant_id, {ROOT_RESOLVED_KEY: str(resolved)})
+    except (LockBusy, OSError, RegistryError):
+        pass
+
+
+def grandfather_root(tenant_id: str, *, pin: bool = True) -> Optional[tuple[Path, Path]]:
+    """``(given, resolved)`` of the projects root below which checks 4, 6, 7, 8 and 10 judge only the components below the root
+    (REVIEW-0062 N1), or None when the binding no longer holds (REVIEW-0063 m5): a STORED root must still resolve to the form
+    recorded when it was set (``projects_root_resolved``; a legacy setting without one pins the current form on first use,
+    ``pin=False`` for read-only callers); the default ``~/projects`` (nothing stored) must have no link in its given form
+    (check 10's tolerated home ancestors and platform links aside). An ancestor re-linked after the root was set therefore
+    ends the grandfathering instead of carrying it to the link's target."""
+    raw = _read_settings_raw(tenant_id)
+    stored = _stored_root(raw)
+    pr_g = Path(os.path.abspath(projects_root(tenant_id)))
+    pr_r = _resolve_forgiving(pr_g)
+    if stored is not None:
+        rec = raw.get(ROOT_RESOLVED_KEY)
+        if isinstance(rec, str) and rec:
+            return (pr_g, pr_r) if _fold(rec) == _fold(str(pr_r)) else None
+        if pin:
+            _pin_root_resolution(tenant_id, stored, pr_r)
+        return pr_g, pr_r
+    try:
+        _check_links(pr_g, Path(pr_g.anchor))
+    except ProjectPathError:
+        return None
+    return pr_g, pr_r
 
 
 def _resolve_forgiving(p: Path) -> Path:
@@ -777,7 +856,7 @@ def validate_location(tenant_id: str, raw: str, *, purpose: Optional[str] = None
         pr = projects_root(tenant_id)
         pr_g = Path(os.path.abspath(pr))
         pr_r = _resolve_forgiving(pr_g)
-        if _strictly_under(given, pr_g) and _strictly_under(resolved, pr_r):
+        if _strictly_under(given, pr_g) and _strictly_under(resolved, pr_r) and grandfather_root(tenant_id) is not None:
             base_g = pr_g
             if is_link(pr_g):
                 _refuse("symlink", "the projects root must not be a link (symlink or junction)")

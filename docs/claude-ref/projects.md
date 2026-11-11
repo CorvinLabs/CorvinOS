@@ -154,7 +154,29 @@ Every component check runs over ALL components of both forms, from the anchor to
 projects root (given below given AND resolved below resolved) is judged by checks 4, 6, 7, 8 and 10 only on the
 components BELOW that root (and the root itself must not be a link); check 5 and checks 1-3, 9, 11, 12 run in
 full. So a stored `~/.projects`, a root below a linked folder or a root in `/var/tmp` keeps accepting creates,
-while `<root>/a/.git/b`, `<root>/.hidden/b` or a link below the root are still refused. The root itself is
+while `<root>/a/.git/b`, `<root>/.hidden/b` or a link below the root are still refused. **The grandfathering is bound to
+the place the root had when it was set (REVIEW-0063 m5, `registry.grandfather_root`):** `set_projects_root` records the
+root's resolved form as `projects_root_resolved` in `settings.json`, and a target is grandfathered only while the stored
+root still resolves to it - an ancestor re-linked later ends the grandfathering, and the full rule (check 10 `symlink`,
+check 6 ...) judges the target. A root stored before the record existed is pinned to its current resolution on first use
+(trust on first use, lock wait at most 2 s, else next time); the default `~/projects` (nothing stored) is grandfathered
+only while its given form has no link (check 10's tolerated home ancestors and platform links aside). The folder browser
+uses the same binding (read-only, never pins).
+
+**From the verdict to the folder (REVIEW-0063 m4).** Create, move, the projects root and the import's target parent are
+made by `registry.make_location(resolved)` = `fsutil.make_dirs_nofollow`: from the anchor of the RESOLVED form each
+existing component is opened `O_DIRECTORY|O_NOFOLLOW` relative to its parent's descriptor and each missing one is made with
+`mkdir(name, dir_fd=parent)` and opened the same way, so a component swapped for a link after `validate_location` fails
+instead of being followed; afterwards the path must still resolve to itself and name the directory that was opened, else
+the folders this call made are removed and the request is refused `symlink` (audited `project.blocked`). Create re-checks
+the place right before `registry.register` and removes its `project.yaml` through the held descriptor on a mismatch. Move
+renames the project INTO the held descriptor of the verified parent (`os.rename(src, name, dst_dir_fd=...)`) and then
+requires the moved folder to have the project folder's `st_dev`/`st_ino` at the judged place, else it is renamed back.
+Windows (no `dir_fd`): each component is checked with `fsutil.is_link` before and after its `mkdir` and the same
+resolve/identity checks run afterwards; a swap undone between two checks is not seen. Not closed on either platform: the
+files a create writes after the last check (`project.yaml`, the fragment files) go by path, so an ancestor swapped in that
+interval is caught only by the check before `register` (the project is then not recorded, the written files stay where the
+link pointed). The root itself is
 re-judged by the full rule only when it is set again (`PUT /projects/root` with the same value of a `~/.projects`
 root answers `hidden`). Registered projects are never re-judged on read.
 
@@ -1028,7 +1050,8 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
 - **Rename** (`PUT /projects/{id}/title`): the title in `project.yaml` only; the id (registry key, KB scope label) never changes.
 - **Move** (`POST /projects/{id}/move`, body `location`): a same-disk rename to an absent or empty place the
   location rule allows (purpose `move`); never into itself, never over content, never across disks (409
-  `cross_device`). The index follows, then repair regenerates the machine-local files
+  `cross_device`); renamed into the verified target parent's descriptor (REVIEW-0063 m4, § Grandfathering / From the
+  verdict to the folder). The index follows, then repair regenerates the machine-local files
   (they hold absolute paths); the response carries `repaired_files`. Audit: `project.renamed`, `project.moved`.
 - UI: "Add existing folder" on the list (the folder chosen in the picker), Rename and Move in the Settings tab (Move: the picker,
   then a second confirming click).
