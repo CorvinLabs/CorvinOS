@@ -130,8 +130,16 @@ export const EMPTY_FILTERS: Filters = {
   showClosed: true,
 };
 
+/** A KB card's title is "<id> · <title>": the query names this card exactly when it equals that id. */
+function namesExactly(it: Item, q: string): boolean {
+  const k = q.trim().toLowerCase();
+  return k !== "" && (it.title.toLowerCase() === k || it.title.toLowerCase().startsWith(`${k} · `));
+}
+
 export function matches(it: Item, f: Filters, nowMs: number = Date.now()): boolean {
-  if (f.statuses.length ? !f.statuses.includes(it.status) : it.status === "archived") return false;
+  // archived cards are hidden by default - except the one a search names exactly (a link from a project's changes names a
+  // task by its id, and a cancelled task is shown as archived: it must still be found, REVIEW-0076 N18)
+  if (f.statuses.length ? !f.statuses.includes(it.status) : it.status === "archived" && !namesExactly(it, f.q)) return false;
   if (!f.showClosed && !f.statuses.length && it.status === "complete") return false;
   if (f.priorities.length && !f.priorities.includes(it.priority)) return false;
   if (f.kinds.length && !f.kinds.includes(it.kind)) return false;

@@ -1257,8 +1257,12 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   `LLM_lie_detector` repository (every file hashed before and after; only `project.yaml` is new).
 - **Rename** (`PUT /projects/{id}/title`): the title in `project.yaml` only; the id (registry key, KB scope label) never changes.
   The one-line title rule (`manifest.check_title`) runs before the `project.renamed` record, so a refused title (422) leaves
-  no record (REVIEW-0074 N13). Adopt of a folder that already has `project.yaml` checks the per-tenant limit before its
-  `project.adopted` record and marks it `outcome=requested`, like the branch that writes the manifest (REVIEW-0075 N14).
+  no record (REVIEW-0074 N13). Adopt of a folder that already has `project.yaml` checks the per-tenant limit and whether the
+  folder is already registered (409 `already_registered`) before its record (REVIEW-0075 N14, REVIEW-0076 N17).
+- **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
+  feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,
+  so a refusal by the step runner or the registry (a linked `docs/`, the limit, an already registered folder) never leaves a
+  bare record that reads like a change (REVIEW-0076 N15-N17).
 - **Move** (`POST /projects/{id}/move`, body `location`): a same-disk rename to an absent or empty place the
   location rule allows (purpose `move`); never into itself, never over content, never across disks (409
   `cross_device`); renamed into the verified target parent's descriptor (REVIEW-0063 m4, § Grandfathering / From the
@@ -1331,7 +1335,7 @@ fixed full-width sheet. See "UI" below.
 - **Changes panel** (`changes-panel.tsx`, logic in `changes-logic.ts`): a side panel next to the chat. Files grouped Code, Documents, Knowledge base,
   each with a status letter AND word, +/- counts; click opens the diff (lines typed add/del/hunk/ctx, the leading +/- stays in the text) or the text of a
   new file; a binary is listed, not shown. "Show" switches between changes not yet committed and a recent commit. Ids in file names and commit subjects
-  link to the project's Tasks board filtered to that id (`/app/initiatives?scope=project:<id>&q=T-0001`) and to that node of its Knowledge Graph
+  link to the project's Tasks board filtered to that id (`/app/initiatives?scope=project:<id>&q=T-0001`; the board keeps an archived card the query names exactly, so a cancelled task is found, REVIEW-0076 N18) and to that node of its Knowledge Graph
   (`/app/corvin-knowledge?scope=project:<id>&node=ADR-0001`) - until REVIEW-0073 N11 they opened the board unfiltered and the newest decision; a change
   with no id has no link. The list is read again every time the panel opens and every 10 s, and the menu button reloads the count when an answer finishes.
 - **Perception choices, checked on screenshots** (both themes, 1280 and 375 px): nine roles in three rows (chunking, Hick's law), outcomes before feature

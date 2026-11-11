@@ -173,6 +173,26 @@ def _audit(tenant_id: str, event: str, **details: Any) -> None:
     _tt._chain(tenant_id, event, {k: v for k, v in details.items() if v is not None})
 
 
+@contextlib.contextmanager
+def _audited(tenant_id: str, event: str, *records: dict[str, Any]):
+    """Audit-first with a closing record: ``outcome=requested`` for each record before the body, then ``applied`` when the body
+    returns or ``error`` when it raises - so a refusal that only the body can see (the step runner, the registry under its lock)
+    never leaves a bare record that reads like a change (REVIEW-0074 N13, REVIEW-0075 N14, REVIEW-0076 N15-N17). The opening
+    record is fail-closed (no chain, no change); a chain failure on the closing one does not mask the body's own result."""
+    for r in records:
+        _audit(tenant_id, event, outcome="requested", **r)
+    outcome = "error"
+    try:
+        yield
+        outcome = "applied"
+    finally:
+        for r in records:
+            try:
+                _audit(tenant_id, event, outcome=outcome, **r)
+            except _tt.AuditUnavailable:
+                pass
+
+
 #: REVIEW-0063 m7: the session a projects request runs for (set by the routes' session dependency, copied into the worker thread
 #: by asyncio.to_thread); None outside a request (one shared key per tenant then)
 REFUSAL_SESSION: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("projects_refusal_session", default=None)
@@ -866,8 +886,11 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
         # request (REVIEW-0075 N14 - a refusal at the limit used to leave a bare project.adopted in the chain)
         if len(registry.entries(tenant_id)) >= registry.MAX_PROJECTS:
             raise Conflict(f"at most {registry.MAX_PROJECTS} projects per tenant", "limit")
-        _audit(tenant_id, "project.adopted", project_id=man["id"], template=man.get("template"), outcome="requested")
-        registry.register(tenant_id, man["id"], loc, man.get("template"))        # writes nothing in the project
+        if registry.is_registered_path(tenant_id, loc):                       # e.g. a manifest whose id was edited (REVIEW-0076 N17)
+            raise Conflict("this folder is already a project; open it from the list (its project.yaml names another id: "
+                           "the health check repairs that)", "already_registered")
+        with _audited(tenant_id, "project.adopted", dict(project_id=man["id"], template=man.get("template"))):
+            registry.register(tenant_id, man["id"], loc, man.get("template"))    # writes nothing in the project
         registry.set_protection(tenant_id, man["id"], manifest.legacy_class(man), manifest.DEFAULT_ACCESS)   # a manifest may RAISE the class, never grant itself write access
         _record_recent(tenant_id, loc)
         return get_project(tenant_id, man["id"])
@@ -886,18 +909,18 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
     data = {"schema": manifest.SCHEMA, "id": pid, "title": ttl, "tenant": tenant_id,
             "template": "adopted@1", "docs_mode": mode, "features": feats}
     manifest.validate(data)
-    _audit(tenant_id, "project.adopted", project_id=pid, template="adopted@1", outcome="requested")
-    manifest.write(loc, data)                                                    # the ONLY write
-    try:
-        registry.register(tenant_id, pid, loc, "adopted@1")
-    except BaseException:
-        # a parallel request won the id / the limit: the folder is left exactly as it was (no stray project.yaml)
+    with _audited(tenant_id, "project.adopted", dict(project_id=pid, template="adopted@1")):
+        manifest.write(loc, data)                                                # the ONLY write
         try:
-            if manifest.load(loc).get("id") == pid:
-                (loc / manifest.FILE).unlink()
-        except (OSError, manifest.ManifestError):
-            pass
-        raise
+            registry.register(tenant_id, pid, loc, "adopted@1")
+        except BaseException:
+            # a parallel request won the id / the limit: the folder is left exactly as it was (no stray project.yaml)
+            try:
+                if manifest.load(loc).get("id") == pid:
+                    (loc / manifest.FILE).unlink()
+            except (OSError, manifest.ManifestError):
+                pass
+            raise
     registry.set_protection(tenant_id, pid, manifest.DEFAULT_CLASS, manifest.DEFAULT_ACCESS)
     _record_recent(tenant_id, loc)
     return get_project(tenant_id, pid)
@@ -1255,20 +1278,20 @@ def set_features(tenant_id: str, project_id: str, changes: dict[str, bool], *, a
         bound_engine(tenant_id)
     if any(o.kind == "action" and o.action in ("git_init", "git_commit") for o in plan.pending()):
         _need_git()
-    for f in [*added, *removed]:                                              # audit-first, one record each
-        _audit(tenant_id, "project.feature_toggled", project_id=project_id, feature=f, to="on" if f in want else "off",
-               template=man.get("template"))
-    before = dict(man)
-    man["features"] = {**man.get("features", {}), **{f: (f in want) for f in dict.fromkeys([*man.get("features", {}), *want, *active])}}
-    manifest.write(root, man)
-    try:
-        F.apply_plan(plan, root, {**ctx, "_root": str(root)}, _runner(tenant_id, root))
-    except Exception as exc:  # noqa: BLE001 - project.yaml must not claim a feature that was never applied
-        manifest.write(root, before)
-        if isinstance(exc, ProjectsError):
-            raise
-        raise Conflict(f"the change could not be applied ({type(exc).__name__}); project.yaml was left as it was", "apply_failed") from None
-    _sync_mcp(tenant_id, project_id, root, want)
+    toggles = [dict(project_id=project_id, feature=f, to="on" if f in want else "off", template=man.get("template"))
+               for f in [*added, *removed]]                                    # one record each, requested -> applied | error
+    with _audited(tenant_id, "project.feature_toggled", *toggles):
+        before = dict(man)
+        man["features"] = {**man.get("features", {}), **{f: (f in want) for f in dict.fromkeys([*man.get("features", {}), *want, *active])}}
+        manifest.write(root, man)
+        try:
+            F.apply_plan(plan, root, {**ctx, "_root": str(root)}, _runner(tenant_id, root))
+        except Exception as exc:  # noqa: BLE001 - project.yaml must not claim a feature that was never applied
+            manifest.write(root, before)
+            if isinstance(exc, ProjectsError):
+                raise
+            raise Conflict(f"the change could not be applied ({type(exc).__name__}); project.yaml was left as it was", "apply_failed") from None
+        _sync_mcp(tenant_id, project_id, root, want)
     out = get_project(tenant_id, project_id)
     out["warnings"] = external_warnings(tenant_id, sorted(want)) if "acs" in added else []
     return out
@@ -1310,12 +1333,12 @@ def repair(tenant_id: str, project_id: str, *, dry_run: bool = False) -> dict[st
     _require_plugins(tenant_id, plan, project_id)
     if any(o.kind == "action" and o.action in ("git_init", "git_commit") for o in pending):
         _need_git()
-    _audit(tenant_id, "project.repaired", project_id=project_id, template=man.get("template"), files=len(plan.pending()))
-    try:
-        res = F.apply_plan(plan, root, {**ctx, "_root": str(root)}, _runner(tenant_id, root))
-    except (changes_error(), OSError, subprocess.TimeoutExpired) as exc:
-        raise Conflict(f"repair stopped: {str(exc)[:160]}", "git_unguarded") from None
-    _sync_mcp(tenant_id, project_id, root, manifest.active_features(man))
+    with _audited(tenant_id, "project.repaired", dict(project_id=project_id, template=man.get("template"), files=len(pending))):
+        try:
+            res = F.apply_plan(plan, root, {**ctx, "_root": str(root)}, _runner(tenant_id, root))
+        except (changes_error(), OSError, subprocess.TimeoutExpired) as exc:
+            raise Conflict(f"repair stopped: {str(exc)[:160]}", "git_unguarded") from None
+        _sync_mcp(tenant_id, project_id, root, manifest.active_features(man))
     return {**summary, "written": res["written"], "actions": res["actions"]}
 
 

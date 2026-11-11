@@ -222,6 +222,58 @@ class AdoptRenameMove(_Base):
             self.assertEqual(count(), before)
             self.assertIsNone(registry.get("_default", "newone"))
 
+    def _records(self, c, event, pid):
+        return [e.get("details", e).get("outcome") for e in base._audit_events(c.home)
+                if (e.get("event") or e.get("event_type")) == event and e.get("details", e).get("project_id") == pid]
+
+    def test_a_refused_feature_switch_and_repair_close_their_records_as_errors(self):
+        # REVIEW-0076 N15/N16: the step runner refused (docs/ is a link) after a bare feature_toggled / repaired record
+        with self._ctx() as c:
+            plan, r = self._create(c, "No kb yet", features=["core", "claude"])
+            self.assertEqual(r.status_code, 201, r.text)
+            pid = plan["project_id"]
+            root = Path(c.own.get(f"{_URL}/{pid}").json()["path"])
+            elsewhere = c.root.parent / "elsewhere-docs"
+            elsewhere.mkdir()
+            if (root / "docs").exists():
+                shutil.rmtree(root / "docs")
+            (root / "docs").symlink_to(elsewhere, target_is_directory=True)
+            r = c.own.put(f"{_URL}/{pid}/features", json={"set": {"kb": True}, "accept_dependencies": True}, headers=self._h(c))
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertNotIn("kb: true", (root / "project.yaml").read_text())
+            self.assertEqual(self._records(c, "project.feature_toggled", pid), ["requested", "error"])
+
+    def test_a_refused_repair_closes_its_record_as_an_error(self):
+        with self._ctx() as c:
+            pid, root = self._new(c)                                       # with the knowledge base: repair works in docs/
+            moved = c.root.parent / "docs-moved"
+            shutil.move(str(root / "docs"), str(moved))
+            (root / "docs").symlink_to(moved, target_is_directory=True)
+            (root / "README.md").unlink(missing_ok=True)
+            r = c.own.post(f"{_URL}/{pid}/repair", json={}, headers=self._h(c))
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertFalse((root / "README.md").exists())
+            self.assertEqual(self._records(c, "project.repaired", pid), ["requested", "error"])
+
+    def test_adopting_a_registered_folder_whose_manifest_names_another_id_is_refused_before_any_record(self):
+        # REVIEW-0076 N17: the registry refused "already registered" only after project.adopted outcome=requested
+        with self._ctx() as c:
+            pid, root = self._new(c)
+            y = root / "project.yaml"
+            y.write_text(y.read_text().replace(f"id: {pid}", "id: beta"))
+            r = c.own.post(f"{_URL}/adopt", json={"location": str(root)}, headers=self._h(c))
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertEqual(self._records(c, "project.adopted", "beta"), [])
+            self.assertIn("already a project", r.text)
+
+    def test_a_successful_adopt_closes_its_request(self):
+        with self._ctx() as c:
+            dst = c.root / "plain-two"
+            dst.mkdir()
+            r = c.own.post(f"{_URL}/adopt", json={"location": str(dst)}, headers=self._h(c))
+            self.assertEqual(r.status_code, 201, r.text)
+            self.assertEqual(self._records(c, "project.adopted", r.json()["id"]), ["requested", "applied"])
+
     def test_adopt_a_foreign_repo_writes_exactly_one_file(self):
         with self._ctx() as c:
             dst = c.root / "plain-repo"
