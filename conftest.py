@@ -1040,3 +1040,44 @@ def pytest_runtest_makereport(item, call):
                                 "SeCreateSymbolicLinkPrivilege (WinError 1314)")
                 break
             exc = exc.__cause__ or exc.__context__
+    _require_siblings(rep)
+
+
+# ── Sibling checkouts are required in CI (REVIEW-0068 #2) ────────────────────
+# The projects / knowledge-base E2E suites need two checkouts next to CorvinOS:
+# Corvin-Knowledge (the kb engine, scripts/kb.py) and Corvin-Marketplace (the
+# project_templates and corvin_knowledge plugins). Locally a missing sibling is
+# a skip, so a contributor without them can still run the rest. In CI that skip
+# made the suites void: every class skipped, pytest exited 0, and the runner
+# printed OK for a run that proved nothing. With CORVIN_REQUIRE_SIBLINGS=1 (set
+# by .github/workflows/test.yml) a skip whose reason names one of the sibling
+# repos is turned into a failure, so a missing or outdated checkout turns the
+# run red instead of green. Every such guard names "Corvin-Knowledge" or
+# "Marketplace" in its reason; a new guard must too. The rule covers the
+# projects suites only (tests/projects/, tests/e2e/test_project*.py, the
+# settings stream and the projects erasure layer): other suites skip on reasons
+# that merely mention the marketplace (e.g. an optional route module), and
+# turning those red is not this gate's job.
+_SIBLING_SKIP_REASON = ("Corvin-Knowledge", "Marketplace")
+
+
+def _sibling_gated(nodeid: str) -> bool:
+    path = nodeid.split("::", 1)[0].replace("\\", "/")
+    name = path.rsplit("/", 1)[-1]
+    return ("tests/projects/" in "/" + path
+            or ("tests/e2e/" in "/" + path and name.startswith("test_project"))
+            or name in ("test_settings_stream_e2e.py", "test_erasure_projects_handler_e2e.py"))
+
+
+def _require_siblings(rep) -> None:
+    if os.environ.get("CORVIN_REQUIRE_SIBLINGS", "") != "1" or not rep.skipped or hasattr(rep, "wasxfail"):
+        return
+    if not _sibling_gated(rep.nodeid):
+        return
+    reason = rep.longrepr[2] if isinstance(rep.longrepr, tuple) and len(rep.longrepr) == 3 else str(rep.longrepr)
+    if any(name in reason for name in _SIBLING_SKIP_REASON):
+        rep.outcome = "failed"
+        rep.longrepr = (f"CORVIN_REQUIRE_SIBLINGS=1: this test would have been skipped because a sibling "
+                        f"checkout is missing or outdated, which counts as a failure here.\n  {reason}\n"
+                        f"  Check out Corvin-Knowledge and Corvin-Marketplace next to CorvinOS "
+                        f"(or set CORVIN_KB_SCRIPTS to the kb engine's scripts/ directory).")

@@ -384,7 +384,7 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 
 | Method, path | Purpose |
 |---|---|
-| `GET /` | the tenant's projects (state `ok`/`missing`/`invalid`, active features, `storage` `managed`/`own`/`builtin`, `display_path` `Corvin workspace › <id>` / `~/…` / OS form) + `default_storage`, `managed_root`, `projects_root`, `projects_root_set`, `workspace` (`ok`/`foreign`/`unavailable`), `hint_source` (null, or why the path gate's hint test cannot be loaded - § Hint words), `trashed` (every trashed list entry, for the scope switcher - § Trash) and `trash_count`; binds the managed workspace on read (ADR-2321) |
+| `GET /` | the tenant's projects (state `ok`, `missing` (folder gone), `invalid` (no readable `project.yaml`, or one that does not match the registry entry), `pending` (an import still being applied - `pending: "import"`, reason "Being imported" - or Corvin's built-in project before its knowledge base exists), each non-`ok` state with a `reason`; active features, `storage` `managed`/`own`/`builtin`, `display_path` `Corvin workspace › <id>` / `~/…` / OS form) + `default_storage`, `managed_root`, `projects_root`, `projects_root_set`, `workspace` (`ok`/`foreign`/`unavailable`), `hint_source` (null, or why the path gate's hint test cannot be loaded - § Hint words), `trashed` (every trashed list entry with state `trashed` and reason "In Trash", listed apart from `projects`, for the scope switcher - § Trash) and `trash_count`; binds the managed workspace on read (ADR-2321) |
 | `GET /templates` | templates, features (requires/suggests), the tenant plugins each needs and their state; `available:false` + reason when the template plugin is not enabled for the tenant |
 | `POST /plan` | `{template, title, [project_id, location, features, docs_mode, storage]}`: no project write; without `location` the place is `storage` when given (`managed`\|`root`, the wizard's step 2 - it replaces the tenant default for this one create; `root` without a stored projects folder is 409 `root_required`, another value 400), else `default_storage` (`<managed_root>/<id>` or `<projects_root>/<id>`); a `location` wins over `storage`; returns `location`, `storage`, the file list with owners, `pulled` dependencies, warnings, conflicts, plugin states, `plan_id` (15 min, in memory); audit `project.plan_created`; 422 `workspace_foreign` when the workspace belongs to another installation |
 | `POST /` | `{plan_id}`: re-validates location, catalogue version and plugins, then writes `project.yaml`, registers, applies, seeds the KB; 201 |
@@ -1141,7 +1141,7 @@ console, both themes, 1280/375 px, screenshots in `/tmp/scope-switch`).
 
 `POST /v1/console/projects/{id}/videos` `{name}` (session + CSRF) creates one video's folder under the project's
 `videos.root` (relative to the project, or absolute). It must lie inside the project or inside the projects folder, reached
-without a link, not inside another project and not inside CORVIN_HOME - else 400 `error`. Default (no `videos.root`, or the
+without a link (symlink or junction), not inside another project and neither inside CORVIN_HOME nor containing it - else 400 with `reason_class` `error` and the rule as the message ("videos.root must lie inside the project or inside your projects folder", ...). Default (no `videos.root`, or the
 former template value `../Corvin-Videos`, REVIEW-0068 #1): the shared `../Corvin-Videos` only for a project that lies
 DIRECTLY in the projects folder (the one place that sibling passes the rule), else `videos/` inside the project - a project
 in the managed workspace (the shipped default storage) or an own folder elsewhere. No template pins `videos.root` since
@@ -1156,9 +1156,9 @@ off (409 `feature_off`). Audit-first: `project.video_created` requested, then ap
 call created is removed and nothing that existed before. The inspector's Overview holds the form; the name rule is the
 same in the page (`videoNameProblem`) and on the server.
 
-Proof: `tests/e2e/test_projects_videos_e2e.py` (4: one run with the eight sections, the index row, the epic and the six
+Proof: `tests/e2e/test_projects_videos_e2e.py` (6: one run with the eight sections, the index row, the epic and the six
 tasks, a fresh `kb check` blocking 0 and the audit sequence; no knowledge base; names and existing folders refused
-before any write; the feature off). Mutation probe: writing a generic sources.md fails the convention test.
+before any write; the managed workspace; an own folder outside the projects folder; the feature off). Mutation probe: writing a generic sources.md fails the convention test.
 Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed).
 
 

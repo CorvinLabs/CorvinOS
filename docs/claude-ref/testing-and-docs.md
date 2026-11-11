@@ -19,6 +19,17 @@ This runs:
 
 → Full test reference: [tests.md](tests.md)
 
+**Sibling checkouts are required in CI (REVIEW-0068 #2).** The projects and knowledge-base E2E suites need
+`Corvin-Knowledge` (the kb engine, `scripts/kb.py`; `CORVIN_KB_SCRIPTS` overrides) and `Corvin-Marketplace`
+(the `project_templates` and `corvin_knowledge` plugins) checked out NEXT TO CorvinOS (`<git common dir>/../../<name>`).
+Locally a missing sibling is a skip. `.github/workflows/test.yml` checks both out (Corvin-Knowledge is private: the
+`CORVIN_KNOWLEDGE_TOKEN` secret needs read access to it), moves them next to the workspace and sets
+`CORVIN_REQUIRE_SIBLINGS=1`, under which the repo-root `conftest.py` (`_require_siblings`) turns a skip in a projects
+suite (`tests/projects/`, `tests/e2e/test_project*.py`, the settings stream, the projects erasure layer) whose reason
+names `Corvin-Knowledge` or `Marketplace` into a failure - before, every such suite skipped, pytest exited 0 and the
+runner printed OK. A new sibling guard must name one of the two in its reason. Run with the flag locally to prove a
+run is not vacuous: `CORVIN_REQUIRE_SIBLINGS=1 bash corvin_operator/bridges/run-all-tests.sh`.
+
 ### The plugin lifecycle E2E
 
 ```bash

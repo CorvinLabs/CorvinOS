@@ -11,6 +11,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # REVIEW-0068 #2: the projects and knowledge-base E2E suites need two sibling
+      # checkouts NEXT TO CorvinOS (they resolve <git common dir>/../../<name>):
+      # Corvin-Marketplace (public; the project_templates and corvin_knowledge
+      # plugins) and Corvin-Knowledge (private; the kb engine scripts/kb.py - the
+      # same repo the corvin_decisions submodule points at, taken at main because
+      # the suites copy the current engine). actions/checkout only writes inside
+      # the workspace, so both land in _siblings/ and are moved one level up.
+      # Without them every projects suite skipped and the run read green; the
+      # CORVIN_REQUIRE_SIBLINGS=1 below turns such a skip into a failure, so a
+      # missing checkout (e.g. no CORVIN_KNOWLEDGE_TOKEN secret with read access to
+      # the private repo) makes this job red instead of vacuously green.
+      - name: Check out Corvin-Marketplace (sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: CorvinLabs/Corvin-Marketplace
+          path: _siblings/Corvin-Marketplace
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check out Corvin-Knowledge (sibling, kb engine)
+        uses: actions/checkout@v4
+        with:
+          repository: CorvinLabs/Corvin-Knowledge
+          path: _siblings/Corvin-Knowledge
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ secrets.CORVIN_KNOWLEDGE_TOKEN || github.token }}
+      - name: Place the siblings next to the checkout
+        run: |
+          mv _siblings/Corvin-Marketplace _siblings/Corvin-Knowledge ..
+          rmdir _siblings
+          test -f ../Corvin-Knowledge/scripts/kb.py
+          test -f ../Corvin-Marketplace/plugins/buildin/knowledge_management/corvin_knowledge/src/kb_init.py
       - name: Set up Python (syntax gate)
         uses: actions/setup-python@v5
         with:
@@ -63,6 +95,9 @@ jobs:
           # makes run_delegate fail-closed. Never set in production.
           CORVIN_INTEGRATION_TEST: "1"
           CORVIN_SKIP_SLOW_TESTS: "1"
+          # REVIEW-0068 #2: a projects test that skips for want of a sibling
+          # checkout fails instead (root conftest.py, _require_siblings).
+          CORVIN_REQUIRE_SIBLINGS: "1"
       - name: Show failed suites on error
         if: failure()
         run: grep -E "FAIL|failed|ERROR" /tmp/test-output.log | grep -v "^2026\|fail-open\|fail-closed\|_failed\|FakeProc\|write failed\|register failed\|streaming returned\|falling back" || true
