@@ -254,7 +254,8 @@ function Maintenance({ d, csrf, repair }: { d: ProjectDetail; csrf: string; repa
         <p className={cn("text-sm", failed && "text-amber-800 dark:text-amber-300")} data-testid="doctor-summary">
           {health.isLoading ? "Checking…" : health.error ? "The checks could not run." : doctorSummary(health.data?.checks ?? [])}
         </p>
-        <Link to={`/app/projects/${encodeURIComponent(d.id)}?tab=overview`} className="shrink-0 text-xs underline" data-testid="doctor-open">Open Overview</Link>
+        {/* a project that is not ready has no Overview tab; its checks are listed above Settings on the same page */}
+        {d.state === "ok" && <Link to={`/app/projects/${encodeURIComponent(d.id)}?tab=overview`} className="shrink-0 text-xs underline" data-testid="doctor-open">Open Overview</Link>}
       </div>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground">Repair restores generated and machine-local files (CLAUDE.md sections, MCP settings); your text is kept.</p>

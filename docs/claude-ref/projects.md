@@ -1262,7 +1262,8 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   refusal names the registered project and says to put its id back into project.yaml or remove and re-add it - repair
   refuses a project.yaml that names another project, so it is not offered. The health row `manifest` says which id or
   tenant differs and what to put back, and the detail page shows no "Open Settings to repair" link when that is the only
-  failed check (REVIEW-0077 N19, N20). A chain failure between two opening records of `_audited` closes the ones already
+  failed check (REVIEW-0077 N19, N20). A project that cannot be opened (`missing`/`invalid`) has no tabs, so its page
+  lists every check itself above Settings, and Maintenance shows "Open Overview" only for a usable project (REVIEW-0078 N21). A chain failure between two opening records of `_audited` closes the ones already
   open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
   feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,

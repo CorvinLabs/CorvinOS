@@ -160,3 +160,20 @@ test("a project.yaml that names another project says what to put back and offers
   await expect(page.getByText(`put 'id: ${ID}' back into project.yaml`)).toBeVisible();
   await expect(page.getByTestId("health-fix-link")).toHaveCount(0);
 });
+
+test("a project that cannot be opened lists every check on its page, and Settings offers no link to a tab it does not have (REVIEW-0078 N21)", async ({ page }) => {
+  await stub(page);
+  // what the server answers for a project.yaml that names another id: state invalid, two failed checks
+  await page.route(new RegExp(`/v1/console/projects/${ID}$`), (r) => r.fulfill({ json: { ...DETAIL, state: "invalid", reason: "project.yaml names another project" } }));
+  await page.route(new RegExp(`/v1/console/projects/${ID}/health$`), (r) => r.fulfill({ json: { project_id: ID, ok: false, checks: [
+    { id: "path_exists", ok: true, detail: "the project directory exists", at: "x" },
+    { id: "manifest", ok: false, detail: `project.yaml names the id 'beta', the list has '${ID}' - put 'id: ${ID}' back into project.yaml`, at: "x" },
+    { id: "generated_files_in_sync", ok: false, detail: "out of sync (repair fixes): ['CLAUDE.md']", at: "x" }] } }));
+  await page.goto(`/console/app/projects/${ID}?tab=settings`);
+  await expect(page.getByTestId("inspector-not-ready")).toBeVisible();
+  const checks = page.getByTestId("not-ready-checks");
+  await expect(checks.getByTestId("health-headline")).toContainText("2 of 3 checks need attention.");
+  await expect(checks.locator('[data-testid="health-check"][data-ok="false"]')).toHaveCount(2);
+  await expect(checks).toContainText(`put 'id: ${ID}' back into project.yaml`);
+  await expect(page.getByTestId("doctor-open")).toHaveCount(0);
+});

@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
-import { createVideo, getHealth, getProject, setFeatures, type FeatureRow, type ProjectDetail } from "@/lib/api/projects";
+import { createVideo, getHealth, getProject, setFeatures, type FeatureRow, type HealthCheck, type ProjectDetail } from "@/lib/api/projects";
 import { ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { explain } from "./wizard";
@@ -120,6 +120,7 @@ export default function ProjectInspectorPage() {
           <Card><CardContent className="space-y-3 p-4">
             <p className="text-sm" data-testid="inspector-not-ready">{st.detail || "This project cannot be opened right now."}</p>
           </CardContent></Card>
+          {!d.builtin && <NotReadyChecks projectId={d.id} />}
           {/* a missing or unusable project keeps the settings that do not need its folder: Locate folder, Remove from the list */}
           {!d.builtin && <SettingsSections d={d} onRemoved={onRemoved} onNotice={setNotice} />}
         </>
@@ -253,16 +254,41 @@ function OverviewTab({ projectId, builtin, videosOn, csrf, onChanged }: { projec
         </Button>
       </div>
       {health.error && <p className="text-sm text-red-700 dark:text-red-300" data-testid="health-error">The checks could not run.</p>}
-      <ul className="space-y-2" data-testid="health-checks">
-        {(health.data?.checks ?? []).map((c) => (
-          <li key={c.id} data-testid="health-check" data-check={c.id} data-ok={String(c.ok)} className="flex items-start gap-2 rounded-md border p-3 text-sm">
-            {c.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" aria-label="passed" />
-              : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" aria-label="failed" />}
-            <span><span className="block font-medium">{CHECK_LABEL[c.id] ?? c.id}</span><span className="text-muted-foreground" title={c.detail} data-testid="health-detail">{checkDetail(c)}</span></span>
-          </li>
-        ))}
-      </ul>
+      <HealthList checks={health.data?.checks ?? []} />
     </section>
+  );
+}
+
+function HealthList({ checks }: { checks: HealthCheck[] }) {
+  return (
+    <ul className="space-y-2" data-testid="health-checks">
+      {checks.map((c) => (
+        <li key={c.id} data-testid="health-check" data-check={c.id} data-ok={String(c.ok)} className="flex items-start gap-2 rounded-md border p-3 text-sm">
+          {c.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" aria-label="passed" />
+            : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" aria-label="failed" />}
+          <span><span className="block font-medium">{CHECK_LABEL[c.id] ?? c.id}</span><span className="text-muted-foreground" title={c.detail} data-testid="health-detail">{checkDetail(c)}</span></span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** A project that cannot be opened has no tabs: its checks are listed right here, every failed one with what to do (REVIEW-0078 N21). */
+function NotReadyChecks({ projectId }: { projectId: string }) {
+  const health = useQuery({ queryKey: HEALTH(projectId), queryFn: ({ signal }) => getHealth(projectId, signal), refetchInterval: false });
+  const head = healthHeadline(health.data?.checks ?? []);
+  return (
+    <Card><CardContent className="space-y-3 p-4" data-testid="not-ready-checks">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className={cn("text-sm font-medium", head.ok ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300")} data-testid="health-headline">
+          {health.isLoading ? "Checking…" : health.error ? "The checks could not run." : head.text}
+        </p>
+        <Button variant="outline" size="sm" onClick={() => void health.refetch()} disabled={health.isFetching}>
+          <RefreshCw className={cn("mr-2 h-4 w-4", health.isFetching && "animate-spin")} aria-hidden /> Check again
+        </Button>
+      </div>
+      <HealthList checks={health.data?.checks ?? []} />
+    </CardContent></Card>
   );
 }
 
