@@ -7,7 +7,8 @@ knowledge base's engine, subprocesses); ``core.projects`` stays pure. The HTTP s
 Flow: ``plan_project`` (no write, audit ``project.plan_created``) -> ``create_project(plan_id)``
 (re-validates everything, registers, applies, audit ``project.created`` requested/applied) ... and
 ``adopt``, ``set_features``, ``repair``, ``open_project``, ``remove_from_registry``, ``health``.
-A project's files are the user's: nothing here deletes one.
+A project's files are the user's: nothing here deletes one, except a MANAGED project's folder moved to the trash on request
+(``delete_project_files``) and removed for good after 30 days or on a typed permanent delete (ADR-2321 Decision 12).
 """
 from __future__ import annotations
 
@@ -865,6 +866,8 @@ def _entry(tenant_id: str, project_id: str) -> dict[str, Any]:
     e = registry.get(tenant_id, project_id) if manifest.PROJECT_ID_RE.match(project_id or "") else None
     if e is None:
         raise NotFound("no such project")
+    if registry.is_trashed(e):
+        raise Conflict("the project is in the Trash; restore it from the Projects page first", "in_trash")
     return e
 
 
@@ -937,10 +940,25 @@ def location_settings(tenant_id: str) -> dict[str, Any]:
             "workspace": workspace}
 
 
+def _trashed_summary(e: dict[str, Any]) -> dict[str, Any]:
+    """A trashed project as the scope lists see it: listed, never selectable ("In Trash")."""
+    return {"id": e["id"], "path": "", "template": e.get("template") or "", "added_at": e.get("added_at"), "storage": "trashed",
+            "state": "trashed", "title": e["id"], "reason": IN_TRASH, "trash_entry": e.get("trash_entry")}
+
+
 def list_projects(tenant_id: str) -> dict[str, Any]:
     loc = location_settings(tenant_id)
+    ents = registry.entries(tenant_id)
+    trashed = []
+    for e in (x for x in ents if registry.is_trashed(x)):
+        s = _trashed_summary(e)
+        side = _read_sidecar(Path(str(e.get("path") or "")).parent) if e.get("path") else None
+        if side is not None:
+            s["title"] = str(side.get("title") or e["id"])[:120]
+        trashed.append(s)
     return {**loc,
-            "projects": [_builtin_first(tenant_id), *[_summary(tenant_id, e) for e in registry.entries(tenant_id)]]}
+            "projects": [_builtin_first(tenant_id), *[_summary(tenant_id, e) for e in ents if not registry.is_trashed(e)]],
+            "trashed": trashed, "trash_count": len(_trash_scan(tenant_id))}
 
 
 def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
@@ -1134,6 +1152,350 @@ def remove_from_registry(tenant_id: str, project_id: str) -> dict[str, Any]:
     from core.projects import attachment  # noqa: PLC0415
     attachment.detach_project(tenant_id, project_id)          # a removed project is attached to no chat (release review R2)
     return {"removed": project_id, "files_deleted": False}
+
+
+# ── trash (ADR-2321 Decisions 6, 12; PLAN-0972 phase 5, T-0404) ─────────────────────────────────────────────────────────
+# Only a MANAGED project's files can be deleted, and only to the trash: a same-disk rename into
+# ``<managed_root>/.trash/<id>-<YYYYMMDDTHHMMSSZ>/project/`` next to the sidecar ``trash.json`` (0o600) of that entry. The
+# entry directory is self-contained, so one rmtree removes it and a project file called ``trash.json`` is never overwritten.
+# An ``own`` project has no delete path at all. Restore renames back when ``<managed_root>/<id>`` is free; permanent delete
+# and the 30-day sweep remove an entry with ``shutil.rmtree`` on a path asserted to lie inside ``.trash/`` (no link on the
+# way, fd-based on POSIX, a junction removed without descending on Windows).
+
+TRASH_DIR = ".trash"
+TRASH_TTL_S = 30 * 86400.0
+TRASH_SWEEP_LIMIT = 10                       # entries removed per projector tick
+TRASH_SCAN_LIMIT = 200                       # directory entries looked at per listing / tick
+_TRASH_SIDECAR = "trash.json"
+_TRASH_FILES = "project"
+_TRASH_ENTRY_RE = re.compile(r"^([a-z0-9][a-z0-9-]{0,27})-(\d{8}T\d{6}Z)(?:-([2-9]|[1-9]\d))?$")
+NOT_MANAGED = "Only projects in the Corvin workspace can be deleted here; this one lives in your own folder."
+CONFIRM_MISMATCH = "Type the project id exactly to confirm."
+IN_TRASH = "In Trash"
+
+
+def _iso(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def _trash_root(tenant_id: str, *, create: bool = False) -> Optional[Path]:
+    """``<managed_root>/.trash`` of this tenant (0o700, never a link), or None when the tenant has no workspace yet."""
+    mr = registry.known_managed_root(tenant_id)
+    if mr is None:
+        return None
+    t = mr / TRASH_DIR
+    if is_link(mr) or is_link(t):
+        raise UnsafePath("the trash directory is a link")
+    if create:
+        t.mkdir(mode=0o700, exist_ok=True)
+        if is_link(t):
+            raise UnsafePath("the trash directory is a link")
+        with contextlib.suppress(OSError):
+            os.chmod(t, 0o700)
+    return t
+
+
+def _trash_entry_dir(tenant_id: str, entry: str) -> Path:
+    """The entry's directory, asserted to lie directly inside ``.trash`` with no link on the way (422 ``path_rule`` otherwise,
+    404 when there is no such entry)."""
+    from core.projects.fsutil import ensure_inside  # noqa: PLC0415
+    if not isinstance(entry, str) or not _TRASH_ENTRY_RE.match(entry):
+        _audit_refusal(tenant_id, "path_rule")
+        raise registry.ProjectPathError("not a trash entry", reason_class="path_rule")
+    t = _trash_root(tenant_id)
+    if t is None or not t.is_dir():
+        raise NotFound("no such trash entry")
+    d = t / entry
+    try:
+        d = ensure_inside(t, d)
+    except UnsafePath:
+        _audit_refusal(tenant_id, "path_rule")
+        raise registry.ProjectPathError("the trash entry is a link", reason_class="path_rule") from None
+    if not d.is_dir():
+        raise NotFound("no such trash entry")
+    return d
+
+
+def _read_sidecar(d: Path) -> Optional[dict[str, Any]]:
+    p = d / _TRASH_SIDECAR
+    if is_link(p):
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("id"), str) or not manifest.PROJECT_ID_RE.match(data["id"]):
+        return None
+    return data
+
+
+def _write_sidecar(d: Path, data: dict[str, Any]) -> None:
+    from core.projects.fsutil import atomic_write  # noqa: PLC0415
+    atomic_write(d / _TRASH_SIDECAR, (json.dumps(data, sort_keys=True, indent=1) + "\n").encode("utf-8"), mode=0o600, owned=True)
+
+
+def _trash_row(entry: str, side: dict[str, Any]) -> dict[str, Any]:
+    ts = side.get("deleted_ts")
+    ts = float(ts) if isinstance(ts, (int, float)) else None
+    return {"entry": entry, "id": side["id"], "title": str(side.get("title") or side["id"])[:120],
+            "deleted_at": side.get("deleted_at"), "restorable_until": _iso(ts + TRASH_TTL_S) if ts is not None else None,
+            "pending": side.get("state") != "trashed"}
+
+
+def _trash_scan(tenant_id: str) -> list[tuple[Path, dict[str, Any]]]:
+    """(entry dir, sidecar) of this tenant's trash, bounded; links, junctions, foreign names and unreadable sidecars are skipped."""
+    try:
+        t = _trash_root(tenant_id)
+    except UnsafePath:
+        return []
+    if t is None or not t.is_dir():
+        return []
+    out: list[tuple[Path, dict[str, Any]]] = []
+    try:
+        with os.scandir(t) as it:
+            ents = [e for _, e in zip(range(TRASH_SCAN_LIMIT), it)]
+    except OSError:
+        return []
+    for e in ents:
+        if not _TRASH_ENTRY_RE.match(e.name) or e.is_symlink() or dirent_is_junction(e) or not e.is_dir(follow_symlinks=False):
+            continue
+        side = _read_sidecar(Path(e.path))
+        if side is not None:
+            out.append((Path(e.path), side))
+    return out
+
+
+def list_trash(tenant_id: str) -> dict[str, Any]:
+    """``GET /projects/-/trash``: newest first."""
+    rows = [_trash_row(d.name, side) for d, side in _trash_scan(tenant_id)]
+    rows.sort(key=lambda r: (str(r.get("deleted_at") or ""), r["entry"]), reverse=True)
+    return {"entries": rows, "ttl_days": int(TRASH_TTL_S // 86400)}
+
+
+def _trash_name(t: Path, project_id: str, ts: float) -> str:
+    base = f"{project_id}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(ts))}"
+    if not (t / base).exists():
+        return base
+    for n in range(2, 100):
+        if not (t / f"{base}-{n}").exists():
+            return f"{base}-{n}"
+    raise Conflict("too many deletions of this project in one second; try again", "busy")
+
+
+def _rename_retrying(src: Path, dst: Path) -> None:
+    for attempt in range(8):
+        try:
+            os.rename(src, dst)
+            return
+        except PermissionError:
+            # Windows refuses to rename a folder another process uses as its working directory for a moment (see move_project)
+            if attempt == 7:
+                raise
+            time.sleep(0.25)
+
+
+@_project_locked
+def delete_project_files(tenant_id: str, project_id: str, *, confirm_id: str) -> dict[str, Any]:
+    """``DELETE /projects/{id}/files``: move a MANAGED project's folder to the trash (restorable for 30 days)."""
+    _refuse_builtin(project_id)
+    e = _entry(tenant_id, project_id)
+    if (e.get("storage") or "own") != "managed" or e.get("pending"):
+        _audit_refusal(tenant_id, "not_managed", project_id)
+        raise Conflict(NOT_MANAGED, "not_managed")
+    if confirm_id != project_id:
+        _audit_refusal(tenant_id, "confirm_mismatch", project_id)
+        raise Conflict(CONFIRM_MISMATCH, "confirm_mismatch")
+    root = Path(str(e["path"]))
+    mr = registry.known_managed_root(tenant_id)
+    if mr is None or registry._resolve_forgiving(root).parent != registry._resolve_forgiving(mr) or is_link(root):
+        _audit_refusal(tenant_id, "not_managed", project_id)
+        raise Conflict(NOT_MANAGED, "not_managed")
+    if not root.is_dir():
+        raise Conflict("the project folder is missing; remove the project from the list instead", "missing")
+    t = _trash_root(tenant_id, create=True)
+    assert t is not None
+    now = _now()
+    name = _trash_name(t, project_id, now)
+    title = project_id
+    with contextlib.suppress(manifest.ManifestError, OSError):
+        title = str(manifest.load(root).get("title") or project_id)[:120]
+    _audit(tenant_id, "project.deleted", project_id=project_id, outcome="requested")
+    d = t / name
+    d.mkdir(mode=0o700)
+    side = {"schema": 1, "id": project_id, "title": title, "deleted_at": _iso(now), "deleted_ts": now,
+            "original_path": str(root), "state": "pending"}
+    try:
+        _write_sidecar(d, side)
+        _rename_retrying(root, d / _TRASH_FILES)
+    except OSError as exc:
+        shutil.rmtree(d, ignore_errors=True)                         # only the sidecar and an empty entry: the folder did not move
+        _audit_tenant_error(tenant_id, project_id)
+        if exc.errno == errno.EXDEV or getattr(exc, "winerror", None) == 17:
+            _audit_refusal(tenant_id, "cross_device", project_id)
+            raise Conflict(CROSS_DEVICE, "cross_device") from None
+        raise Conflict(f"the folder could not be moved to the trash ({type(exc).__name__}); nothing changed", "move_failed") from None
+    try:
+        registry.set_trashed(tenant_id, project_id, d / _TRASH_FILES, name)
+    except Exception:  # noqa: BLE001 - the list did not follow: put the folder back
+        with contextlib.suppress(OSError):
+            _rename_retrying(d / _TRASH_FILES, root)
+            shutil.rmtree(d, ignore_errors=True)
+        _audit_tenant_error(tenant_id, project_id)
+        raise Conflict("the list could not be updated, so the folder was moved back; nothing changed", "move_failed") from None
+    warnings: list[str] = []
+    with contextlib.suppress(OSError):
+        _write_sidecar(d, {**side, "state": "trashed"})
+    from core.projects import attachment  # noqa: PLC0415
+    try:
+        attachment.detach_project(tenant_id, project_id)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"the chats attached to this project could not be detached ({type(exc).__name__})")
+    try:
+        _audit(tenant_id, "project.deleted", project_id=project_id, outcome="applied")
+    except _tt.AuditUnavailable:
+        warnings.append("the audit chain was unavailable for the 'applied' record")
+    return {"project_id": project_id, "trash_entry": name, "deleted_at": side["deleted_at"],
+            "restorable_until": _iso(now + TRASH_TTL_S), "warnings": warnings}
+
+
+def _audit_tenant_error(tenant_id: str, project_id: str) -> None:
+    with contextlib.suppress(Exception):
+        _tt._chain(tenant_id, "project.deleted", {"project_id": project_id, "outcome": "error"})
+
+
+def restore_project(tenant_id: str, entry: str) -> dict[str, Any]:
+    """``POST /projects/-/trash/{entry}/restore``: rename the folder back to ``<managed_root>/<id>`` when that place is free."""
+    d = _trash_entry_dir(tenant_id, entry)
+    side = _read_sidecar(d)
+    if side is None:
+        raise NotFound("no such trash entry")
+    return _restore_locked(tenant_id, side["id"], entry)
+
+
+@_project_locked
+def _restore_locked(tenant_id: str, project_id: str, entry: str) -> dict[str, Any]:
+    d = _trash_entry_dir(tenant_id, entry)                          # again under the lock
+    side = _read_sidecar(d)
+    if side is None or side["id"] != project_id:
+        raise NotFound("no such trash entry")
+    files = d / _TRASH_FILES
+    if is_link(files) or not files.is_dir():
+        raise Conflict("this trash entry holds no project folder", "missing")
+    e = registry.get(tenant_id, project_id)
+    if e is not None and not registry.is_trashed(e):
+        raise Conflict("another project already uses this id; remove it from the list first", "id_taken")
+    mr = registry.known_managed_root(tenant_id)
+    assert mr is not None
+    target = mr / project_id
+    if target.exists() or is_link(target):
+        _audit_refusal(tenant_id, "folder_not_empty", project_id)
+        raise Conflict(f"A folder named {project_id} is already in the Corvin workspace; move it away, then restore.",
+                       "folder_not_empty")
+    _audit(tenant_id, "project.restored", project_id=project_id, outcome="requested")
+    try:
+        _rename_retrying(files, target)
+    except OSError as exc:
+        with contextlib.suppress(Exception):
+            _tt._chain(tenant_id, "project.restored", {"project_id": project_id, "outcome": "error"})
+        raise Conflict(f"the folder could not be restored ({type(exc).__name__}); nothing changed", "move_failed") from None
+    try:
+        registry.set_restored(tenant_id, project_id, target)
+    except Exception:  # noqa: BLE001 - the list did not follow: put the folder back into the trash
+        with contextlib.suppress(OSError):
+            _rename_retrying(target, files)
+        with contextlib.suppress(Exception):
+            _tt._chain(tenant_id, "project.restored", {"project_id": project_id, "outcome": "error"})
+        raise Conflict("the list could not be updated, so the folder stays in the trash; nothing changed", "move_failed") from None
+    shutil.rmtree(d, ignore_errors=True)                            # the sidecar and the now empty entry
+    warnings: list[str] = []
+    try:
+        _audit(tenant_id, "project.restored", project_id=project_id, outcome="applied")
+    except _tt.AuditUnavailable:
+        warnings.append("the audit chain was unavailable for the 'applied' record")
+    _record_recent(tenant_id, target)
+    repaired: Optional[int] = None
+    try:
+        repaired = len(repair(tenant_id, project_id).get("written", []))
+    except Exception:  # noqa: BLE001 - the restore stands; the doctor names what is out of sync
+        repaired = None
+    return {**get_project(tenant_id, project_id), "repaired_files": repaired, "warnings": warnings}
+
+
+def _remove_entry(tenant_id: str, d: Path, side: dict[str, Any]) -> None:
+    """Audit-first permanent removal of one trash entry; never outside ``.trash``, never through a link."""
+    from core.projects.fsutil import ensure_inside  # noqa: PLC0415
+    t = _trash_root(tenant_id)
+    assert t is not None
+    d = ensure_inside(t, d)
+    if d.parent != Path(os.path.abspath(t)) or is_link(d):
+        raise UnsafePath("not a trash entry")
+    pid = side["id"]
+    _audit(tenant_id, "project.deleted", project_id=pid, outcome="purged")
+    shutil.rmtree(d)
+    e = registry.get(tenant_id, pid)
+    if registry.is_trashed(e) and e.get("trash_entry") == d.name:
+        registry.unregister(tenant_id, pid)
+
+
+def purge_trash_entry(tenant_id: str, entry: str, *, confirm_id: str) -> dict[str, Any]:
+    """``DELETE /projects/-/trash/{entry}``: remove one entry for good; the typed id must match."""
+    d = _trash_entry_dir(tenant_id, entry)
+    side = _read_sidecar(d)
+    if side is None:
+        raise NotFound("no such trash entry")
+    if confirm_id != side["id"]:
+        _audit_refusal(tenant_id, "confirm_mismatch", side["id"])
+        raise Conflict(CONFIRM_MISMATCH, "confirm_mismatch")
+    return _purge_locked(tenant_id, side["id"], entry)
+
+
+@_project_locked
+def _purge_locked(tenant_id: str, project_id: str, entry: str) -> dict[str, Any]:
+    d = _trash_entry_dir(tenant_id, entry)
+    side = _read_sidecar(d)
+    if side is None or side["id"] != project_id:
+        raise NotFound("no such trash entry")
+    if side.get("state") != "trashed":
+        raise Conflict("this entry is still being moved to the trash; try again in a moment", "pending")
+    try:
+        _remove_entry(tenant_id, d, side)
+    except UnsafePath:
+        _audit_refusal(tenant_id, "path_rule", project_id)
+        raise registry.ProjectPathError("not a trash entry", reason_class="path_rule") from None
+    return {"entry": entry, "purged": True}
+
+
+def sweep_trash(tenant_id: str, *, busy: bool = False, now: Optional[float] = None) -> dict[str, Any]:
+    """The projector tick's trash sweep: entries older than 30 days, at most ``TRASH_SWEEP_LIMIT`` per tick, skipped while the
+    host is saturated; a pending entry (a delete that has not finished) is never swept."""
+    if busy:
+        return {"purged": 0, "skipped": "busy"}
+    now = _now() if now is None else now
+    purged = 0
+    for d, side in sorted(_trash_scan(tenant_id), key=lambda x: float(x[1].get("deleted_ts") or 0)):
+        if purged >= TRASH_SWEEP_LIMIT:
+            break
+        ts = side.get("deleted_ts")
+        if side.get("state") != "trashed" or not isinstance(ts, (int, float)) or now - float(ts) <= TRASH_TTL_S:
+            continue
+        try:
+            with _project_lock_of(tenant_id, side["id"]):
+                again = _read_sidecar(d)
+                if again is None or again.get("state") != "trashed":
+                    continue
+                _remove_entry(tenant_id, d, again)
+            purged += 1
+        except Exception as exc:  # noqa: BLE001 - one entry never stops the sweep; the next tick tries again
+            import logging  # noqa: PLC0415
+            logging.getLogger("corvin.projects").warning("trash sweep: an entry could not be removed (%s)", type(exc).__name__)
+    return {"purged": purged}
+
+
+@contextlib.contextmanager
+def _project_lock_of(tenant_id: str, project_id: str):
+    from core.projects.fsutil import file_lock  # noqa: PLC0415
+    with file_lock(registry.registry_path(tenant_id).with_name(f"project-{project_id}.lock"), timeout=20.0):
+        yield
 
 
 def health(tenant_id: str, project_id: str) -> dict[str, Any]:

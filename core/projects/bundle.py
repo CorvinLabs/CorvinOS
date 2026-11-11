@@ -215,7 +215,7 @@ def _open_nofollow(path: str) -> int:
 
 def _project(tenant_id: str, project_id: str) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     e = registry.get(tenant_id, project_id) if isinstance(project_id, str) and manifest.PROJECT_ID_RE.match(project_id) else None
-    if e is None or not isinstance(e.get("path"), str) or e.get("pending"):
+    if e is None or not isinstance(e.get("path"), str) or e.get("pending") or registry.is_trashed(e):
         raise BundleRefused("not_found", project_id=project_id)
     root = Path(e["path"])
     if is_link(root) or not root.is_dir():

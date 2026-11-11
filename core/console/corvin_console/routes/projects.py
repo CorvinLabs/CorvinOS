@@ -541,6 +541,29 @@ async def import_cancel(staging_id: str, rec: SessCsrf) -> None:
     return Response(status_code=204)
 
 
+# ── trash (ADR-2321 Decision 12, PLAN-0972 phase 5, T-0404) ─────────────────────────────────────────────────────────────
+
+class ConfirmBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm_id: str = Field(min_length=1, max_length=28)
+
+
+@collection.get("/trash")
+async def trash_list(rec: Sess) -> dict:
+    return await asyncio.to_thread(_call, svc.list_trash, rec.tenant_id)
+
+
+@collection.post("/trash/{entry}/restore")
+async def trash_restore(entry: str, rec: SessCsrf) -> dict:
+    return await asyncio.to_thread(_call, svc.restore_project, rec.tenant_id, entry)
+
+
+@collection.delete("/trash/{entry}")
+async def trash_purge(entry: str, body: ConfirmBody, rec: SessCsrf) -> dict:
+    """Permanent removal of one trash entry; the typed id must equal the project's id."""
+    return await asyncio.to_thread(_call, svc.purge_trash_entry, rec.tenant_id, entry, confirm_id=body.confirm_id)
+
+
 @collection.api_route("/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], include_in_schema=False)
 def _collection_unknown(rest: str, rec: Sess) -> dict:
     raise HTTPException(status_code=404, detail={"message": "no such collection route", "reason_class": "not_found"})
@@ -639,7 +662,7 @@ async def _activity_stream(request: Request, tenant_id: str, project_id: str, cu
             from core.projects import builtin  # noqa: PLC0415
             return builtin.entry(tenant_id).get("path") or None
         e = registry.get(tenant_id, project_id)
-        return e.get("path") if e else None
+        return e.get("path") if e and not registry.is_trashed(e) else None
 
     try:
         q = activity.subscribe(tenant_id, project_id, _root)
@@ -731,6 +754,12 @@ def relocate(project_id: str, body: RelocateBody, rec: SessCsrf) -> dict:
 @router.post("/{project_id}/open")
 def post_open(project_id: str, rec: SessCsrf) -> dict:
     return _call(svc.open_project, rec.tenant_id, project_id)
+
+
+@router.delete("/{project_id}/files")
+async def delete_files(project_id: str, body: ConfirmBody, rec: SessCsrf) -> dict:
+    """Move a MANAGED project's folder to the trash for 30 days (``own`` projects: 409 ``not_managed``)."""
+    return await asyncio.to_thread(_call, svc.delete_project_files, rec.tenant_id, project_id, confirm_id=body.confirm_id)
 
 
 @router.delete("/{project_id}")

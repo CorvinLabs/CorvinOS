@@ -825,6 +825,8 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2321 Decision 14: where new projects go / the workspace binding (to = managed|root, outcome only - never a path or key)
     "project.storage_changed":      "WARNING",
     "project.relocated":            "WARNING",
+    "project.deleted":              "WARNING",
+    "project.restored":             "WARNING",
     # ADR-2322 Decision 11: a refused folder-browser request (reason_class only - never a path or a name)
     "project.browse_refused":       "WARNING",
     "project.video_created":        "INFO",
@@ -3833,6 +3835,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # ADR-2321 Decision 14: never a path, never a workspace key
     "project.storage_changed": frozenset({"to", "outcome", "tenant_id"}),
     "project.relocated": frozenset({"project_id", "outcome", "tenant_id"}),
+    "project.deleted": frozenset({"project_id", "outcome", "tenant_id"}),
+    "project.restored": frozenset({"project_id", "outcome", "tenant_id"}),
     # ADR-2322 Decision 11: never a path, never a name
     "project.browse_refused": frozenset({"reason_class", "tenant_id"}),
     # ADR-2323 Decision 15: parts = comma-joined closed part vocabulary; never a path, a title, a file name or a match

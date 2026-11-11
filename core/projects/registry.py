@@ -1028,6 +1028,56 @@ def relocate(tenant_id: str, project_id: str, new_path: Path) -> dict[str, Any]:
     return hit
 
 
+TRASHED = "trashed"
+
+
+def is_trashed(e: Optional[dict[str, Any]]) -> bool:
+    """An entry whose folder is in the trash (ADR-2321 Decision 12): the projector, the chat attachment, every scope list and
+    every per-project route skip it; only ``/projects/-/trash`` shows it."""
+    return bool(e) and e.get("storage") == TRASHED
+
+
+def set_trashed(tenant_id: str, project_id: str, trash_path: Path, entry: str) -> dict[str, Any]:
+    """Point an entry at its folder in the trash: ``storage: trashed``, ``trash_entry``. The index only; moves nothing."""
+    with _lock(tenant_id):
+        data = load(tenant_id)
+        lst = [e for e in data.get("projects", []) if isinstance(e, dict)]
+        hit = None
+        for e in lst:
+            if e.get("id") == project_id:
+                e["path"] = str(trash_path)
+                e["storage"] = TRASHED
+                e["trash_entry"] = entry
+                hit = e
+        if hit is None:
+            raise RegistryError("no such project")
+        data["projects"] = lst
+        _save(tenant_id, data)
+    return hit
+
+
+def set_restored(tenant_id: str, project_id: str, path: Path) -> dict[str, Any]:
+    """The reverse of :func:`set_trashed`: the entry points at *path* again, ``storage`` is recomputed (``managed``) and
+    ``trash_entry`` is dropped. An entry that is missing (a registry rebuilt while the project was in the trash) is registered."""
+    resolved = _resolve_forgiving(path)
+    with _lock(tenant_id):
+        data = load(tenant_id)
+        lst = [e for e in data.get("projects", []) if isinstance(e, dict)]
+        hit = None
+        for e in lst:
+            if e.get("id") == project_id:
+                e["path"] = str(resolved)
+                e["storage"] = storage_of(tenant_id, resolved)
+                e.pop("trash_entry", None)
+                hit = e
+        if hit is not None:
+            data["projects"] = lst
+            _save(tenant_id, data)
+            return hit
+    man = manifest.load(resolved)
+    return register(tenant_id, project_id, resolved, man.get("template"))
+
+
 def protection(tenant_id: str, project_id: str) -> Optional[dict[str, str]]:
     """The tenant's own record of a project's data class and assistant access (authoritative; project.yaml is a copy the assistant
     could edit). None for an entry written before this field existed."""

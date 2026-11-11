@@ -35,7 +35,8 @@ subject id; `<tenant_home>/projects` is listed in `UNATTRIBUTABLE_DIRS`. Proof:
 planted file and project folder byte-identical afterwards; since T-0403 also a REAL import staging and a REAL export job,
 produced through the routes, byte-identical afterwards and still usable - the job file downloads, the staging answers its
 report). Import stagings and export jobs carry no per-person key either: they are bounded by their TTLs (1 h, 24 h) and the
-host budget, never by Art. 17.
+host budget, never by Art. 17. The trash (§ Trash) is the same: no per-person key, so `L-projects` leaves every entry in
+place (`tests/e2e/test_projects_trash_e2e.py::Erasure`); the 30-day sweep bounds it.
 
 **Retiring a tenant** - CorvinOS has no tenant-offboarding entry point (NOTE-0020 O10). An operator removes by hand:
 `<tenant_home>/projects/` (registry, settings, chat attachments, locks, picker history, `import_staging/`, `exports/`) and the tenant's `managed_root` (the path in `settings.json`, including `.trash/`). `own` folders are the
@@ -353,6 +354,10 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 | `POST /{id}/repair` | `{dry_run}`: pending changes with diffs; repair rewrites generated and machine-local files only |
 | `POST /{id}/open` | audit `project.opened`; returns the context and a terminal command (`chat_attachment: false` until ADR-2317's spike) |
 | `DELETE /{id}` | removes the registry entry ONLY; the directory stays |
+| `DELETE /{id}/files` | `{confirm_id}` (CSRF): a MANAGED project's folder goes to the trash for 30 days (§ Trash); 200 `{project_id, trash_entry, deleted_at, restorable_until, warnings}`; 409 `not_managed` (an `own` project: "Only projects in the Corvin workspace can be deleted here; this one lives in your own folder."), `confirm_mismatch` ("Type the project id exactly to confirm."), `builtin`, `missing`, `cross_device`, `in_trash` |
+| `GET /-/trash` | `{entries: [{entry, id, title, deleted_at, restorable_until, pending}], ttl_days: 30}`, newest first |
+| `POST /-/trash/{entry}/restore` | (CSRF) back to `<managed_root>/<id>`; 200 the project detail (+ `repaired_files`, `warnings`); 409 `folder_not_empty` when that place is taken, `id_taken` when another project now has the id; 422 `path_rule` for a name that is not a trash entry or a link; 404 unknown / another tenant's |
+| `DELETE /-/trash/{entry}` | `{confirm_id}` (CSRF): permanent removal; 200 `{entry, purged: true}`; 409 `confirm_mismatch`, `pending`; 422 `path_rule`; 404 |
 | `PUT /settings/storage` | `{default_storage: managed\|root, projects_root?}`: where NEW projects go; moves nothing; audit-first `project.storage_changed` requested/applied; 200 `{default_storage, projects_root, managed_root, outside: [ids]}`; 409 `root_required` ("Choose a folder of your own before switching to it."); a bad root is the rule's 422. `{rekey: true}` starts a new workspace for a copied installation (binding rule (c), `outcome=rekeyed`); 409 `not_foreign` ("This workspace belongs to this installation.") while the workspace is this installation's (ADR-2321 Decisions 8, 16) |
 | `PUT /root` | `{path}`: the ALIAS of `set_default_storage("root", path)` - not a second settings writer; response `{projects_root, outside}` as before; audit-first `project.root_changed`, plus `project.storage_changed` (`to: root`) only when `default_storage` flips (REVIEW-0062 N9) |
 | `POST /{id}/relocate` | `{location}` ("Locate folder"): re-points the index at a folder that already holds this project's manifest (purpose `relocate`), re-attaches chats, runs repair; audit `project.relocated` requested/applied; 409 `not_missing` while the recorded path still holds the manifest; 422 `wrong_manifest` for a folder holding another project (ADR-2321 Decision 11) |
@@ -405,12 +410,61 @@ whose health shows what is missing. A project can never enable a tenant plugin: 
 `project.registry_removed`, `project.blocked` (a refusal; best effort; its `reason_class` is the class of the
 refusal), `project.storage_changed` (WARNING; `to` managed|root, `outcome`
 requested|applied|rebound|recovered|rekeyed|error - never a path or a workspace key), `project.relocated` (WARNING;
-`project_id`, `outcome`). Allowlist: `project_id`,
+`project_id`, `outcome`), `project.deleted` (WARNING; `project_id`, `outcome` requested|applied|purged|error), `project.restored`
+(WARNING; `project_id`, `outcome` requested|applied|error) - § Trash. Allowlist: `project_id`,
 `feature`, `to`, `template`, `files` (count), `reason_class`, `outcome`, `tenant_id`, `storage` (managed|own on
 `project.plan_created`/`project.created`) - never a path. A `ProjectPathError` answers 422
 `{message, reason_class}` with the exception's own class.
 `project.feature_files_removed` and `project.video_created` are registered with their tasks.
 `project.browse_refused` (WARNING; `reason_class`, `tenant_id` only - never a path or a name): § Picker.
+
+## Trash (ADR-2321 Decisions 6, 12; PLAN-0972 phase 5, T-0404)
+
+Corvin deletes files only of a MANAGED project (`storage: managed`, a folder directly in the own `managed_root`), only to
+the trash, only with the typed id. An `own` project has no delete path at all: "Remove from the list" stays the only
+action, and the folder is never touched.
+
+**Delete** (`projects_service.delete_project_files`, under the project lock): refuses `builtin`, `own`/pending
+(`not_managed`), a wrong `confirm_id` (`confirm_mismatch`, both audited as `project.blocked`), a missing folder.
+Audit `project.deleted requested`, then a same-disk `os.rename` of `<managed_root>/<id>` to
+`<managed_root>/.trash/<id>-<YYYYMMDDTHHMMSSZ>/project/` (a second delete in the same second gets `-2`...). The entry
+directory holds the sidecar `trash.json` (0o600: `{schema, id, title, deleted_at, deleted_ts, original_path, state}`)
+next to `project/`, so a project file called `trash.json` is never overwritten and one `rmtree` removes the whole entry.
+The sidecar is written with `state: pending` BEFORE the rename and set to `trashed` after the registry followed; a
+failed rename removes the entry again (`EXDEV` answers 409 `cross_device`), a failed registry update renames the folder
+back. The registry entry becomes `storage: trashed`, `trash_entry: <name>`, `path` the folder in the trash; every chat
+attachment of the project is dropped; audit `applied`.
+
+**A trashed project is invisible outside the trash:** `GET /projects` leaves it out of `projects` and lists it in
+`trashed` (`state: trashed`, `reason: "In Trash"`, for the scope switcher) with `trash_count` (the entries of
+`/-/trash`); every per-project route answers 409 `in_trash`; the projector (`kb_projection.project_kbs`), the chat
+attachment (`attachment.prompt_addition`), the export (`bundle._project`), the activity stream and the turn tracker skip
+it. Its id stays taken until the entry is restored or purged.
+
+**Restore** (`restore_project`): the entry name must match `<id>-<stamp>[-n]` and lie directly in `.trash/` with no link
+on the way (`fsutil.ensure_inside`; else 422 `path_rule`); `<managed_root>/<id>` must not exist (409
+`folder_not_empty`, nothing changes); audit `project.restored requested`, rename back, `registry.set_restored`
+(`storage: managed`, `trash_entry` dropped; a registry rebuilt meanwhile re-registers from the manifest), the entry
+removed, audit `applied`, then repair (machine-local files only - the restored tree is byte-identical). Attachments stay
+dropped.
+
+**Permanent delete** (`purge_trash_entry`): the typed id must equal the sidecar's id; a `pending` entry is refused;
+audit `project.deleted purged` FIRST, then `shutil.rmtree` of the entry, asserted to be a direct child of `.trash/`
+with no link component; the registry entry is removed (the id is free again). On POSIX `rmtree` is fd-based
+(`rmtree.avoids_symlink_attacks`): a symlink inside a trashed project is unlinked, never followed; on Windows it removes
+a junction without descending (Python >= 3.8; the junction half of the test runs on the Windows VM).
+
+**Sweep** (`sweep_trash`, called by the projector tick in `kb_projection._loop` - its own thread, never the event loop):
+entries whose `deleted_ts` is older than 30 days, oldest first, at most 10 per tick (`TRASH_SWEEP_LIMIT`), scanning at
+most 200 directory entries; skipped while `loop_health.host_saturated()`; a `pending` entry is never swept; each removal
+is audited like a permanent delete. The clock is `projects_service._now()` (tests pass `now=`).
+
+Proof: `tests/e2e/test_projects_trash_e2e.py` (real HTTP, two tenants): delete -> list/trash/attachment/409, restore
+byte-identical with a green doctor; own project 409 `not_managed`; wrong id; a planted folder blocks restore; a project
+named `trash`; purge removes only that entry; names outside the trash and a planted symlink entry are 422 `path_rule`;
+purge and sweep leave a symlinked outside directory byte-identical; sweep at +29 d keeps, at +31 d removes, busy skips,
+pending stays, bounded per tick, the other tenant's trash untouched; erasure leaves the trash; both events registered,
+no path and no entry name in the chain, the chain verifies.
 
 ## Share: the project bundle `corvin.project-bundle` v1 (ADR-2323, E-058)
 

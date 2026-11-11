@@ -651,8 +651,8 @@ def project_kbs(tenant_id: str) -> list[tuple[str, Path]]:
         raw = e.get("path") if isinstance(e, dict) else None
         if not isinstance(pid, str) or not _PROJECT_ID.match(pid) or pid in seen or not isinstance(raw, str):
             continue
-        if e.get("pending"):
-            continue                    # an import that is not applied yet (ADR-2323 Decision 13, REVIEW-0061 M12)
+        if e.get("pending") or e.get("storage") == "trashed":
+            continue                    # an import that is not applied yet (ADR-2323 D13, REVIEW-0061 M12); in the trash (ADR-2321 D12)
         try:
             root = Path(raw).expanduser().resolve(strict=True)
         except (OSError, RuntimeError):
@@ -1128,6 +1128,12 @@ def _loop(tenant_id: str, stop: threading.Event) -> None:
             _ps.sweep_share(tenant_id, busy=busy)
         except Exception as exc:  # noqa: BLE001
             log.warning("project share sweep failed: %s", exc)
+        try:
+            # ADR-2321 Decision 12: trash entries older than 30 days (at most 10 per tick; skipped while saturated)
+            from corvin_console import projects_service as _ps  # noqa: PLC0415
+            _ps.sweep_trash(tenant_id, busy=busy)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("project trash sweep failed: %s", exc)
         try:
             periodic(tenant_id)
         except Exception as exc:  # noqa: BLE001
