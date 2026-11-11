@@ -4,7 +4,7 @@ A **project** is a directory the user owns, with a `project.yaml`. CorvinOS keep
 Losing the index loses no project. Design: `Corvin-Knowledge` CONCEPT-0126; decisions ADR-2315
 (project object), ADR-2316 (several KBs, scope), ADR-2317 (chat context); plan PLAN-0970.
 Status 2026-11-08: registry, manifest, fragment engine and the API exist (T-0351, T-0352, T-0355); the
-template catalogue is the first-party plugin `project_templates` (T-0354, T-0356, in Corvin-Marketplace, published); the console's Projects panel, wizard, inspector, scope selector, videos action and doctor exist (T-0357 to T-0362). Status 2026-11-11 (PLAN-0972 phase 1, ADR-2321): the managed workspace is the default place, one location rule judges every path a client names, and the console shows it (Settings sections, Where row and filter, default-place dialog, wizard step 2) - verified on Linux; the Windows VM run of phase 1 (T-0389) has NOT been done.
+template catalogue is the first-party plugin `project_templates` (T-0354, T-0356, in Corvin-Marketplace, published); the console's Projects panel, wizard, inspector, scope selector, videos action and doctor exist (T-0357 to T-0362). Status 2026-11-11 (PLAN-0972 phase 1, ADR-2321): the managed workspace is the default place, one location rule judges every path a client names, and the console shows it (Settings sections, Where row and filter, default-place dialog, wizard step 2) - verified on Linux; the Windows VM run of phase 1 (T-0389) has NOT been done. Status 2026-11-11 (PLAN-0972 phases 3-4, ADR-2323): sharing is built - export, import, duplicate over the project bundle, with the console's Share dialogs (§ Share in the console) - verified on Linux; the Windows/macOS runs of phases 3-4 have NOT been done.
 
 ## Where things live
 
@@ -21,6 +21,9 @@ template catalogue is the first-party plugin `project_templates` (T-0354, T-0356
 | Where new projects go | `<tenant_home>/projects/settings.json` (schema 2: `default_storage` `managed`\|`root`, `projects_root` - unset = `~/projects` as the fallback folder rebuild looks in, `workspace_key`, `managed_root`); written only by `registry.write_settings` |
 | Proof | `tests/e2e/test_projects_registry_e2e.py`, `test_projects_fragments_e2e.py`, `test_projects_api_e2e.py`, `test_project_templates_catalogue_e2e.py` (the REAL catalogue) |
 | Platform data directory, managed workspace path, user places, drives, the lists the location rule judges against | `core/paths/user_dirs.py` (ADR-2321 Decision 7, stdlib only, Python 3.11-safe) |
+| Export jobs (bundles above 100 MiB) | `<tenant_home>/projects/exports/<job_id>/` (`job.json` + the file; dir 0o700, files 0o600), TTL 24 h, swept by the projector tick (`sweep_share`) and every export request |
+| Import stagings | `<tenant_home>/projects/import_staging/<staging_id>/` (`bundle.zip`, `report.json`; 0o700/0o600), TTL 1 h, at most 5 per tenant, 2 GiB across the host; removed on Cancel, after the last card was applied, by the sweep and by every validate request |
+| Bundle format, never-list, validation, git import | `core/projects/bundle.py`, `core/projects/bundle_rules.py`, `core/bundle_common/` (§ Share) |
 
 ### Erasure and retiring a tenant (ADR-2321 Decision 13)
 
@@ -29,11 +32,13 @@ reports `SKIPPED` for every subject with the note "projects metadata carries no 
 user-owned and outside Art. 17 automation — review them in the Projects panel", deletes nothing and never logs the
 subject id; `<tenant_home>/projects` is listed in `UNATTRIBUTABLE_DIRS`. Proof:
 `tests/security/test_erasure_projects_handler_e2e.py` (through `ErasureOrchestrator` with the real chain; every
-planted file and project folder byte-identical afterwards).
+planted file and project folder byte-identical afterwards; since T-0403 also a REAL import staging and a REAL export job,
+produced through the routes, byte-identical afterwards and still usable - the job file downloads, the staging answers its
+report). Import stagings and export jobs carry no per-person key either: they are bounded by their TTLs (1 h, 24 h) and the
+host budget, never by Art. 17.
 
 **Retiring a tenant** - CorvinOS has no tenant-offboarding entry point (NOTE-0020 O10). An operator removes by hand:
-`<tenant_home>/projects/` (registry, settings, chat attachments, locks; later picker history, import staging, export
-jobs) and the tenant's `managed_root` (the path in `settings.json`, including `.trash/`). `own` folders are the
+`<tenant_home>/projects/` (registry, settings, chat attachments, locks, picker history, `import_staging/`, `exports/`) and the tenant's `managed_root` (the path in `settings.json`, including `.trash/`). `own` folders are the
 user's and are never part of it.
 
 ### The managed workspace (ADR-2321 Decision 7)
@@ -412,6 +417,25 @@ requested|applied|rebound|recovered|rekeyed|error - never a path or a workspace 
 One ZIP carries one project or a set (at most 20). `core/projects/bundle.py` builds and validates it;
 `core/projects/bundle_rules.py` holds the ONE protected-entry list both sides use; the container, ratio and secret
 validators are shared with the Forge Bundle (`core/bundle_common/`, ADR-2323 Decision 11).
+
+Diagram of the import: [`docs/diagrams/projects-import-flow.svg`](../diagrams/projects-import-flow.svg) (upload -> staging ->
+V1-V6 -> report and conflicts -> verdict -> apply steps 1-10 -> audit points and the two failure contracts).
+
+**The round trip from the API alone** (session cookie + `X-CSRF-Token` from `GET /v1/console/auth/whoami`):
+
+1. `GET /-/export/preview?ids=alpha` - what would travel; `secret` refuses, `confidential` needs `confirm: true`.
+2. `POST /-/export {project_ids: ["alpha"], parts: {git_history: true, kb: true, generated: false}}` - 200 the ZIP, or 202
+   `{job_id}` -> poll `GET /-/exports/{job_id}` until `state: done` -> `GET /-/exports/{job_id}/file`.
+3. `POST /-/import/validate` (multipart `file`) - 200 the report: `staging_id`, per card `default_location` and `conflicts`.
+4. `GET /-/import/{staging_id}/verdict?project=alpha&project_id=alpha-2[&location=…]` - repeat until `conflicts` is empty.
+5. `POST /-/import/{staging_id}/apply {project: "alpha", project_id: "alpha-2"}` - 201 `{project, warnings, notes,
+   origin}`; or `DELETE /-/import/{staging_id}` to cancel.
+6. `POST /alpha/duplicate {project_id: "alpha-3"}` - the same apply without a download.
+
+**Measured (Linux, 2026-11-11):** an export of a project holding 150 MiB of incompressible data runs as a job and is done in
+2.8 s (ZIP 150.0 MiB, stored); validating that bundle takes 0.11 s; validating the 464 MiB fixture of
+`test_a_500_mib_bundle_validates_with_flat_memory_and_no_temp_file` takes 3.15 s including the interpreter start, at a peak RSS
+of 60-64 MiB with no growth during validation (delta 0 KiB).
 
 ### Format (Decision 7)
 
@@ -820,6 +844,11 @@ every export state incl. the job's progress/done/failure, every import state inc
 refused bundle, duplicate, multi-select, screenshots 1280/375 x light/dark in `SHOTS_DIR`), `tests/e2e/projects-share-live.spec.ts`
 (keep-live, nothing stubbed: exports a throwaway project with a planted link, imports the downloaded ZIP as a copy, duplicates it,
 then removes the three entries and deletes exactly their folders), server: `tests/e2e/test_projects_share_e2e.py`.
+Fresh install: `tests/e2e-fresh/projects-fresh.spec.ts` carries an export + import-as-a-copy step through these dialogs (a
+confidential project: typed id; the copy keeps `confidential` and `read`). Measured 2026-11-11 it does NOT get there: the
+spec's earlier step chooses `/tmp/corvin-fresh-install/projects` as the projects folder, and the location rule refuses every
+`/tmp` path (`system_prefix`), so the picker cannot open it and Choose stays off - a conflict between the fresh harness
+(pinned under `/tmp`) and ADR-2321's rule that predates the Share UI; open.
 
 ## Scope of the Tasks board and the Knowledge Graph (T-0360, switcher 2026-11-09)
 

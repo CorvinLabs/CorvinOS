@@ -2,7 +2,8 @@
  * Projects on a FRESH install, end to end, nothing stubbed (release review 2026-11-08): an empty CORVIN_HOME, a backend exported from the
  * working tree, plugin sources from the marketplace. The operator chooses where projects live, creates a project from a role template in the
  * wizard, inspects it (health with a real `kb check`, files on disk, seeded tasks), changes its protection, attaches it to a chat, watches a
- * file change arrive live in the explorer and in the change view, and removes it from the list - the folder stays.
+ * file change arrive live in the explorer and in the change view, exports it and imports it back as a copy through the Share
+ * dialogs, and removes it from the list - the folder stays.
  *
  * Run: npx playwright test -c playwright.fresh-install.config.ts projects-fresh
  *      (pre-push: CORVIN_FRESH_MARKETPLACE_REF=HEAD takes the plugin source from the local marketplace commit)
@@ -106,6 +107,39 @@ test.describe.serial("projects on a fresh install", () => {
     await expect(page.getByTestId("protection-note")).toContainText("Saved");
     await page.goto("/console/app/projects");
     await expect(page.locator('[data-testid="project-card"][data-project-id="fresh-billing"]').getByTestId("class-badge")).toHaveAttribute("data-class", "confidential");
+  });
+
+  test("the project is exported and imported back as a copy through the Share dialogs", async ({ page }) => {
+    test.setTimeout(180_000);
+    const csrf = await login(page);
+    await page.goto("/console/app/projects/fresh-billing?tab=settings");
+    await page.getByTestId("share-export").click({ timeout: 45_000 });
+    const ex = page.getByTestId("export-dialog");
+    await expect(ex.getByTestId("export-included")).toContainText(/\d+ files · /, { timeout: 60_000 });
+    await expect(ex.getByTestId("export-submit")).toBeDisabled();                       // confidential since the step above
+    await ex.getByTestId("export-confirm").fill("fresh-billing");
+    const dl = page.waitForEvent("download", { timeout: 120_000 });
+    await ex.getByTestId("export-submit").click();
+    const zip = path.join(ROOT, (await dl).suggestedFilename());
+    await (await dl).saveAs(zip);
+    await ex.getByTestId("export-cancel").click();
+    await page.goto("/console/app/projects");
+    await page.getByTestId("import-start").click({ timeout: 45_000 });
+    await page.getByTestId("import-file").setInputFiles(zip);
+    const im = page.getByTestId("import-dialog");
+    await expect(im.getByTestId("import-origin")).toHaveText("Unverified origin", { timeout: 60_000 });
+    await expect(im.locator('[data-testid="import-conflict"][data-kind="id_taken"]')).toBeVisible();
+    await expect(im.getByTestId("import-submit")).toBeDisabled();
+    await im.getByTestId("import-fix-copy").click();
+    await expect(im.getByTestId("import-submit")).toBeEnabled({ timeout: 30_000 });
+    await im.getByTestId("import-submit").click();
+    await expect(im.getByTestId("import-result")).toBeVisible({ timeout: 120_000 });
+    expect(fs.existsSync(path.join(PROJECTS, "fresh-billing-2", "project.yaml"))).toBe(true);
+    const d = await (await page.request.get(`${API}/projects/fresh-billing-2`)).json();
+    expect(d.classification).toBe("confidential");                                         // the class is a floor, never lowered
+    expect(d.assistant_access).toBe("read");
+    // the copy leaves the list again so the last step's empty list holds
+    expect((await page.request.delete(`${API}/projects/fresh-billing-2`, { headers: { "X-CSRF-Token": csrf } })).ok()).toBe(true);
   });
 
   test("attached to a chat, a file change arrives live in the explorer and in the change view", async ({ page }) => {
