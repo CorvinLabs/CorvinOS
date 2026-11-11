@@ -138,7 +138,7 @@ def _project_of(item: dict[str, Any]) -> Any:
     type (REVIEW-0082 N30: a manual card labelled ``prj-alpha`` vanished from every view, or showed on alpha's board)."""
     from core.task_tracking import projection  # noqa: PLC0415
 
-    return projection.scope_of_ref(item.get("external_ref"))
+    return projection.project_of_card(item)
 
 
 @router.get("/items")

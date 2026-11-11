@@ -81,7 +81,7 @@ test("a failed load is an error, not an empty list", async ({ page }) => {
   await page.route(/\/v1\/console\/projects\/templates/, (r) => r.fulfill({ json: { available: true, templates: [], features: [] } }));
   await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ status: 500, json: { detail: "boom" } }));
   await page.goto("/console/app/projects");
-  await expect(page.getByTestId("projects-error")).toBeVisible();
+  await expect(page.getByTestId("projects-error")).toBeVisible({ timeout: 20_000 });   // after the query's own retries
   await expect(page.getByTestId("projects-empty")).toHaveCount(0);
 });
 

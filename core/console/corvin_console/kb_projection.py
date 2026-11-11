@@ -840,7 +840,7 @@ def sync_projects(tenant_id: str, *, busy: bool = False) -> dict[str, Any]:
 
 def _scope_of_item(cur: dict[str, Any]) -> Optional[str]:
     if str(cur.get("external_ref") or "").startswith("kb:"):
-        return projection.scope_of_ref(cur.get("external_ref"))       # a KB card: its reference decides (REVIEW-0082 N30)
+        return projection.project_of_card(cur)                         # a KB card: its reference decides (REVIEW-0082 N30)
     labels = cur.get("labels") if isinstance(cur.get("labels"), list) else []
     for x in labels:
         if isinstance(x, str) and x.startswith(projection.SCOPE_PREFIX):
