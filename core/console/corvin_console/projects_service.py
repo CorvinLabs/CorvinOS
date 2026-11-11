@@ -862,7 +862,11 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
         man = manifest.load(loc)
         if registry.get(tenant_id, man["id"]) is not None:
             raise Conflict("a project with this id is already registered", "id_taken")
-        _audit(tenant_id, "project.adopted", project_id=man["id"], template=man.get("template"))
+        # the same order as the branch below: what can be refused is checked BEFORE the record, and the record says it is a
+        # request (REVIEW-0075 N14 - a refusal at the limit used to leave a bare project.adopted in the chain)
+        if len(registry.entries(tenant_id)) >= registry.MAX_PROJECTS:
+            raise Conflict(f"at most {registry.MAX_PROJECTS} projects per tenant", "limit")
+        _audit(tenant_id, "project.adopted", project_id=man["id"], template=man.get("template"), outcome="requested")
         registry.register(tenant_id, man["id"], loc, man.get("template"))        # writes nothing in the project
         registry.set_protection(tenant_id, man["id"], manifest.legacy_class(man), manifest.DEFAULT_ACCESS)   # a manifest may RAISE the class, never grant itself write access
         _record_recent(tenant_id, loc)

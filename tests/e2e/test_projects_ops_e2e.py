@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -205,6 +206,22 @@ class DoctorCalibration(_Base):
 
 @unittest.skipUnless(base._MARKET.is_file(), "needs the Marketplace checkout")
 class AdoptRenameMove(_Base):
+    def test_a_refused_adopt_of_a_folder_with_a_manifest_writes_no_adoption_record(self):
+        # REVIEW-0075 N14: the branch for a folder that already carries project.yaml recorded project.adopted before the
+        # registry could still refuse (the per-tenant limit); the branch without a manifest checked first
+        from core.projects import registry
+        with self._ctx() as c:
+            dst = c.root / "withman"
+            dst.mkdir()
+            (dst / "project.yaml").write_text("schema: 1\nid: newone\ntitle: N\ntenant: _default\ntemplate: adopted@1\n")
+            count = lambda: sum(1 for e in base._audit_events(c.home) if (e.get("event") or e.get("event_type")) == "project.adopted")  # noqa: E731
+            before = count()
+            with mock.patch.object(registry, "MAX_PROJECTS", 0):
+                r = c.own.post(f"{_URL}/adopt", json={"location": str(dst)}, headers=self._h(c))
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertEqual(count(), before)
+            self.assertIsNone(registry.get("_default", "newone"))
+
     def test_adopt_a_foreign_repo_writes_exactly_one_file(self):
         with self._ctx() as c:
             dst = c.root / "plain-repo"

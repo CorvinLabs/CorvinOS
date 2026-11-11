@@ -1257,7 +1257,8 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   `LLM_lie_detector` repository (every file hashed before and after; only `project.yaml` is new).
 - **Rename** (`PUT /projects/{id}/title`): the title in `project.yaml` only; the id (registry key, KB scope label) never changes.
   The one-line title rule (`manifest.check_title`) runs before the `project.renamed` record, so a refused title (422) leaves
-  no record (REVIEW-0074 N13).
+  no record (REVIEW-0074 N13). Adopt of a folder that already has `project.yaml` checks the per-tenant limit before its
+  `project.adopted` record and marks it `outcome=requested`, like the branch that writes the manifest (REVIEW-0075 N14).
 - **Move** (`POST /projects/{id}/move`, body `location`): a same-disk rename to an absent or empty place the
   location rule allows (purpose `move`); never into itself, never over content, never across disks (409
   `cross_device`); renamed into the verified target parent's descriptor (REVIEW-0063 m4, § Grandfathering / From the
