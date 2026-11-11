@@ -451,6 +451,15 @@ with `acs` the tenant's compute worker is probed read-only on its socket (`corvi
 1 s, nothing sent; `health` carries a `compute_worker` check) and a licence note says the engine cannot verify the
 tier. A missing tenant PLUGIN, by contrast, is a refusal (409 `plugin_missing`).
 
+**Where the MCP servers point** (REVIEW-0068 #5): `{{paths.repo}}` is `projects_service._operator_parent()` - the checkout
+when it holds `corvin_operator/`, else (wheel install) the vendored root `corvin_core/_vendor` that
+`corvin_core._operator_bootstrap.vendor_operator_root()` names, the same resolution as `hints.gate_path`. While the
+engine's `.corvin/local/mcp.json` is registered (`mcp_sha`), `health` carries an `mcp_servers` check: every server's
+`command` exists, every absolute `.py` script exists, and a `-m <module>` is found for this interpreter with the server's
+`PYTHONPATH` - by the path finder, without importing or running anything from the file. The detail names servers, never
+paths. Proof: `tests/e2e/test_projects_acs_mcp_e2e.py` - it also STARTS every server of a created acs project's
+`mcp.json` with its own env and asserts `initialize` + a non-empty `tools/list` over stdio JSON-RPC (REVIEW-0068 #9).
+
 **Create flow.** plan -> create: `project.yaml` is written first (the truth), then registered (the
 index), then the fragments are applied; the KB scaffold is the Knowledge Graph plugin's real
 `kb_init.py --no-engine` (`--no-git` in `plain` mode), seeded with `kb new` through the BOUND KB's

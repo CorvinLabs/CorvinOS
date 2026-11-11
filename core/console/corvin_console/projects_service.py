@@ -371,10 +371,82 @@ def _refuse_foreign_kb(tenant_id: str, loc: Path) -> None:
             raise registry.ProjectPathError("the location is, or contains, a knowledge base; it cannot be a project")
 
 
+def _operator_parent() -> Path:
+    """The folder whose ``corvin_operator/`` holds the operator code the generated MCP servers run (``{{paths.repo}}``): the
+    checkout, or in a wheel install the vendored root ``corvin_core/_vendor`` - there ``kb_projection._REPO_ROOT`` is
+    ``<prefix>/lib`` and every path written from it pointed nowhere (REVIEW-0068 #5). Same resolution as ``hints.gate_path``."""
+    repo = Path(kb_projection._REPO_ROOT)
+    if (repo / "corvin_operator").is_dir():
+        return repo
+    try:
+        from corvin_core import _operator_bootstrap  # noqa: PLC0415
+
+        vend = _operator_bootstrap.vendor_operator_root()
+    except Exception:  # noqa: BLE001 - no vendored tree: the checkout path, which the doctor's mcp_servers check then names
+        vend = None
+    return vend.parent if vend is not None else repo
+
+
+def _module_found(mod: str, extra: list[str]) -> bool:
+    """Is ``-m <mod>`` importable for THIS interpreter with *extra* PYTHONPATH entries? Found without importing anything:
+    the path finder for every part (an import would run a package's ``__init__`` from whatever the file names)."""
+    import importlib.machinery  # noqa: PLC0415
+    import importlib.util  # noqa: PLC0415
+    parts = mod.split(".")
+    if not mod or not all(p.isidentifier() for p in parts):
+        return False
+    spec = importlib.machinery.PathFinder.find_spec(parts[0], [*extra, *sys.path])
+    if spec is None:
+        try:
+            spec = importlib.util.find_spec(parts[0])     # a top-level name: finders only, nothing is executed
+        except (ImportError, ValueError):
+            spec = None
+    for i in range(1, len(parts)):
+        locs = list(spec.submodule_search_locations or []) if spec is not None else []
+        if not locs:
+            return False
+        spec = importlib.machinery.PathFinder.find_spec(".".join(parts[: i + 1]), locs)
+    return spec is not None
+
+
+def _mcp_server_problems(root: Path) -> Optional[list[str]]:
+    """The servers of the engine's ``.corvin/local/mcp.json`` whose command, script or ``-m`` module does not exist, as
+    ``"<server> (<what>)"``; None when there is no such file. Nothing from the file is executed (REVIEW-0068 #5)."""
+    import shutil as _sh  # noqa: PLC0415
+    f = root / ".corvin" / "local" / "mcp.json"
+    if passes_link(root, f) or not f.is_file() or f.stat().st_size > 256 * 1024:
+        return None
+    try:
+        servers = json.loads(f.read_text(encoding="utf-8")).get("mcpServers") or {}
+    except (OSError, ValueError, AttributeError):
+        return ["mcp.json (unreadable)"]
+    out: list[str] = []
+    for name, spec in (servers.items() if isinstance(servers, dict) else []):
+        if not isinstance(spec, dict):
+            out.append(f"{name} (malformed)")
+            continue
+        cmd, args = str(spec.get("command") or ""), [str(a) for a in (spec.get("args") or [])]
+        env = spec.get("env") if isinstance(spec.get("env"), dict) else {}
+        if not cmd or not (Path(cmd).is_file() if os.path.isabs(cmd) else _sh.which(cmd)):
+            out.append(f"{name} (command missing)")
+            continue
+        scripts = [a for a in args if a.endswith(".py") and os.path.isabs(a)]
+        if any(not Path(a).is_file() for a in scripts):
+            out.append(f"{name} (script missing)")
+            continue
+        if "-m" in args and args.index("-m") + 1 < len(args):
+            mod = args[args.index("-m") + 1]
+            same = os.path.realpath(cmd) == os.path.realpath(sys.executable)
+            extra = [p for p in str(env.get("PYTHONPATH") or "").split(os.pathsep) if p]
+            if same and not _module_found(mod, extra):
+                out.append(f"{name} (module {mod} not found)")
+    return out
+
+
 def _context(tenant_id: str, project_id: str, title: str, root: Path) -> dict[str, str]:
     ctx = {"project.id": project_id, "project.title": title, "project.tenant": tenant_id,
            "paths.python": os.environ.get("CORVIN_PYTHON") or sys.executable,
-           "paths.repo": str(kb_projection._REPO_ROOT),
+           "paths.repo": str(_operator_parent()),
            "paths.corvin_home": str(corvin_home()),
            "paths.docs": str(root / "docs"), "paths.pathsep": os.pathsep}
     try:
@@ -1867,6 +1939,11 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
             if not miss else "not enabled: " + ", ".join(m["plugin"] for m in miss))
     except Unavailable as exc:
         add("catalogue", False, str(exc))
+    mcp_problems = _mcp_server_problems(root) if registry.mcp_sha(tenant_id=tenant_id, project_id=project_id) else None
+    if mcp_problems is not None:
+        # generated_files_in_sync compares bytes; this proves the bytes point at something (REVIEW-0068 #5)
+        add("mcp_servers", not mcp_problems, "every MCP server's command, script and module exists" if not mcp_problems
+            else "an MCP server would not start: " + ", ".join(mcp_problems[:6]))
     if "acs" in active:
         up = compute_worker_reachable(tenant_id)
         add("compute_worker", up is True, "the compute worker answers on its socket" if up is True

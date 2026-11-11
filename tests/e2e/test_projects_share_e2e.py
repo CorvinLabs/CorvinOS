@@ -600,7 +600,7 @@ class ApplyBase(ShareBase):
         from _projects_fixtures import write_fragment
         write_fragment(self.src, "acs", requires=["claude"], texts={"files/forge.md": FORGE_README},
                        **{"files": [{"src": "files/forge.md", "dst": ".corvin/forge/README.md", "kind": "seed"}],
-                          "mcp": {"corvin_orchestration": {"command": "{{paths.python}}", "args": ["-m", "x"],
+                          "mcp": {"corvin_orchestration": {"command": "{{paths.python}}", "args": ["-m", "json.tool"],
                                                            "env": {"CORVIN_HOME": "{{paths.corvin_home}}"}}}})
         write_template(self.src, "agentic", ["core", "claude", "acs"], ["core", "claude", "acs"])
 

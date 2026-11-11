@@ -67,7 +67,7 @@ def small_catalogue(src: Path) -> Path:
     write_fragment(src, "claude", requires=["core"], texts={"files/x.md": "x"},
                    **{"files": [{"src": "files/x.md", "dst": "notes/x.md", "kind": "seed"}]})
     write_fragment(src, "acs", requires=["claude"], gitignore=[".corvin/forge/"],
-                   mcp={"corvin_orchestration": {"command": "{{paths.python}}", "args": ["-m", "x"],
+                   mcp={"corvin_orchestration": {"command": "{{paths.python}}", "args": ["-m", "json.tool"],
                                                  "env": {"CORVIN_HOME": "{{paths.corvin_home}}"}}})
     write_fragment(src, "videos", requires=["core"], suggests=["kb"],
                    texts={"files/i.md": "# Videos of {{project.id}}\n"},
