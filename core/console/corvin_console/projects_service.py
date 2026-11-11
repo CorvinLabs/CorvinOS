@@ -2484,7 +2484,8 @@ def attach_chat(tenant_id: str, project_id: str, session_id: str) -> dict[str, A
         raise Conflict("only a project in state ok can be attached", "not_openable")
     _require_chat(tenant_id, session_id)
     root_, man = _load_project(tenant_id, project_id)
-    refusal = _class_refusal(tenant_id, _protection_of(tenant_id, project_id, man)["classification"])
+    prot = _protection_of(tenant_id, project_id, man)
+    refusal = _class_refusal(tenant_id, prot["classification"])
     if refusal:
         _audit_refusal(tenant_id, "classification", project_id)
         raise Conflict(refusal, "classification")
@@ -2496,9 +2497,26 @@ def attach_chat(tenant_id: str, project_id: str, session_id: str) -> dict[str, A
             raise Conflict("too many chats have a project attached; detach some first", "attachment_full")
     _audit(tenant_id, "project.attached", project_id=project_id)
     attachment.attach(tenant_id, session_id, project_id, str(root_))
+    has_tools = not e.get("builtin") and registry.mcp_sha(tenant_id=tenant_id, project_id=project_id) is not None
     return {"project_id": project_id, "session_id": session_id, "attached": True,
-            "note": "Applies from the chat's next message. The assistant can follow the project's rules and use its tools. Its file tools "
-                    "cannot change the project's files unless you allow editing in the project's settings (a shell command is not covered)."}
+            "note": attach_note(prot["assistant_access"] == "write", has_tools)}
+
+
+def attach_note(write: bool, has_tools: bool) -> str:
+    """The sentence the console shows after "Use in a chat": what the assistant may do in THIS project. It follows the same
+    rules as ``attachment.spawn_parts`` (the MCP tools only with write access, the write-deny rules only without it); until
+    the integration test of 2026-11-11 it was one fixed sentence that promised tools and denied edits for every project."""
+    rules = "Applies from the chat's next message. The assistant can follow the project's rules"
+    if has_tools and write:
+        rules += " and use its tools."
+    elif has_tools:
+        rules += ". Its tools reach a chat only when the assistant may edit files."
+    else:
+        rules += "."
+    if write:
+        return rules + " Its file tools can create and change the project's files."
+    return (rules + " Its file tools cannot change the project's files unless you allow editing in the project's settings "
+                    "(a shell command is not covered).")
 
 
 def detach_chat(tenant_id: str, session_id: str) -> dict[str, Any]:

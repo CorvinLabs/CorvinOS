@@ -125,6 +125,33 @@ class Review0066TitleAndReview0068Offered(_Base):
                              str(root / ".corvin/local/mcp.json"))
             self.assertIs(c.own.get(f"{_URL}/chat-attachment", params={"session_id": sid}).json()["tools_withheld"], False)
 
+    def test_the_attach_note_says_what_the_assistant_may_do(self):
+        """Integration test 2026-11-11: the note of POST /attach was one fixed sentence - "... and use its tools. Its file tools
+        cannot change the project's files unless you allow editing ..." - for EVERY project: wrong for a write project (its files
+        can change) and wrong for a read-only project with MCP tools (they are withheld). It now follows the project's access."""
+        with self._ctx() as c:
+            plan, r = self._create(c, "Note subject", features=["core", "claude", "acs"], assistant_access="read")
+            self.assertEqual(r.status_code, 201, r.text)
+            pid = plan["project_id"]
+            sid = _chat(c)
+            note = c.own.post(f"{_URL}/{pid}/attach", json={"session_id": sid}, headers=self._h(c)).json()["note"]
+            self.assertNotIn("use its tools", note)
+            self.assertIn("tools reach a chat only when the assistant may edit files", note)
+            self.assertIn("cannot change the project's files", note)
+            s = c.own.put(f"{_URL}/{pid}/settings", json={"assistant_access": "write", "confirm": True}, headers=self._h(c))
+            self.assertEqual(s.status_code, 200, s.text)
+            note = c.own.post(f"{_URL}/{pid}/attach", json={"session_id": sid}, headers=self._h(c)).json()["note"]
+            self.assertIn("use its tools", note)
+            self.assertIn("can create and change the project's files", note)
+            self.assertNotIn("cannot change", note)
+            # a write project without MCP tools does not promise any
+            plan2, r2 = self._create(c, "Note plain", features=["core", "claude"], assistant_access="write")
+            self.assertEqual(r2.status_code, 201, r2.text)
+            note = c.own.post(f"{_URL}/{plan2['project_id']}/attach", json={"session_id": _chat(c)}, headers=self._h(c)).json()["note"]
+            self.assertNotIn("tools reach", note)
+            self.assertNotIn("use its tools", note)
+            self.assertIn("can create and change the project's files", note)
+
 
 if __name__ == "__main__":
     unittest.main()

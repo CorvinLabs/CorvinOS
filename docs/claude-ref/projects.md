@@ -1241,7 +1241,7 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
 ## Chat attachment (T-0364, ADR-2317)
 
 A project can be attached to one console chat (Settings tab, "Use in a chat"; API `POST /projects/{id}/attach`,
-`POST /projects/detach`, `GET /projects/chat-attachment?session_id=`). The attachment is console state per chat in
+`POST /projects/detach`, `GET /projects/chat-attachment?session_id=`). The `note` of `POST /attach` (shown under "Use in a chat") follows the project's access (`projects_service.attach_note`, the rules of `attachment.spawn_parts`): "use its tools" only when the project has MCP tools AND write access, "Its tools reach a chat only when the assistant may edit files." for MCP tools with read access, and "Its file tools can create and change the project's files." vs "... cannot change the project's files unless you allow editing ..." by access (until the integration test of 2026-11-11 it was one fixed sentence that promised tools and denied edits for every project; proof `test_projects_review_0066_0068_attach_e2e.py::test_the_attach_note_says_what_the_assistant_may_do`). The attachment is console state per chat in
 `<tenant_home>/projects/chat_attachments.json` (0o600, names a project id only - never a path, never inside the chat's
 working directory). The project is NEVER the CLI's cwd. On each spawn (`chat_runtime._build_args`,
 `_project_attachment_parts`; implementation `core/projects/attachment.py`) the CLI gets, verified with real runs (NOTE-0018):
