@@ -26,6 +26,7 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[0] / "e2e"))
 sys.path.insert(0, str(HERE.parents[1] / "core" / "console" / "tests"))
+from _projects_fixtures import sandbox_home_env  # noqa: E402
 from test_learning_loop_routes_e2e import _sandbox  # noqa: E402
 
 _URL = "/v1/console/projects"
@@ -56,8 +57,11 @@ def _audit(home: Path) -> list[dict]:
 class _Base(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self._home_env = sandbox_home_env(self.tmp)       # the temp dir is the own home (ADR-2321 10a)
+        self._home_env.__enter__()
 
     def tearDown(self):
+        self._home_env.__exit__(None, None, None)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _project(self, client, tenant_id, csrf, *, mcp=False):

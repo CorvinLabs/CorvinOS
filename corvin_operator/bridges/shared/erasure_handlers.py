@@ -485,6 +485,32 @@ class ACSTraceHandler:
         )
 
 
+class ProjectsMetadataHandler:
+    """L-projects (ADR-2321 Decision 13, REVIEW-0061 M10): the projects store has NO per-person key.
+
+    ``<tenant_home>/projects/`` (registry, settings, picker history, import staging, export jobs) and the tenant's managed
+    workspace belong to the tenant operator: console sessions carry no user identity, and project files are user-owned folders.
+    An Art. 17 request therefore cannot select a subject's records out of it, so this handler deletes NOTHING and reports
+    ``SKIPPED`` (never ``APPLIED``, which means "made changes"). It never deletes a project directory and never logs the subject
+    id. Retiring a tenant is a documented manual list (docs/claude-ref/projects.md, "Retiring a tenant").
+    """
+    layer_id: str = "L-projects"
+    tenant_id: str = "_default"
+    NOTE = ("projects metadata carries no per-person key; project files are user-owned and outside Art. 17 automation "
+            "\u2014 review them in the Projects panel")
+
+    def __init__(self, tenant_id: str = "_default") -> None:
+        self.tenant_id = tenant_id
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        return ErasureLayerResult(
+            layer_id=self.layer_id, status=LayerStatus.SKIPPED, count=0,
+            reason=self.NOTE, code=ReasonCode.NOT_ERASABLE.value,
+            duration_ms=int((time.time() - t0) * 1000),
+        )
+
+
 # ── Web-chat handler (voice archive + turn log) ─────────────────────
 
 
@@ -3127,6 +3153,12 @@ UNATTRIBUTABLE_DIRS: dict[str, str] = {
         "blender_orchestrator.py renders a user's input video to renders/render_<ms>.mp4: "
         "media, timestamp name, no owner — fix: owner-keyed path at the writer."
     ),
+    "projects": (
+        "core/projects/registry.py: registry.json, settings.json, chat attachments, project locks (and the stores ADR-2321..2323 "
+        "add: picker history, import staging, export jobs) are the tenant operator's - console sessions carry no user identity, so "
+        "no record names a subject an Art. 17 request could select. The L-projects layer (ProjectsMetadataHandler) reports it "
+        "SKIPPED with that note; project folders are user-owned (ADR-2321 Decision 13)."
+    ),
     "global/task_tracking": (
         "tasks.db (SQLite): free-text titles/descriptions; owner/assignee/created_by are "
         "free-form strings, the console writes the constant actor 'operator' — no principal "
@@ -3447,6 +3479,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         ChatGroupHandler(tenant_id=tenant_id),              # global/chat_groups/
         FederationConversationHandler(tenant_id=tenant_id), # global/federation/conversations/
         VideoProducerHandler(tenant_id=tenant_id),          # video_producer/ (styles, jobs, videos)
+        ProjectsMetadataHandler(tenant_id=tenant_id),       # projects/ + managed workspace: no per-person key (ADR-2321 D13)
         IdentityMappingHandlerBase(),
     ]
     # R4-F1: the remaining live tenant-home stores, all erased by the same

@@ -24,6 +24,7 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[1] / "core" / "console" / "tests"))
+from _projects_fixtures import sandbox_home_env  # noqa: E402
 import test_project_kb_projector_e2e as fx  # noqa: E402
 from test_admin_route import _sandbox  # noqa: E402
 
@@ -41,6 +42,8 @@ _ENABLED = {"corvin_knowledge": "enabled", "project_templates": "enabled", "vide
 class TemplateCatalogueE2E(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self._home_env = sandbox_home_env(self.tmp)       # the temp dir is the own home (ADR-2321 10a)
+        self._home_env.__enter__()
         self.bound = self.tmp / "bound"
         fx._kb_init(self.bound, engine=True)
         fx._seed(self.bound, "bound")
@@ -48,6 +51,7 @@ class TemplateCatalogueE2E(unittest.TestCase):
         os.environ["CORVIN_KB_REPO"] = str(self.bound)
 
     def tearDown(self):
+        self._home_env.__exit__(None, None, None)
         os.environ.pop("CORVIN_KB_REPO", None) if self.saved is None else os.environ.__setitem__("CORVIN_KB_REPO", self.saved)
         shutil.rmtree(self.tmp, ignore_errors=True)
 

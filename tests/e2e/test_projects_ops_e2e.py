@@ -118,6 +118,91 @@ class DoctorCalibration(_Base):
             self.assertEqual(len(found), len(seeded) + 1)
 
 
+    def test_the_location_checks_of_adr_2321_find_each_seeded_defect(self):
+        """T-0386 / ADR-2321 Decision 17: a clean MANAGED project has zero failed checks; each seeded defect is found by exactly
+        its check; repair writes a missing workspace marker and nothing else."""
+        import json
+        from unittest import mock
+        from core.projects import hints, registry
+        with self._ctx() as c:
+            mr = Path(c.own.get(_URL).json()["managed_root"])
+            plan, r = self._create(c, "Managed doctor", features=["core", "kb", "claude", "tasks"], location=str(mr / "managed-doctor"))
+            self.assertEqual(r.status_code, 201, r.text)
+            pid, root = plan["project_id"], mr / "managed-doctor"
+            self.assertEqual(c.own.get(f"{_URL}/{pid}").json()["storage"], "managed")
+            self.assertEqual(self._failed(c, pid), set(), "false positive on a clean managed project")
+            reg = registry.registry_path("_default")
+            marker = mr / "workspace.json"
+
+            def edit_entry(**kw):
+                d = json.loads(reg.read_text())
+                for e in d["projects"]:
+                    if e["id"] == pid:
+                        e.update(kw)
+                reg.write_text(json.dumps(d))
+
+            def seed_marker_gone():
+                marker.rename(mr / "marker.bak")
+
+            def unseed_marker_gone():
+                (mr / "marker.bak").rename(marker)
+
+            saved_marker = marker.read_text()
+            other_home = self.tmp / "other-install" / ".corvin"
+            other_home.mkdir(parents=True)
+            gate_copy = self.tmp / "hooks" / "path_gate.renamed"
+            gate_copy.parent.mkdir()
+            seeded = [
+                ("marker_missing", seed_marker_gone, unseed_marker_gone, "storage_marker"),
+                ("marker_of_another_home", lambda: marker.write_text(json.dumps({**json.loads(saved_marker), "corvin_home": str(other_home)})),
+                 lambda: marker.write_text(saved_marker), "storage_marker"),
+                ("storage_does_not_match_the_path", lambda: edit_entry(storage="own"), lambda: edit_entry(storage="managed"),
+                 "path_under_base"),
+                ("engine_copy", lambda: ((root / "tools").mkdir(), (root / "tools" / "ENGINE.json").write_text('{"files": {}}')),
+                 lambda: shutil.rmtree(root / "tools"), "no_engine_copy"),
+                ("import_leftover", lambda: (mr / f"{pid}.importing-x").mkdir(), lambda: (mr / f"{pid}.importing-x").rmdir(),
+                 "import_leftovers"),
+                ("pending_import_without_a_lock", lambda: edit_entry(pending="import"), lambda: edit_entry(pending=None),
+                 "pending_import"),
+            ]
+            missed = []
+            for name, seed, unseed, expect in seeded:
+                seed()
+                try:
+                    failed = self._failed(c, pid)
+                finally:
+                    unseed()
+                if failed != {expect}:
+                    missed.append((name, sorted(failed)))
+                self.assertEqual(self._failed(c, pid), set(), f"restore after {name} left a failed check")
+            with mock.patch.object(hints, "GATE_PATH", gate_copy):                 # an unloadable hint source
+                hints.reset()
+                try:
+                    failed = self._failed(c, pid)
+                finally:
+                    hints.reset()
+            if failed != {"hint_source"}:
+                missed.append(("hint_source_unloadable", sorted(failed)))
+            # a project id containing a hint word: a note, never a failure
+            hp, hr = self._create(c, "Compute lab", features=["core", "kb", "claude", "tasks"], project_id="compute-lab")
+            self.assertEqual(hr.status_code, 201, hr.text)
+            h = c.own.get(f"{_URL}/compute-lab/health").json()
+            notes = [x for x in h["checks"] if x.get("note")]
+            if [x["id"] for x in notes] != ["path_gate_hint"] or {x["id"] for x in h["checks"] if not x["ok"]}:
+                missed.append(("hint_word_in_the_path", [x["id"] for x in notes]))
+            self.assertEqual(missed, [], "defects not found by exactly their check")
+            # repair on a managed project without a marker writes exactly workspace.json
+            marker.unlink()
+            before = {p.relative_to(mr).as_posix() for p in mr.rglob("*")}
+            rr = c.own.post(f"{_URL}/{pid}/repair", json={}, headers=self._h(c))
+            self.assertEqual(rr.status_code, 200, rr.text)
+            self.assertEqual(rr.json()["marker"], "written")
+            after = {p.relative_to(mr).as_posix() for p in mr.rglob("*")}
+            self.assertEqual(after - before, {"workspace.json"})
+            self.assertEqual(before - after, set())
+            self.assertEqual(self._failed(c, pid), set())
+
+
 @unittest.skipUnless(base._MARKET.is_file(), "needs the Marketplace checkout")
 class AdoptRenameMove(_Base):
     def test_adopt_a_foreign_repo_writes_exactly_one_file(self):
@@ -158,13 +243,22 @@ class AdoptRenameMove(_Base):
             self.assertEqual(sorted(got["active"]), ["kb"] if (dst / "docs" / "kb" / "_meta").is_dir() else [])
 
     def test_adopt_refuses_outside_the_root_and_a_foreign_manifest(self):
+        """Rewritten for ADR-2321 Decision 4 (T-0385 AC1): outside the projects root is allowed where the rule allows it (only
+        project.yaml is written); a foreign manifest, a missing folder and a system folder are still refused."""
         with self._ctx() as c:
             outside = self.tmp / "elsewhere"
             outside.mkdir()
             r = c.own.post(f"{_URL}/adopt", json={"location": str(outside)}, headers=self._h(c))
-            self.assertEqual(r.status_code, 422)
-            self.assertEqual(os.listdir(outside), [])
+            self.assertEqual(r.status_code, 201, r.text)
+            self.assertEqual(os.listdir(outside), ["project.yaml"])
+            foreign = self.tmp / "foreign"
+            foreign.mkdir()
+            (foreign / "project.yaml").write_text("schema: 1\nid: foreign\ntitle: F\ntenant: acme\n")
+            r = c.own.post(f"{_URL}/adopt", json={"location": str(foreign)}, headers=self._h(c))
+            self.assertEqual((r.status_code, r.json()["detail"]["reason_class"]), (422, "other_tenant"))
             r = c.own.post(f"{_URL}/adopt", json={"location": str(c.root / "nope")}, headers=self._h(c))
+            self.assertEqual((r.status_code, r.json()["detail"]["reason_class"]), (422, "missing"))
+            r = c.own.post(f"{_URL}/adopt", json={"location": "/etc"}, headers=self._h(c))
             self.assertEqual(r.status_code, 422)
 
     def test_rename_changes_only_the_title(self):
@@ -202,7 +296,9 @@ class AdoptRenameMove(_Base):
             self.assertEqual(c.own.get(f"{_URL}/{pid}").json()["state"], "ok")
             hh = c.own.get(f"{_URL}/{pid}/health").json()
             self.assertEqual(self._failed(c, pid), set(), hh)
-            for loc, want in ((str(target / "inner"), 409), (str(self.tmp / "out" / "p"), 422),
+            # ADR-2321 Decision 4 withdrew "only under the projects root": a folder outside it is a valid target now, so the
+            # refused outside case is a system folder (T-0385)
+            for loc, want in ((str(target / "inner"), 409), ("/etc/corvin-move-probe", 422),
                               (str(c.root / "a" / ".." / "b"), 422), (str(c.home / "tenants" / "_default" / "p"), 422)):
                 rr = c.own.post(f"{_URL}/{pid}/move", json={"location": loc}, headers=self._h(c))
                 self.assertEqual(rr.status_code, want, (loc, rr.text))

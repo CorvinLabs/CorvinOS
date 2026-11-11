@@ -168,6 +168,40 @@ def set_root(body: RootBody, rec: SessCsrf) -> dict:
     return _call(svc.set_root, rec.tenant_id, body.path)
 
 
+class StorageBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    default_storage: Optional[str] = Field(default=None, max_length=8)
+    projects_root: Optional[str] = Field(default=None, max_length=1000)
+    rekey: bool = False
+
+
+class RelocateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    location: str = Field(min_length=1, max_length=1000)
+
+
+@router.put("/settings/storage")
+def put_storage(body: StorageBody, rec: SessCsrf) -> dict:
+    """Where new projects go (ADR-2321 Decision 8); ``{rekey: true}`` starts a new workspace for a copied installation."""
+    if body.rekey:
+        return _call(svc.rekey_workspace, rec.tenant_id)
+    if body.default_storage is None:
+        raise HTTPException(status_code=400, detail={"message": "default_storage is required", "reason_class": "error"})
+    return _call(svc.set_default_storage, rec.tenant_id, body.default_storage, body.projects_root)
+
+
+# ── the collection namespace /projects/-/... (ADR-2321 Decision 16, REVIEW-0061 M4) ────────────────────────────────────
+# '-' can never be a project id (manifest.PROJECT_ID_RE), so collection-level routes of ADR-2321..2323 (browse, export, import,
+# trash) live under it and RESERVED_IDS stays as it is (extending it would invalidate existing projects on load). Registered
+# BEFORE /{project_id}; later tasks add their routes to `collection`. Anything not defined there is 404 from here, never a lookup.
+collection = APIRouter(prefix="/-")
+
+
+@collection.api_route("/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], include_in_schema=False)
+def _collection_unknown(rest: str, rec: Sess) -> dict:
+    raise HTTPException(status_code=404, detail={"message": "no such collection route", "reason_class": "not_found"})
+
+
 @router.get("/chat-attachment")
 def chat_attachment(session_id: str, rec: Sess) -> dict:
     return _call(svc.chat_attachment, rec.tenant_id, session_id)
@@ -176,6 +210,9 @@ def chat_attachment(session_id: str, rec: Sess) -> dict:
 @router.post("/detach")
 def detach(body: AttachBody, rec: SessCsrf) -> dict:
     return _call(svc.detach_chat, rec.tenant_id, body.session_id)
+
+
+router.include_router(collection)
 
 
 @router.post("/{project_id}/attach")
@@ -318,6 +355,12 @@ def rename(project_id: str, body: RenameBody, rec: SessCsrf) -> dict:
 @router.post("/{project_id}/move")
 def move(project_id: str, body: MoveBody, rec: SessCsrf) -> dict:
     return _call(svc.move_project, rec.tenant_id, project_id, body.location)
+
+
+@router.post("/{project_id}/relocate")
+def relocate(project_id: str, body: RelocateBody, rec: SessCsrf) -> dict:
+    """"Locate folder": re-point a missing project at the folder that holds its manifest (ADR-2321 Decision 11)."""
+    return _call(svc.relocate_project, rec.tenant_id, project_id, body.location)
 
 
 @router.post("/{project_id}/open")

@@ -17,9 +17,10 @@ class Sandbox:
         self.home = self.tmp / "corvin_home"
         self.root = self.tmp / "projects"
         self.root.mkdir()
-        self._saved = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID")}
+        self._saved = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID", *_HOME_KEYS)}
         os.environ["CORVIN_HOME"] = str(self.home)
         os.environ["CORVIN_TENANT_ID"] = "_default"
+        os.environ.update(home_env_for(self.tmp))       # the temp dir is the own home (ADR-2321 Decision 10a, REVIEW-0062 N1)
         for t in ("_default", "acme"):
             (self.home / "tenants" / t).mkdir(parents=True)
 

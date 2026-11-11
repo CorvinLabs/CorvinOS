@@ -22,6 +22,20 @@ template catalogue is the first-party plugin `project_templates` (T-0354, T-0356
 | Proof | `tests/e2e/test_projects_registry_e2e.py`, `test_projects_fragments_e2e.py`, `test_projects_api_e2e.py`, `test_project_templates_catalogue_e2e.py` (the REAL catalogue) |
 | Platform data directory, managed workspace path, user places, drives, the lists the location rule judges against | `core/paths/user_dirs.py` (ADR-2321 Decision 7, stdlib only, Python 3.11-safe) |
 
+### Erasure and retiring a tenant (ADR-2321 Decision 13)
+
+GDPR Art. 17 (L36): the layer `L-projects` (`erasure_handlers.ProjectsMetadataHandler`, in `real_handler_chain`)
+reports `SKIPPED` for every subject with the note "projects metadata carries no per-person key; project files are
+user-owned and outside Art. 17 automation — review them in the Projects panel", deletes nothing and never logs the
+subject id; `<tenant_home>/projects` is listed in `UNATTRIBUTABLE_DIRS`. Proof:
+`tests/security/test_erasure_projects_handler_e2e.py` (through `ErasureOrchestrator` with the real chain; every
+planted file and project folder byte-identical afterwards).
+
+**Retiring a tenant** - CorvinOS has no tenant-offboarding entry point (NOTE-0020 O10). An operator removes by hand:
+`<tenant_home>/projects/` (registry, settings, chat attachments, locks; later picker history, import staging, export
+jobs) and the tenant's `managed_root` (the path in `settings.json`, including `.trash/`). `own` folders are the
+user's and are never part of it.
+
 ### The managed workspace (ADR-2321 Decision 7)
 
 A tenant's *Corvin workspace* lives in the platform's per-user data directory, OUTSIDE `CORVIN_HOME`:
@@ -96,13 +110,56 @@ workspace (`outcome=rekeyed`; the Settings action, T-0387/T-0408).
 
 ## Locations a client may name (`registry.validate_location`)
 
-Only `plan`/create and `adopt` take a path from a client. Refused (`ProjectPathError`, 422, the message
-names the rule and never a path): not absolute, `..`, outside the projects root or the root itself,
-inside `CORVIN_HOME` (or containing it), a symlink anywhere between the root and the target (judged on
-the path as given), a protected component (`.git`, `.corvin`, `session_ledger`, `.corvin-ledger`,
-`cel_anchors`, `pending_notifications`, `tenants`), a hidden top-level directory, a directory another
-tenant already registered, a non-empty directory (create), a missing or invalid `project.yaml` or one
-that names another tenant (adopt). One directory belongs to exactly one tenant.
+ONE rule (ADR-2321 Decisions 4, 10, 10a, 15; replaces ADR-2315 Decision 6):
+`registry.validate_location(tenant_id, raw, *, purpose, project_id=None) -> Path`, `purpose` in `create`
+(plan and create), `adopt`, `projects_root` (`PUT /projects/root`; `validate_root` is this purpose), `move`,
+`relocate`, `import`. A client-supplied location may be `<managed_root>/<id>`, a folder under the projects
+root, or **any other folder that passes the rule** — "only under the projects root" is withdrawn (the one
+deliberate widening: "Add existing folder" from anywhere the rule allows). The picker's verdict and the mutation
+call the same function; the mutation re-validates on confirm. A refusal is a `ProjectPathError` with
+`reason_class` (the HTTP 422 `detail.reason_class` and the `project.blocked` record carry it) and the class's
+fixed sentence (`registry.SENTENCES`), never a path.
+
+Two forms are judged: *given* (`normalize_input`, made absolute lexically, no link followed) and *resolved*.
+Every component check runs over ALL components of both forms, from the anchor to the target. Order:
+
+| # | Class | Refuses |
+|---|---|---|
+| 1 | `path_rule` | not a string, empty, NUL, > 1000 characters, not absolute, `..`; on Windows `normalize_input` first: every UNC (`\\server\share`, `\\?\UNC\…`) and device path, for every purpose, before anything is stat-ed |
+| 2 | (`path_rule`) | `_check_windows_names`: device names to be created, trailing dot/space, `< > : " \| ? *` |
+| 3 | (`path_rule`) | `_check_length`: the MAX_PATH budget when long paths are off |
+| 4 | `top_level` | the anchor; fewer than three parts (`D:\projects` - use `D:\work\projects`); any user's home (a direct child of `/home`, `/Users`, `/var/home`, `C:\Users`, or `/root`); the own home or an ancestor of it; a mount point `user_dirs.drives()` reports (a folder below it is fine) |
+| 5 | `corvin_home` | inside, above or equal to the resolved `corvin_home()`, the real `~/.corvin` or `$CORVIN_HOME` as given; also by identity (`os.path.samefile` on the target and each existing ancestor), so a bind mount of the home is caught |
+| 6 | `system_prefix` | `user_dirs.is_under_system_prefix` on both forms (own-home subtree exempt when the home lies below a prefix; strictly below `/run/media/<own user>/<label>` exempt) |
+| 7 | `protected` | a component in `PROTECTED_COMPONENTS` (`.git`, `.corvin`, `session_ledger`, `.corvin-ledger`, `cel_anchors`, `pending_notifications`, `tenants`, case-folded) at any depth; a path inside another user's home |
+| 8 | `hidden` | a dot component below the own home (outside it: below the anchor); an application-data tree (`user_dirs.app_data_dirs()`: `~/.config`, `~/.local/share`, `~/.local/state`, `~/.cache`, `~/Library`, `%APPDATA%`, `%LOCALAPPDATA%`); the components of the own managed root are exempt |
+| 9 | `other_tenant` / `workspace_root` | the managed parent, or anything under it outside the own `managed_root` (`other_tenant`); a directory another tenant's registry lists (`other_tenant`); the own `managed_root` itself or anything below a dot-named entry of it, e.g. `.trash/` (`workspace_root`) |
+| 10 | `symlink` | any component of the GIVEN form that is a link by `fsutil.is_link` (symlink, junction, name-surrogate reparse point), except the ancestors of the own home and `user_dirs.platform_links()` (macOS `/etc`, `/tmp`, `/var`) |
+| 11 | `nested` | inside or containing any tenant's registered project (the moved project ignored; re-adopting the tenant's own registered path passes, the service answers `id_taken`); a valid `project.yaml` in any ancestor; the projects folder itself (an added refusal) |
+| 12 | per purpose | `create`/`move`/`import`: absent or empty (`not_empty`); `adopt`: exists (`missing`), `project.yaml` absent or naming this tenant (`other_tenant`; invalid -> `wrong_manifest`; a linked one -> `symlink`); `relocate`: holds this project's manifest of this tenant (`wrong_manifest`); `projects_root`: not a file |
+
+**Grandfathering (REVIEW-0062 N1).** For every purpose except `projects_root`, a target below the stored
+projects root (given below given AND resolved below resolved) is judged by checks 4, 6, 7, 8 and 10 only on the
+components BELOW that root (and the root itself must not be a link); check 5 and checks 1-3, 9, 11, 12 run in
+full. So a stored `~/.projects`, a root below a linked folder or a root in `/var/tmp` keeps accepting creates,
+while `<root>/a/.git/b`, `<root>/.hidden/b` or a link below the root are still refused. The root itself is
+re-judged by the full rule only when it is set again (`PUT /projects/root` with the same value of a `~/.projects`
+root answers `hidden`). Registered projects are never re-judged on read.
+
+**Kept from 65b587f2e (Decision 10a)** - the rule only adds refusals: tenant id validation, the input
+type/NUL/length rule, `normalize_input` with the UNC/device refusal, absolute and no `..`, Windows names, the
+length budget, the mapped-network-drive rule (a drive letter that resolves to UNC keeps the letter), fewer than
+three parts, inside/above/equal `CORVIN_HOME`, `PROTECTED_COMPONENTS`, hidden, the link walk and a linked
+projects root, `_other_tenants_claiming`, `nesting_conflict`, the adopt manifest checks, the create rule, a file
+is not a folder. `tests/e2e/test_projects_location_e2e.py::LocationRule::test_the_kept_checks_refuse_as_before`
+runs the same inputs through the function at 65b587f2e (loaded from git) and the current one. The pre-ADR-2321
+keywords `adopt`/`unmanaged`/`ignore` are still accepted by `validate_location` ONLY so the regression tests of
+6250cd0b6/65b587f2e run unchanged; no production caller passes them.
+
+**Test sandbox.** The rule refuses `/tmp` (system prefix) and other users' homes, so every projects test makes
+its temp dir the OWN home: `tests/e2e/_projects_fixtures.py::Sandbox` and `sandbox_home_env(tmp)` set `HOME`,
+`XDG_DATA_HOME` (on Windows also `USERPROFILE`, `LOCALAPPDATA`, `APPDATA`) into it and restore them. There is no
+test-only mode in the rule.
 
 ## The fragment engine (`core/projects/fragments.py`)
 
@@ -158,6 +215,25 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 | `POST /{id}/repair` | `{dry_run}`: pending changes with diffs; repair rewrites generated and machine-local files only |
 | `POST /{id}/open` | audit `project.opened`; returns the context and a terminal command (`chat_attachment: false` until ADR-2317's spike) |
 | `DELETE /{id}` | removes the registry entry ONLY; the directory stays |
+| `PUT /settings/storage` | `{default_storage: managed\|root, projects_root?}`: where NEW projects go; moves nothing; audit-first `project.storage_changed` requested/applied; 200 `{default_storage, projects_root, managed_root, outside: [ids]}`; 409 `root_required` ("Choose a folder of your own before switching to it."); a bad root is the rule's 422. `{rekey: true}` starts a new workspace for a copied installation (binding rule (c), `outcome=rekeyed`); 409 `not_foreign` ("This workspace belongs to this installation.") while the workspace is this installation's (ADR-2321 Decisions 8, 16) |
+| `PUT /root` | `{path}`: the ALIAS of `set_default_storage("root", path)` - not a second settings writer; response `{projects_root, outside}` as before; audit-first `project.root_changed`, plus `project.storage_changed` (`to: root`) only when `default_storage` flips (REVIEW-0062 N9) |
+| `POST /{id}/relocate` | `{location}` ("Locate folder"): re-points the index at a folder that already holds this project's manifest (purpose `relocate`), re-attaches chats, runs repair; audit `project.relocated` requested/applied; 409 `not_missing` while the recorded path still holds the manifest; 422 `wrong_manifest` for a folder holding another project (ADR-2321 Decision 11) |
+| `POST /{id}/move` | `{location}`: same-disk rename only; a rename that fails with `EXDEV` (Windows error 17) answers 409 `cross_device` ("The new place is on another disk. Export the project and import it there, or copy the folder yourself and use Locate folder."), tree and index unchanged, `project.blocked reason_class=cross_device`; moving into/out of the managed root sets `storage` |
+
+**Collection namespace `/projects/-/…` (ADR-2321 Decision 16, REVIEW-0061 M4).** `manifest.RESERVED_IDS` is NOT extended
+(an existing project named `import`, `files` or `trash` would turn invalid on load). Collection-level routes of
+ADR-2321..2323 (browse, export, import, trash) live under the first segment `-`, which `PROJECT_ID_RE` can never
+match. The sub-router `routes/projects.py::collection` is registered BEFORE every `/{project_id}` route; today it
+holds only a catch-all that answers 404 `not_found`, never a project lookup. Projects named `import`, `browse`,
+`trash`, `export`, `exports`, `files` keep loading and answer detail, health and move.
+
+**Hint words (ADR-2321 Decision 2, REVIEW-0061 M5).** `core/projects/hints.py` loads `_looks_protected` from
+`corvin_operator/voice/hooks/path_gate.py` by file path (`importlib.util.spec_from_file_location`, once) - no copy
+of `_PROTECTED_HINTS`; a load failure raises `HintSourceUnavailable`. A NEW folder directly in the managed root
+(`create`/`move`/`import`) whose path the gate's test matches is refused 422 `hint_word` ("Commands that name this
+folder would be refused by the assistant's safety check; choose another id."); so is every managed create while the
+hint source cannot be loaded. An own folder only warns: the plan response carries `location_warnings: ["hint_word"]`
+and the sentence "The assistant may refuse some shell commands in a folder whose path contains '<word>'." in `warnings`.
 
 **External prerequisites are warnings, never a refusal** (`external_warnings`, plan response `warnings`):
 with `acs` the tenant's compute worker is probed read-only on its socket (`corvin_compute.endpoint.connect`,
@@ -176,7 +252,8 @@ whose health shows what is missing. A project can never enable a tenant plugin: 
 `project.feature_toggled` (one per feature, `to` on/off), `project.repaired`,
 `project.registry_removed`, `project.blocked` (a refusal; best effort; its `reason_class` is the class of the
 refusal), `project.storage_changed` (WARNING; `to` managed|root, `outcome`
-requested|applied|rebound|recovered|rekeyed|error - never a path or a workspace key). Allowlist: `project_id`,
+requested|applied|rebound|recovered|rekeyed|error - never a path or a workspace key), `project.relocated` (WARNING;
+`project_id`, `outcome`). Allowlist: `project_id`,
 `feature`, `to`, `template`, `files` (count), `reason_class`, `outcome`, `tenant_id`, `storage` (managed|own on
 `project.plan_created`/`project.created`) - never a path. A `ProjectPathError` answers 422
 `{message, reason_class}` with the exception's own class.
@@ -318,13 +395,26 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   generated section, `docs/kb` removed, an inconsistent KB entry, a missing tenant plugin) - all found, and a clean project
   has no failed check (`tests/e2e/test_projects_ops_e2e.py::DoctorCalibration`). A `CLAUDE.md` WITHOUT the generated
   marker is the user's own file: it is never rewritten and never reported as drift (by design, not a gap).
-- **Adopt** (`POST /projects/adopt`, body `location`, optional `title`, `project_id`): inside the projects root only.
+- **Doctor, location checks (ADR-2321 Decision 17, T-0386).** `storage_marker` (managed projects: `workspace.json`
+  names this tenant, this workspace and this installation; a missing marker says "Repair writes the workspace marker",
+  and `POST /{id}/repair` then writes exactly that one file, audited `project.repaired`), `path_under_base` (the
+  folder lies where its `storage` says; a stored projects root the current rule would refuse is reported here),
+  `no_engine_copy` (no `ENGINE.json` - bounded walk, links not followed - and no `docs/scripts/kb.py` inside the
+  project; not repairable: "remove ENGINE.json from the project; the tenant engine is used"), `import_leftovers` (no
+  `<id>.importing-*` sibling), `pending_import` (an entry marked `pending: "import"` while no apply holds the project
+  lock; its repair action ships with the import, T-0412), `hint_source` (`core/projects/hints.py` can load the path
+  gate's hint test), and the NOTE `path_gate_hint` (`ok: true, note: true`: the path contains a hint word). Each
+  seeded defect is found by exactly its check and a clean managed project has none
+  (`DoctorCalibration::test_the_location_checks_of_adr_2321_find_each_seeded_defect`).
+- **Adopt** (`POST /projects/adopt`, body `location`, optional `title`, `project_id`): any folder the location rule
+  allows (ADR-2321 Decision 4; until then: inside the projects root only).
   A folder with a `project.yaml` is registered as is. A folder without one gets exactly that file - docs mode and the `kb`
   feature are read from what is on disk, nothing else is written, `.git` included. Proven on a copy of the real
   `LLM_lie_detector` repository (every file hashed before and after; only `project.yaml` is new).
 - **Rename** (`PUT /projects/{id}/title`): the title in `project.yaml` only; the id (registry key, KB scope label) never changes.
-- **Move** (`POST /projects/{id}/move`, body `location`): a same-disk rename to an absent or empty place under the
-  projects root; never into itself, never over content. The index follows, then repair regenerates the machine-local files
+- **Move** (`POST /projects/{id}/move`, body `location`): a same-disk rename to an absent or empty place the
+  location rule allows (purpose `move`); never into itself, never over content, never across disks (409
+  `cross_device`). The index follows, then repair regenerates the machine-local files
   (they hold absolute paths); the response carries `repaired_files`. Audit: `project.renamed`, `project.moved`.
 - UI: "Add existing folder" on the list, Rename and Move in the Settings tab (Move needs a second confirming click).
   Browser proof: `tests/e2e/projects-manage.spec.ts`.

@@ -11,6 +11,7 @@ A project's files are the user's: nothing here deletes one.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -405,7 +406,7 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
         raise ProjectsError(f"assistant_access must be one of {manifest.ACCESS}")
     try:
         raw_loc, _kind = registry.default_location(tenant_id, pid, location, audit=_bind_audit(tenant_id))
-        loc = registry.validate_location(tenant_id, str(raw_loc))
+        loc = registry.validate_location(tenant_id, str(raw_loc), purpose="create")
         _refuse_foreign_kb(tenant_id, loc)
     except registry.ProjectPathError as exc:
         _audit_refusal(tenant_id, exc.reason_class, pid)
@@ -424,7 +425,9 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
            files=len(plan.writes), storage=storage)
     _store_plan(rec)
     summary = plan.summary()
-    summary["warnings"] = [*summary["warnings"], *external_warnings(tenant_id, plan.features)]
+    loc_warn = registry.location_warnings(loc) if storage == "own" else []
+    summary["warnings"] = [*summary["warnings"], *external_warnings(tenant_id, plan.features), *(w["message"] for w in loc_warn)]
+    summary["location_warnings"] = [w["class"] for w in loc_warn]
     return {"plan_id": rec.plan_id, "project_id": pid, "title": title, "template": f"{tpl.id}@{tpl.version}",
             "docs_mode": mode, "location": str(loc), "storage": storage, "role": tpl.role, "classification": cls,
             "assistant_access": acc, **summary, "plugins": plugins,
@@ -628,7 +631,7 @@ def _create_project(tenant_id: str, plan_id: str, rec: "PlanRecord") -> dict[str
     try:
         if rec.storage == "managed":
             _workspace(tenant_id)                                           # the workspace must still be this installation's
-        loc = registry.validate_location(tenant_id, str(rec.location))      # re-validate: the disk may have changed
+        loc = registry.validate_location(tenant_id, str(rec.location), purpose="create")   # re-validate: the disk may have changed
     except registry.ProjectPathError as exc:
         _audit_refusal(tenant_id, exc.reason_class, rec.project_id)
         raise
@@ -699,12 +702,7 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
     try:
         # the input is normalised (and a network path refused) BEFORE the first filesystem access: an exists() on a UNC path
         # would wait for the SMB timeout; the manifest is looked for in the normalised local folder only
-        location = registry.normalize_input(location)
-        unmanaged = True
-        given = Path(location)
-        if given.is_absolute() and ".." not in given.parts:
-            unmanaged = not (given / manifest.FILE).exists()
-        loc = registry.validate_location(tenant_id, location, adopt=True, unmanaged=unmanaged)
+        loc = registry.validate_location(tenant_id, location, purpose="adopt")
         _refuse_foreign_kb(tenant_id, loc)
     except registry.ProjectPathError as exc:
         _audit_refusal(tenant_id, exc.reason_class)
@@ -761,6 +759,10 @@ def rename_project(tenant_id: str, project_id: str, title: str) -> dict[str, Any
     return get_project(tenant_id, project_id)
 
 
+CROSS_DEVICE = ("The new place is on another disk. Export the project and import it there, or copy the folder yourself and use "
+                "Locate folder.")
+
+
 @_project_locked
 def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, Any]:
     _refuse_builtin(project_id)
@@ -774,7 +776,7 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
     if same:
         raise Conflict("the project is already in this folder (Windows does not tell folders apart by letter case)", "move_same")
     try:
-        dest = registry.validate_location(tenant_id, location, ignore=registry._resolve_forgiving(root))  # create rules: absent or empty
+        dest = registry.validate_location(tenant_id, location, purpose="move", project_id=project_id)  # absent or empty
     except registry.ProjectPathError as exc:
         _audit_refusal(tenant_id, exc.reason_class, project_id)
         raise
@@ -798,6 +800,9 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
                     raise
                 time.sleep(0.25)
     except OSError as exc:
+        if exc.errno == errno.EXDEV or getattr(exc, "winerror", None) == 17:      # ERROR_NOT_SAME_DEVICE: never copy across disks
+            _audit_refusal(tenant_id, "cross_device", project_id)
+            raise Conflict(CROSS_DEVICE, "cross_device") from None
         _audit_refusal(tenant_id, "move_failed", project_id)
         raise Conflict(f"the directory could not be moved ({type(exc).__name__}); nothing changed", "move_failed") from None
     try:
@@ -1028,17 +1033,31 @@ def set_features(tenant_id: str, project_id: str, changes: dict[str, bool], *, a
     return out
 
 
+def _repair_marker(tenant_id: str, project_id: str, root: Path, *, dry_run: bool) -> Optional[str]:
+    """A managed project whose workspace has no ``workspace.json``: repair writes it (and nothing else new). Audit-first."""
+    e = registry.get(tenant_id, project_id) or {}
+    mr = registry.known_managed_root(tenant_id)
+    if (e.get("storage") or registry.storage_of(tenant_id, root)) != "managed" or mr is None or (mr / registry.MARKER).exists():
+        return None
+    if dry_run:
+        return "pending"
+    _audit(tenant_id, "project.repaired", project_id=project_id, files=1, storage="managed")
+    _workspace(tenant_id)
+    return "written"
+
+
 @_project_locked
 def repair(tenant_id: str, project_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     _refuse_builtin(project_id)
     root, man = _load_project(tenant_id, project_id)
+    marker_written = _repair_marker(tenant_id, project_id, root, dry_run=dry_run)
     cat = catalogue(tenant_id)
     ctx = _context(tenant_id, project_id, man.get("title", project_id), root)
     plan = F.build_plan(cat, root, manifest.active_features(man), ctx, docs_mode=man.get("docs_mode", "nested"),
                         mode="repair")
     pending = plan.pending()
     summary = {**plan.summary(), "pending": [{"path": o.path or o.action, "status": o.status, "diff": o.diff}
-                                             for o in pending], "dry_run": dry_run}
+                                             for o in pending], "dry_run": dry_run, "marker": marker_written}
     if dry_run or not pending:
         return summary
     _require_plugins(tenant_id, plan, project_id)
@@ -1123,6 +1142,7 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
     except manifest.ManifestError as exc:
         add("manifest", False, str(exc))
         return {"project_id": project_id, "ok": False, "checks": checks}
+    _location_checks(tenant_id, project_id, e, root, add, checks)
     prot = registry.protection(tenant_id, project_id)
     if prot:
         same = prot.get("classification") == manifest.classification_of(man) and prot.get("assistant_access") == manifest.access_of(man)
@@ -1161,6 +1181,102 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
             except (Conflict, subprocess.TimeoutExpired, OSError, ValueError) as exc:        # ChangesError is a ValueError
                 add("kb_check", False, str(exc)[:160])
     return {"project_id": project_id, "ok": all(c["ok"] for c in checks), "checks": checks}
+
+
+_ENGINE_WALK_DEPTH = 4
+_ENGINE_WALK_MAX = 5000
+
+
+def _engine_copy(root: Path) -> Optional[str]:
+    """An engine copy inside the project (ADR-2316 D8): an ``ENGINE.json`` or ``docs/scripts/kb.py``. Bounded walk, never
+    following a link."""
+    if (root / "docs" / "scripts" / "kb.py").is_file() and not passes_link(root, root / "docs" / "scripts" / "kb.py"):
+        return "docs/scripts/kb.py"
+    seen = 0
+    stack = [(root, 0)]
+    while stack:
+        d, depth = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                for ent in it:
+                    seen += 1
+                    if seen > _ENGINE_WALK_MAX:
+                        return None
+                    if ent.name == "ENGINE.json" and ent.is_file(follow_symlinks=False):
+                        return Path(ent.path).relative_to(root).as_posix()
+                    if (depth < _ENGINE_WALK_DEPTH and ent.name not in (".git", "node_modules")
+                            and ent.is_dir(follow_symlinks=False) and not dirent_is_junction(ent)):
+                        stack.append((Path(ent.path), depth + 1))
+        except OSError:
+            continue
+    return None
+
+
+def _pending_import_unlocked(tenant_id: str, project_id: str) -> bool:
+    """True when no apply holds the project's lock (an import that is still running holds it)."""
+    from core.projects.fsutil import LockBusy, file_lock  # noqa: PLC0415
+    held = getattr(_held, "keys", set())
+    if (tenant_id, project_id) in held:
+        return False
+    try:
+        with file_lock(registry.registry_path(tenant_id).with_name(f"project-{project_id}.lock"), timeout=0.05):
+            return True
+    except LockBusy:
+        return False
+
+
+def _location_checks(tenant_id: str, project_id: str, e: dict[str, Any], root: Path, add, checks: list) -> None:
+    """ADR-2321 Decision 17: storage_marker, path_under_base, no_engine_copy, import_leftovers, pending_import, path_gate_hint (a
+    note) and hint_source."""
+    from core.projects import hints  # noqa: PLC0415
+    storage = e.get("storage") or registry.storage_of(tenant_id, root)
+    mr = registry.known_managed_root(tenant_id)
+    if storage == "managed":
+        state = registry.workspace_state(tenant_id)
+        marker = mr is not None and (mr / registry.MARKER).is_file()
+        if not marker:
+            add("storage_marker", False, "the workspace marker workspace.json is missing - Repair writes the workspace marker")
+        elif state == "foreign":
+            add("storage_marker", False, "the workspace marker names another installation or tenant - start a new workspace in Settings")
+        else:
+            add("storage_marker", True, "the workspace marker names this tenant, this workspace and this installation")
+    actual = registry.storage_of(tenant_id, root, managed=mr) if mr is not None else "own"
+    problems = []
+    if storage == "managed" and actual != "managed":
+        problems.append("the list says Corvin workspace but the folder lies outside it")
+    if storage == "own" and actual == "managed":
+        problems.append("the list says own folder but the folder lies in the Corvin workspace")
+    stored = registry.settings(tenant_id)["projects_root"]
+    if stored:
+        try:
+            registry.validate_location(tenant_id, stored, purpose="projects_root")
+        except registry.ProjectPathError as exc:
+            problems.append(f"the projects folder would be refused by the current location rule ({exc.reason_class})")
+    add("path_under_base", not problems, "; ".join(problems) if problems else "the folder lies where its storage kind says")
+    copy = _engine_copy(root)
+    add("no_engine_copy", copy is None, "no knowledge-base engine copy inside the project" if copy is None else
+        f"an engine copy ({copy}) is in the project - not repairable: remove ENGINE.json from the project; the tenant engine is used")
+    try:
+        left = sorted(p.name for p in root.parent.iterdir() if p.name.startswith(f"{project_id}.importing-"))
+    except OSError:
+        left = []
+    add("import_leftovers", not left, "no unfinished import beside the project" if not left else
+        f"unfinished import folders beside the project: {left[:3]}")
+    if e.get("pending") == "import":
+        stale = _pending_import_unlocked(tenant_id, project_id)
+        add("pending_import", not stale, "an import is being applied right now" if not stale else
+            "the list entry is marked as an unfinished import and no import is running")
+    else:
+        add("pending_import", True, "no unfinished import is recorded")
+    why = hints.available()
+    add("hint_source", why is None, "the path gate's hint test is loadable" if why is None else
+        f"{why} - managed creates are refused until it is fixed")
+    if why is None:
+        words = hints.hint_words(str(root))
+        if words:
+            checks.append({"id": "path_gate_hint", "ok": True, "note": True,
+                           "detail": f"the path contains '{words[0]}': the assistant may refuse some shell commands here",
+                           "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
 
 
 # ── videos (T-0361, CONCEPT-0126 §5.6) ───────────────────────────────────────────────────────
@@ -1647,16 +1763,130 @@ def project_change_file(tenant_id: str, project_id: str, path: str, commit: Opti
 
 # ── where projects live (release review F1, ADR-2315 plan E7) ─────────────────────────────────
 
+ROOT_REQUIRED = "Choose a folder of your own before switching to it."
+NOT_FOREIGN = "This workspace belongs to this installation."
+NOT_MISSING = "This project's folder is still where the list says; use Move to change it."
+
+
+def _outside(tenant_id: str, root: Path) -> list[str]:
+    return [e["id"] for e in registry.entries(tenant_id)
+            if root not in registry._resolve_forgiving(Path(str(e.get("path")))).parents]
+
+
 def set_root(tenant_id: str, path: str) -> dict[str, Any]:
-    """Change the tenant's projects folder. Audit-first; the path itself never goes into the audit. Projects already outside the new
+    """``PUT /projects/root`` - the alias of ``set_default_storage("root", path)`` (ADR-2321 Decision 8, REVIEW-0061 M16): not a
+    second settings writer. Audit-first ``project.root_changed`` as before, plus ``project.storage_changed`` only when
+    ``default_storage`` flips to ``root`` (REVIEW-0062 N9). The path never goes into the audit; projects already outside the new
     folder are named and keep working - nothing is moved or dropped."""
     try:
-        root = registry.validate_root(tenant_id, path)
-    except registry.ProjectPathError:
-        _audit_refusal(tenant_id, "path_rule")
+        root = registry.validate_location(tenant_id, path, purpose="projects_root")
+    except registry.ProjectPathError as exc:
+        _audit_refusal(tenant_id, exc.reason_class)
         raise
+    flips = registry.settings(tenant_id)["default_storage"] != "root"
     _audit(tenant_id, "project.root_changed", outcome="requested")
+    if flips:
+        _audit(tenant_id, "project.storage_changed", to="root", outcome="requested")
     root = registry.set_projects_root(tenant_id, str(root))
-    outside = [e["id"] for e in registry.entries(tenant_id)
-               if root not in registry._resolve_forgiving(Path(str(e.get("path")))).parents]
-    return {"projects_root": str(root), "outside": outside}
+    registry.set_default_storage(tenant_id, "root")
+    if flips:
+        try:
+            _audit(tenant_id, "project.storage_changed", to="root", outcome="applied")
+        except _tt.AuditUnavailable:
+            pass
+    return {"projects_root": str(root), "outside": _outside(tenant_id, root)}
+
+
+def set_default_storage(tenant_id: str, default_storage: str, projects_root: Optional[str] = None) -> dict[str, Any]:
+    """``PUT /projects/settings/storage``: where NEW projects go. Nothing is moved (ADR-2321 Decision 5). Audit-first
+    ``project.storage_changed`` requested -> applied; a bad root is the rule's 422; ``root`` without a folder is 409
+    ``root_required``."""
+    if default_storage not in registry.STORAGE_KINDS:
+        raise ProjectsError("default_storage must be managed or root")
+    root: Optional[Path] = None
+    if projects_root is not None:
+        try:
+            root = registry.validate_location(tenant_id, projects_root, purpose="projects_root")
+        except registry.ProjectPathError as exc:
+            _audit_refusal(tenant_id, exc.reason_class)
+            raise
+    elif default_storage == "root" and registry.settings(tenant_id)["projects_root"] is None:
+        _audit_refusal(tenant_id, "root_required")
+        raise Conflict(ROOT_REQUIRED, "root_required")
+    if default_storage == "managed":
+        _workspace(tenant_id)
+    _audit(tenant_id, "project.storage_changed", to=default_storage, outcome="requested")
+    outcome = "error"
+    try:
+        if root is not None:
+            registry.set_projects_root(tenant_id, str(root))
+        try:
+            registry.set_default_storage(tenant_id, default_storage)
+        except registry.RegistryError as exc:
+            if str(exc) == "root_required":
+                raise Conflict(ROOT_REQUIRED, "root_required") from None
+            raise
+        outcome = "applied"
+    finally:
+        try:
+            _audit(tenant_id, "project.storage_changed", to=default_storage, outcome=outcome)
+        except _tt.AuditUnavailable:
+            pass
+    st = registry.settings(tenant_id)
+    pr = registry.projects_root(tenant_id)
+    return {"default_storage": st["default_storage"], "projects_root": st["projects_root"],
+            "managed_root": st["managed_root"],
+            "outside": _outside(tenant_id, registry._resolve_forgiving(pr)) if st["default_storage"] == "root" else []}
+
+
+def rekey_workspace(tenant_id: str) -> dict[str, Any]:
+    """"Start a new workspace for this installation" (binding rule (c)): only while the workspace is foreign."""
+    if registry.workspace_state(tenant_id) != "foreign":
+        _audit_refusal(tenant_id, "not_foreign")
+        raise Conflict(NOT_FOREIGN, "not_foreign")
+    root = registry.rekey_workspace(tenant_id, audit=_bind_audit(tenant_id))
+    st = registry.settings(tenant_id)
+    return {"default_storage": st["default_storage"], "projects_root": st["projects_root"], "managed_root": str(root),
+            "outside": []}
+
+
+@_project_locked
+def relocate_project(tenant_id: str, project_id: str, location: str) -> dict[str, Any]:
+    """``POST /projects/{id}/relocate`` ("Locate folder", ADR-2321 Decision 11): re-point the index at a folder that already holds
+    this project's manifest. Only while the recorded path no longer holds it; moves nothing."""
+    _refuse_builtin(project_id)
+    e = _entry(tenant_id, project_id)
+    old = Path(str(e.get("path")))
+    try:
+        man = manifest.load(old)
+        still = man.get("id") == project_id and man.get("tenant") == tenant_id
+    except manifest.ManifestError:
+        still = False
+    if still:
+        _audit_refusal(tenant_id, "not_missing", project_id)
+        raise Conflict(NOT_MISSING, "not_missing")
+    try:
+        dest = registry.validate_location(tenant_id, location, purpose="relocate", project_id=project_id)
+    except registry.ProjectPathError as exc:
+        _audit_refusal(tenant_id, exc.reason_class, project_id)
+        raise
+    _audit(tenant_id, "project.relocated", project_id=project_id, outcome="requested")
+    registry.relocate(tenant_id, project_id, dest)
+    warnings: list[str] = []
+    from core.projects import attachment  # noqa: PLC0415
+    try:
+        for sid, att in attachment._load(tenant_id).items():
+            if att["project_id"] == project_id:
+                attachment.attach(tenant_id, sid, project_id, str(dest))
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"the chats attached to this project could not be updated ({type(exc).__name__}); attach them again")
+    try:
+        _audit(tenant_id, "project.relocated", project_id=project_id, outcome="applied")
+    except _tt.AuditUnavailable:
+        warnings.append("the audit chain was unavailable for the 'applied' record")
+    repaired: Optional[int] = None
+    try:
+        repaired = len(repair(tenant_id, project_id).get("written", []))
+    except Exception:  # noqa: BLE001 - the relink stands; the doctor names what is out of sync
+        repaired = None
+    return {**get_project(tenant_id, project_id), "repaired_files": repaired, "warnings": warnings}

@@ -20,6 +20,7 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[1] / "core" / "console" / "tests"))
+from _projects_fixtures import sandbox_home_env  # noqa: E402
 import test_project_kb_projector_e2e as fx  # noqa: E402
 from test_admin_route import _audit_events, _sandbox  # noqa: E402
 
@@ -37,6 +38,8 @@ SECTIONS = ["Videoeigenschaften", "Inhalt", "Reproduktion", "Konfiguration", "Pi
 class ProjectVideosE2E(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self._home_env = sandbox_home_env(self.tmp)       # the temp dir is the own home (ADR-2321 10a)
+        self._home_env.__enter__()
         self.bound = self.tmp / "bound"
         fx._kb_init(self.bound, engine=True)
         fx._seed(self.bound, "bound")
@@ -44,6 +47,7 @@ class ProjectVideosE2E(unittest.TestCase):
         os.environ["CORVIN_KB_REPO"] = str(self.bound)
 
     def tearDown(self):
+        self._home_env.__exit__(None, None, None)
         if self.saved is None:
             os.environ.pop("CORVIN_KB_REPO", None)
         else:

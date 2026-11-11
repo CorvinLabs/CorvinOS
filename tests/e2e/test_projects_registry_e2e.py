@@ -61,7 +61,8 @@ class RegistryE2E(unittest.TestCase):
         full.mkdir()
         (full / "x.txt").write_text("x")
         cases = {
-            "outside the root": str(sb.tmp / "outside" / "p"),
+            # ADR-2321 Decision 4 withdrew "only under the projects root" (positive control below); a system folder stays refused
+            "a system folder": "/etc/corvin-probe/p",
             "the root itself": str(sb.root),
             "dotdot": str(sb.root / "a" / ".." / "b"),
             "relative": "projects/p",
@@ -80,6 +81,7 @@ class RegistryE2E(unittest.TestCase):
                 registry.validate_location("_default", raw)
         # nothing was created by any refusal
         self.assertEqual(sorted(p.name for p in sb.root.iterdir()), ["full", "link", "real"])
+        registry.validate_location("_default", str(sb.tmp / "outside" / "p"))      # outside the root, inside the own home
         # positive controls: a fresh child and an existing empty directory are fine
         self.assertEqual(registry.validate_location("_default", str(sb.root / "fresh")), (sb.root / "fresh").resolve())
         (sb.root / "emptydir").mkdir()

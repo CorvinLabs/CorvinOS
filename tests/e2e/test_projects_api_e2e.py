@@ -28,7 +28,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[1] / "core" / "console" / "tests"))
 import test_project_kb_projector_e2e as fx  # noqa: E402
-from _projects_fixtures import small_catalogue  # noqa: E402
+from _projects_fixtures import small_catalogue, sandbox_home_env  # noqa: E402
 from test_admin_route import _audit_events, _sandbox  # noqa: E402
 
 _URL = "/v1/console/projects"
@@ -52,6 +52,8 @@ def _git(root: Path, *a: str) -> str:
 class ProjectsApiE2E(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self._home_env = sandbox_home_env(self.tmp)       # the temp dir is the own home (ADR-2321 10a)
+        self._home_env.__enter__()
         self.bound = self.tmp / "bound"
         fx._kb_init(self.bound, engine=True)
         fx._seed(self.bound, "bound")
@@ -61,6 +63,7 @@ class ProjectsApiE2E(unittest.TestCase):
         self.plugins = {"corvin_knowledge": "enabled", "project_templates": "enabled"}
 
     def tearDown(self):
+        self._home_env.__exit__(None, None, None)
         if self.saved is None:
             os.environ.pop("CORVIN_KB_REPO", None)
         else:
@@ -139,18 +142,23 @@ class ProjectsApiE2E(unittest.TestCase):
 
     def test_path_rules_refuse_before_anything_is_created(self):
         with self._ctx() as c:
+            # ADR-2321 (T-0385): "outside the projects root" is no longer a refusal; every refusal names its own reason class
             outside = self.tmp / "elsewhere" / "p"
-            for loc in (str(outside), str(c.root / "a" / ".." / "b"), "relative/p", str(c.home / "tenants" / "_default" / "p"),
-                        str(c.root)):
+            cases = {"/etc/corvin-probe/p": "system_prefix", str(c.root / "a" / ".." / "b"): "path_rule", "relative/p": "path_rule",
+                     str(c.home / "tenants" / "_default" / "p"): "corvin_home", str(c.root): "nested"}
+            for loc, cls in cases.items():
                 r = c.own.post(f"{_URL}/plan", json={"template": "demo", "title": "X", "location": loc},
                                headers={"X-CSRF-Token": c.own_csrf})
                 self.assertEqual(r.status_code, 422, f"{loc}: {r.text}")
-                self.assertEqual(r.json()["detail"]["reason_class"], "path_rule")
+                self.assertEqual(r.json()["detail"]["reason_class"], cls)
                 self.assertNotIn(str(self.tmp), json.dumps(r.json()), "the refusal leaks a path")
             self.assertFalse((self.tmp / "elsewhere").exists())
             self.assertEqual(list(c.root.iterdir()), [])
             recs = [e for e in _audit_events(c.home) if e.get("event_type") == "project.blocked"]
-            self.assertTrue(recs and all((e.get("details") or {}).get("reason_class") == "path_rule" for e in recs))
+            self.assertEqual(sorted((e.get("details") or {}).get("reason_class") for e in recs), sorted(cases.values()))
+            ok = c.own.post(f"{_URL}/plan", json={"template": "demo", "title": "X", "location": str(outside)},
+                            headers={"X-CSRF-Token": c.own_csrf})
+            self.assertEqual(ok.status_code, 200, ok.text)
 
     def test_a_missing_tenant_plugin_refuses_and_nothing_is_written(self):
         with self._ctx() as c:

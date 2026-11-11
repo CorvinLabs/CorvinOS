@@ -21,9 +21,10 @@ import functools
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NoReturn, Optional
 
 from core.paths import user_dirs
 from core.paths.tenant import corvin_home, tenant_home
@@ -432,33 +433,9 @@ def projects_root(tenant_id: str) -> Path:
 
 
 def validate_root(tenant_id: str, path: str) -> Path:
-    """Judge a new projects root. Absolute, no '..', not '/', not in or above the CorvinOS home, no protected component, not a file.
-    Returns the resolved directory (it may not exist yet)."""
-    validate_tenant_id(tenant_id)
-    if not isinstance(path, str) or not path.strip() or "\x00" in path or len(path) > 1000:
-        raise ProjectPathError("the projects folder must be a path")
-    given = Path(normalize_input(path, "the projects folder")).expanduser()
-    if not given.is_absolute() or ".." in given.parts:
-        raise ProjectPathError("the projects folder must be an absolute path without '..'")
-    root = _resolve_forgiving(given)
-    if os.name == "nt" and str(root).startswith("\\\\") and not str(given).startswith("\\\\"):
-        # a mapped network drive (Y:\...) resolves to its UNC form; the setting keeps the drive letter the user chose, which is
-        # what every later comparison and the UNC refusal expect (adversarial review 2026-11-10)
-        root = Path(os.path.abspath(given))
-    if root == Path(root.anchor) or len(root.parts) < 3:
-        raise ProjectPathError("choose a folder below your home or data directory, not a top-level one")
-    home = _resolve_forgiving(corvin_home())
-    if root == home or home in root.parents or root in home.parents:
-        raise ProjectPathError("the projects folder must not be inside, or contain, the CorvinOS home")
-    if _protected(root.parts):
-        raise ProjectPathError("the projects folder contains a protected path component")
-    _check_windows_names(given, "the projects folder")
-    _check_length(root, "the projects folder")
-    if is_link(root):
-        raise ProjectPathError("the projects folder must not be a link (symlink or junction)")
-    if root.exists() and not root.is_dir():
-        raise ProjectPathError("that path is a file, not a folder")
-    return root
+    """Judge a new projects root: :func:`validate_location` with purpose ``projects_root`` (ADR-2321 Decision 10). Returns the
+    resolved directory (it may not exist yet)."""
+    return validate_location(tenant_id, path, purpose="projects_root")
 
 
 def set_projects_root(tenant_id: str, path: str) -> Path:
@@ -540,77 +517,368 @@ def nesting_conflict(resolved: Path, *, ignore: Optional[Path] = None) -> bool:
     return False
 
 
-def validate_location(tenant_id: str, raw: str, *, adopt: bool = False, unmanaged: bool = False,
-                      ignore: Optional[Path] = None) -> Path:
-    """Judge a client-supplied project location. Returns the resolved directory.
+PURPOSES = ("create", "adopt", "projects_root", "move", "relocate", "import")
 
-    ``adopt=False`` (create): the directory must not exist or be empty. ``adopt=True``: it must
-    exist and hold a ``project.yaml`` naming THIS tenant."""
-    validate_tenant_id(tenant_id)
-    if not isinstance(raw, str) or not raw.strip() or "\x00" in raw or len(raw) > 1000:
-        raise ProjectPathError("the location must be a non-empty path")
-    given = Path(normalize_input(raw)).expanduser()
-    if ".." in given.parts:
-        raise ProjectPathError("the location must not contain '..'")
-    if not given.is_absolute():
-        raise ProjectPathError("the location must be an absolute path")
-    _check_windows_names(given, "the location")
-    resolved = _resolve_forgiving(given)
-    root = _resolve_forgiving(projects_root(tenant_id))
-    base_given = projects_root(tenant_id)
-    mr = known_managed_root(tenant_id)
-    if mr is not None and resolved.parent == _resolve_forgiving(mr):
-        root, base_given = _resolve_forgiving(mr), mr                    # <managed_root>/<id> (ADR-2321 Decision 4 (a))
-    if resolved == root or root not in resolved.parents:
-        raise ProjectPathError("the location must be inside this tenant's projects root")
-    home = _resolve_forgiving(corvin_home())
-    if resolved == home or home in resolved.parents or resolved in home.parents:
-        raise ProjectPathError("the location must not be inside the CorvinOS home")
-    if _protected(resolved.relative_to(root).parts):
-        raise ProjectPathError("the location contains a protected path component")
-    if any(part.startswith(".") for part in resolved.relative_to(root).parts[:1]):
-        raise ProjectPathError("a project directory must not be hidden")
-    _check_length(resolved, "the location")
-    # no symlink anywhere between the projects root and the target, judged on the path AS GIVEN
-    # (resolve() would silently follow it to a place that looks harmless)
-    cur = Path(os.path.abspath(given))
-    base = Path(os.path.abspath(base_given))
+#: ADR-2321 Decision 15 - the fixed sentence of each reason class
+SENTENCES = {
+    "path_rule": "The path must be absolute, without '..'.",
+    "top_level": "Top-level folders and home folders cannot be chosen — pick a folder inside your home or data directory.",
+    "corvin_home": "This is Corvin's own data; projects cannot live here.",
+    "system_prefix": "This is a system folder; projects cannot live here.",
+    "protected": "This folder is in a protected place; choose another one.",
+    "hidden": "Hidden folders and application data cannot be a project.",
+    "symlink": "This is a link; choose the real folder.",
+    "other_tenant": "This folder already belongs to another workspace.",
+    "workspace_root": "Choose a project folder inside the Corvin workspace, not the workspace itself.",
+    "nested": "This folder is inside another project, or contains one.",
+    "not_empty": "This folder is not empty — choose an empty one or use New folder.",
+    "missing": "This folder does not exist.",
+    "wrong_manifest": "This folder does not hold this project.",
+    "workspace_foreign": WORKSPACE_FOREIGN,
+    "hint_word": "Commands that name this folder would be refused by the assistant's safety check; choose another id.",
+}
+
+
+def _refuse(reason_class: str, message: Optional[str] = None) -> "NoReturn":
+    raise ProjectPathError(message or SENTENCES[reason_class], reason_class)
+
+
+def _fold(s: str) -> str:
+    return s.casefold() if os.name == "nt" or sys.platform == "darwin" else s
+
+
+def _under_eq(p: Path, root: Path) -> bool:
+    """*p* equals or lies below *root* (case-folded where the filesystem folds case)."""
+    a, b = [_fold(x) for x in p.parts], [_fold(x) for x in root.parts]
+    return len(a) >= len(b) and a[: len(b)] == b
+
+
+def _strictly_under(p: Path, root: Path) -> bool:
+    return _under_eq(p, root) and len(p.parts) > len(root.parts)
+
+
+def _rel_parts(p: Path, root: Path) -> tuple[str, ...]:
+    return tuple(p.parts[len(root.parts):]) if _under_eq(p, root) else tuple(p.parts[1:])
+
+
+def _forms(p: Path) -> list[Path]:
+    """The given (absolute, lexical) form and the resolved form of the own home and similar anchors."""
+    g = Path(os.path.abspath(p))
+    r = _resolve_forgiving(g)
+    return [g] if r == g else [g, r]
+
+
+def _corvin_homes() -> list[Path]:
+    """Every Corvin home the target may not be inside, above or equal to (Decision 10 check 5)."""
+    homes = [corvin_home(), Path.home() / ".corvin"]
+    env = os.environ.get("CORVIN_HOME", "").strip()
+    if env:
+        homes.append(Path(env).expanduser())
+    out: list[Path] = []
+    for h in homes:
+        for f in _forms(h):
+            if f not in out:
+                out.append(f)
+    return out
+
+
+def _check_corvin_home(forms: list[Path]) -> None:
+    homes = _corvin_homes()
+    for f in forms:
+        for h in homes:
+            if _under_eq(f, h) or _under_eq(h, f):
+                _refuse("corvin_home")
+    # identity: a bind mount of a Corvin home at another path (st_dev/st_ino, REVIEW-0061 M7)
+    existing_homes = [h for h in homes if os.path.isdir(h)]
+    if not existing_homes:
+        return
+    cur = forms[-1]
+    chain = [cur, *cur.parents]
+    for a in chain:
+        if not os.path.exists(a):
+            continue
+        for h in existing_homes:
+            try:
+                if os.path.samefile(a, h):
+                    _refuse("corvin_home")
+            except OSError:
+                continue
+
+
+def _home_forms() -> list[Path]:
+    return _forms(Path(str(user_dirs.own_home())))
+
+
+def _in_own_home(f: Path, homes: list[Path]) -> bool:
+    return any(_under_eq(f, h) for h in homes)
+
+
+def _is_user_home(f: Path) -> bool:
+    roots = [Path(str(r)) for r in user_dirs.home_roots()]
+    if f.parent in roots or any(_fold(str(f.parent)) == _fold(str(r)) for r in roots):
+        return True
+    return os.name != "nt" and str(f) == "/root"
+
+
+def _check_top_level(forms: list[Path], homes: list[Path]) -> None:
+    mounts = []
     try:
-        parts = cur.relative_to(base).parts
-    except ValueError:
-        parts = ()          # given lies outside the root as written; the resolved check above decides
-    walk = base
-    for part in parts:
-        walk = walk / part
-        if is_link(walk):
-            raise ProjectPathError("the location must not be, or lie below, a link (symlink or junction)")
-    if is_link(base):
-        raise ProjectPathError("the projects root must not be a link (symlink or junction)")
+        mounts = [Path(d["path"]) for d in user_dirs.drives()]
+    except Exception:  # noqa: BLE001 - drives() never raises; a monkeypatched one must not turn into a 500
+        mounts = []
+    for f in forms:
+        if f == Path(f.anchor) or len(f.parts) < 3:
+            _refuse("top_level")
+        if _is_user_home(f):
+            _refuse("top_level")
+        if any(_strictly_under(h, f) or h == f for h in homes):
+            _refuse("top_level")                                       # the own home or one of its ancestors
+        if any(_fold(str(f)) == _fold(str(m)) for m in mounts):
+            _refuse("top_level")                                       # a mount point itself (a folder below it is fine)
+
+
+def _check_protected(forms: list[Path], homes: list[Path], parts_of) -> None:
+    for f in forms:
+        if _protected(parts_of(f)):
+            _refuse("protected")
+    roots = [Path(str(r)) for r in user_dirs.home_roots()]
+    for f in forms:
+        if _in_own_home(f, homes):
+            continue
+        for r in roots:
+            if _strictly_under(f, r) and len(f.parts) > len(r.parts) + 1:
+                _refuse("protected")                                   # inside another user's home
+
+
+def _managed_parts(f: Path, parent: Optional[Path], own: Optional[Path]):
+    """For a path under the managed parent: (inside own workspace, components to judge for 'hidden'), else None."""
+    if parent is None or not _under_eq(f, parent):
+        return None
+    rel = _rel_parts(f, parent)
+    if own is not None and rel and _fold(rel[0]) == _fold(own.name):
+        rest = rel[1:]
+        if rest and rest[0].startswith("."):
+            rest = rest[1:]                                            # <managed_root>/.trash/...: check 9 answers it
+        return True, rest
+    return False, ()                                                   # another workspace: check 9 answers it
+
+
+def _check_hidden(forms: list[Path], homes: list[Path], parent: Optional[Path], own: Optional[Path], parts_of) -> None:
+    app = [Path(str(d)) for d in user_dirs.app_data_dirs()]
+    for f in forms:
+        m = _managed_parts(f, parent, own)
+        if m is not None:
+            if any(x.startswith(".") for x in m[1]):
+                _refuse("hidden")
+            continue
+        if any(x.startswith(".") for x in parts_of(f)):
+            _refuse("hidden")
+        if any(_under_eq(f, a) for a in app):
+            _refuse("hidden")
+
+
+def _check_workspace(tenant_id: str, forms: list[Path], parent: Optional[Path], own: Optional[Path], resolved: Path) -> None:
+    for f in forms:
+        if parent is None:
+            break
+        if _fold(str(f)) == _fold(str(parent)):
+            _refuse("other_tenant")
+        if _strictly_under(f, parent):
+            if own is None or not _under_eq(f, own):
+                _refuse("other_tenant")                               # another tenant's or installation's workspace
+            if f == own or _fold(str(f)) == _fold(str(own)):
+                _refuse("workspace_root")
+            rel = _rel_parts(f, own)
+            if rel and rel[0].startswith("."):
+                _refuse("workspace_root")                             # <managed_root>/.trash/...
     if _other_tenants_claiming(tenant_id, resolved):
-        raise ProjectPathError("this directory already belongs to another tenant")
-    if nesting_conflict(resolved, ignore=ignore) and not (adopt and not unmanaged and any(p == resolved and t == tenant_id
-                                                                                         for t, _i, p in _registered_paths())):
-        raise ProjectPathError("the location lies inside another project, or contains one")
-    if adopt and unmanaged:
-        # a directory that is not a project yet: it must exist and must NOT carry a foreign manifest
+        _refuse("other_tenant")
+
+
+def _check_links(given: Path, start: Path) -> None:
+    """Check 10: every component of the GIVEN form from *start* (exclusive) to the target, before anything follows it."""
+    home_anc = set()
+    for h in _home_forms()[:1]:
+        home_anc = {str(a) for a in h.parents}
+    tolerated = home_anc | {str(p) for p in user_dirs.platform_links()}
+    cur = start
+    for part in given.parts[len(start.parts):]:
+        cur = cur / part
+        if str(cur) in tolerated:
+            continue
+        if is_link(cur):
+            _refuse("symlink")
+
+
+def _ancestor_manifest(resolved: Path, skip: Optional[Path] = None) -> bool:
+    for a in resolved.parents:
+        if skip is not None and a == skip:
+            continue                                          # the project being moved (into itself: the service answers it)
+        m = a / manifest.FILE
+        try:
+            if m.is_file() and not is_link(m):
+                manifest.load(a)
+                return True
+        except (manifest.ManifestError, OSError):
+            continue
+    return False
+
+
+def validate_location(tenant_id: str, raw: str, *, purpose: Optional[str] = None, project_id: Optional[str] = None,
+                      adopt: bool = False, unmanaged: bool = False, ignore: Optional[Path] = None) -> Path:
+    """THE location rule (ADR-2321 Decision 10): judge a client-supplied path for a purpose and return the resolved directory.
+
+    ``purpose`` in ``create``/``adopt``/``projects_root``/``move``/``relocate``/``import``; ``project_id`` names the project a
+    ``move``/``relocate`` is about (its own folder is ignored by the nesting check; ``relocate`` needs its manifest). Every
+    component of the given AND the resolved form is judged, from the anchor to the target; below a stored projects root the
+    checks 4, 6, 7, 8 and 10 judge only the components below that root (grandfathering). A refusal is a
+    :class:`ProjectPathError` with ``reason_class`` and the class's fixed sentence (or the kept sentence of a kept check).
+
+    ``adopt``/``unmanaged``/``ignore`` are the pre-ADR-2321 keywords, kept ONLY so the regression tests of 6250cd0b6/65b587f2e
+    run unchanged; no production caller uses them."""
+    require_manifest: Optional[bool] = None
+    if purpose is None:
+        purpose = "adopt" if adopt else "create"
+        if adopt:
+            require_manifest = not unmanaged
+    if purpose not in PURPOSES:
+        raise ValueError(f"unknown purpose {purpose!r}")
+    validate_tenant_id(tenant_id)
+    what = "the projects folder" if purpose == "projects_root" else "the location"
+    # 1. path_rule - nothing is stat-ed before this (a UNC path never starts an SMB handshake)
+    if not isinstance(raw, str) or not raw.strip() or "\x00" in raw or len(raw) > 1000:
+        _refuse("path_rule", f"{what} must be a non-empty path")
+    norm = normalize_input(raw, what)
+    expanded = Path(norm).expanduser()
+    if not expanded.is_absolute() or ".." in expanded.parts:
+        _refuse("path_rule")
+    given = Path(os.path.abspath(expanded))
+    # 2. windows_name (reported as path_rule)
+    _check_windows_names(given, what)
+    resolved = _resolve_forgiving(given)
+    if os.name == "nt" and str(resolved).startswith("\\\\") and not str(given).startswith("\\\\"):
+        resolved = given                       # a mapped network drive keeps the letter the user chose (10a)
+    # 3. too_long (reported as path_rule)
+    _check_length(resolved, what)
+    forms = [given] if resolved == given else [given, resolved]
+    homes = _home_forms()
+    parent_p = Path(str(user_dirs.managed_parent()))
+    own = known_managed_root(tenant_id)
+    # grandfathering below a stored projects root (Decision 10, REVIEW-0062 N1)
+    base_g: Optional[Path] = None
+    if purpose != "projects_root":
+        pr = projects_root(tenant_id)
+        pr_g = Path(os.path.abspath(pr))
+        pr_r = _resolve_forgiving(pr_g)
+        if _strictly_under(given, pr_g) and _strictly_under(resolved, pr_r):
+            base_g = pr_g
+            if is_link(pr_g):
+                _refuse("symlink", "the projects root must not be a link (symlink or junction)")
+        if _fold(str(resolved)) == _fold(str(pr_r)) or _fold(str(given)) == _fold(str(pr_g)):
+            _refuse("nested", "The projects folder itself cannot be a project; choose a folder inside it.")
+
+    def parts_of(f: Path) -> tuple[str, ...]:
+        if base_g is not None:
+            return _rel_parts(f, base_g if f is given else _resolve_forgiving(base_g))
+        if _in_own_home(f, homes):
+            for h in homes:
+                if _under_eq(f, h):
+                    return _rel_parts(f, h)
+        return tuple(f.parts[1:])
+
+    # 4. top_level (the target itself)
+    _check_top_level(forms, homes)
+    # 5. corvin_home - always in full
+    _check_corvin_home(forms)
+    # 6. system_prefix
+    if base_g is None and any(user_dirs.is_under_system_prefix(f) for f in forms):
+        _refuse("system_prefix")
+    # 7. protected (PROTECTED_COMPONENTS at any depth; another user's home)
+    if base_g is None:
+        _check_protected(forms, homes, lambda f: f.parts)
+    else:
+        for f in forms:
+            if _protected(parts_of(f)):
+                _refuse("protected")
+    # 8. hidden (dot components below the home / anchor; application-data trees)
+    if base_g is None:
+        _check_hidden(forms, homes, parent_p, own, parts_of)
+    elif any(x.startswith(".") for f in forms for x in parts_of(f)):
+        _refuse("hidden")
+    # 9. other_tenant / workspace_root
+    _check_workspace(tenant_id, forms, parent_p, own, resolved)
+    # 10. symlink (given form, before anything follows it)
+    _check_links(given, base_g if base_g is not None else Path(given.anchor))
+    # 11. nested
+    if purpose != "projects_root":
+        skip: Optional[Path] = ignore
+        if project_id is not None:
+            e = get(tenant_id, project_id)
+            if e is not None and isinstance(e.get("path"), str):
+                skip = _resolve_forgiving(Path(e["path"]))
+        readopt = purpose == "adopt" and require_manifest is not False and any(
+            p == resolved and t == tenant_id for t, _i, p in _registered_paths())
+        if nesting_conflict(resolved, ignore=skip) and not readopt:
+            _refuse("nested")
+        if _ancestor_manifest(resolved, skip):
+            _refuse("nested")
+    # 12. the per-purpose check
+    if purpose in ("create", "move", "import"):
+        if resolved.exists() and (not resolved.is_dir() or any(resolved.iterdir())):
+            _refuse("not_empty")
+    elif purpose == "adopt":
         if not resolved.is_dir():
-            raise ProjectPathError("the directory does not exist")
-        if (resolved / manifest.FILE).exists() or is_link(resolved / manifest.FILE):
-            raise ProjectPathError("the directory already has a project.yaml")
-    elif adopt:
+            _refuse("missing")
+        mf = resolved / manifest.FILE
+        if is_link(mf):
+            _refuse("symlink", "project.yaml must not be a link")
+        has = mf.exists()
+        if require_manifest is False and has:
+            _refuse("other_tenant", "the directory already has a project.yaml")
+        if require_manifest is True and not has:
+            _refuse("wrong_manifest", "the directory has no valid project.yaml")
+        if has:
+            try:
+                man = manifest.load(resolved)
+            except manifest.ManifestError as exc:
+                _refuse("wrong_manifest", f"the directory has no valid project.yaml ({exc})")
+            if man.get("tenant") != tenant_id:
+                _refuse("other_tenant")
+    elif purpose == "relocate":
         if not resolved.is_dir():
-            raise ProjectPathError("the directory does not exist")
+            _refuse("missing")
         try:
             man = manifest.load(resolved)
-        except manifest.ManifestError as exc:
-            # the reason (not UTF-8, not YAML, a missing field) is the rule's text, never a path
-            raise ProjectPathError(f"the directory has no valid project.yaml ({exc})") from None
-        if man.get("tenant") != tenant_id:
-            raise ProjectPathError("project.yaml names another tenant")
-    else:
-        if resolved.exists() and (not resolved.is_dir() or any(resolved.iterdir())):
-            raise ProjectPathError("the directory already exists and is not empty")
+        except manifest.ManifestError:
+            _refuse("wrong_manifest")
+        if man.get("tenant") != tenant_id or (project_id is not None and man.get("id") != project_id):
+            _refuse("wrong_manifest")
+    elif purpose == "projects_root":
+        if resolved.exists() and not resolved.is_dir():
+            _refuse("path_rule", "that path is a file, not a folder")
+    # the path gate's hint words (ADR-2321 Decision 2): a NEW folder in the managed workspace must not match them
+    if purpose in ("create", "move", "import") and own is not None and resolved.parent == _resolve_forgiving(own):
+        from . import hints  # noqa: PLC0415
+        try:
+            bad = any(hints.looks_protected(str(f)) for f in forms)
+        except hints.HintSourceUnavailable:
+            bad = True                                        # cannot tell: refuse until the doctor's hint_source is fixed
+        if bad:
+            _refuse("hint_word")
     return resolved
+
+
+HINT_WARNING = "The assistant may refuse some shell commands in a folder whose path contains '{word}'."
+
+
+def location_warnings(path: "Path | str") -> list[dict[str, str]]:
+    """Verdict notes that do not refuse: an own folder whose path the path gate's hint test matches (``hint_word``)."""
+    from . import hints  # noqa: PLC0415
+    try:
+        words = hints.hint_words(str(path))
+    except hints.HintSourceUnavailable:
+        return []
+    return [{"class": "hint_word", "message": HINT_WARNING.format(word=words[0])}] if words else []
 
 
 def _heal_storage(tenant_id: str, lst: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -692,7 +960,7 @@ def rebuild(tenant_id: str) -> dict[str, Any]:
         if get(tenant_id, man["id"]) is not None:
             continue
         try:
-            validate_location(tenant_id, str(d), adopt=True)
+            validate_location(tenant_id, str(d), purpose="adopt")
             register(tenant_id, man["id"], d, man.get("template"))
             set_protection(tenant_id, man["id"], manifest.legacy_class(man), manifest.DEFAULT_ACCESS)   # the class may only be RAISED by project.yaml; access never
             added.append(man["id"])
