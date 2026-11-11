@@ -3,7 +3,7 @@
  * mapping (a missing project drawn as healthy, a feature id shown raw) is caught by a unit test and
  * not by a user.
  */
-import type { DefaultStorage, ProjectState, ProjectSummary, TemplateCatalogue } from "@/lib/api/projects";
+import type { DefaultStorage, ProjectState, ProjectSummary, TemplateCatalogue, TemplateInfo } from "@/lib/api/projects";
 
 export type Tone = "ok" | "warn" | "bad";
 
@@ -27,18 +27,27 @@ export const FEATURE_LABEL: Record<string, string> = {
   videos: "Videos",
   video_producer: "Video Producer",
   directory: "Peer directory",
-  dashboard: "Overview",
+  // not "Overview": that is the name of the inspector's first tab, and two places with one name read as one (REVIEW-0067 #18)
+  dashboard: "Project dashboard",
   experiments: "Experiments",
   acs: "Agentic compute",
+  // the role fragments of the templates (REVIEW-0067 #7: shown raw as "datasci", "legal" before)
+  software: "Software engineering",
+  datasci: "Data science",
+  marketing: "Marketing",
+  product: "Product management",
+  sales: "Sales",
+  legal: "Legal and compliance",
 };
 
-export function featureLabel(id: string): string {
-  return FEATURE_LABEL[id] ?? id.replace(/_/g, " ");
+/** A known id's name, else the catalogue's title, else the id as words. */
+export function featureLabel(id: string, title?: string | null): string {
+  return FEATURE_LABEL[id] ?? (typeof title === "string" && title.trim() ? title.trim() : id.replace(/_/g, " "));
 }
 
 /** `core` is always on and says nothing; it is not drawn as a chip. */
 export function featureChips(p: ProjectSummary): string[] {
-  return (p.active ?? []).filter((f) => f !== "core").map(featureLabel);
+  return (p.active ?? []).filter((f) => f !== "core").map((x) => featureLabel(x));
 }
 
 /** Features the template offers that this project has switched off (for the "off" hint). */
@@ -51,9 +60,16 @@ export function stateOf(p: ProjectSummary): { label: string; tone: Tone; detail:
   return { ...m, detail: p.state === "ok" ? "" : (p.reason ?? "") };
 }
 
-/** "plugin:buildin-knowledge_management-project_templates" is never shown; "template@1" is. */
-export function templateLabel(template: string): string {
-  return template ? template.replace("@", " v") : "no template";
+/** Templates that are not in the catalogue: Corvin itself and a folder that was adopted as it is. */
+const TEMPLATE_WORDS: Record<string, string> = { builtin: "Built in", adopted: "Adopted folder" };
+
+/** "research-compute@1" is shown as its title, "Research and experiments" (a version only from 2 on); an unknown id as words. */
+export function templateLabel(template: string, templates?: Pick<TemplateInfo, "id" | "title">[] | null): string {
+  if (!template) return "no template";
+  const [id, ver] = template.split("@");
+  const name = templates?.find((t) => t.id === id)?.title || TEMPLATE_WORDS[id] || id.replace(/[-_]/g, " ");
+  const v = Number(ver);
+  return Number.isFinite(v) && v > 1 ? `${name} v${v}` : name;
 }
 
 /** The empty state says WHAT is missing and where it comes from, never a stub button. */

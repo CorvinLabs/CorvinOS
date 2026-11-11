@@ -44,7 +44,11 @@ describe("features", () => {
 
 describe("template label", () => {
   it("shows the template and its version; an absent template says so", () => {
-    expect(templateLabel("video-engineering@1")).toBe("video-engineering v1");
+    expect(templateLabel("video-engineering@1")).toBe("video engineering");
+    expect(templateLabel("video-engineering@1", [{ id: "video-engineering", title: "Video engineering" }])).toBe("Video engineering");
+    expect(templateLabel("adopted@1")).toBe("Adopted folder");
+    expect(templateLabel("builtin@1")).toBe("Built in");
+    expect(templateLabel("research-compute@2", [{ id: "research-compute", title: "Research and experiments" }])).toBe("Research and experiments v2");
     expect(templateLabel("")).toBe("no template");
   });
 });

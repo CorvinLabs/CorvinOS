@@ -60,9 +60,12 @@ test("a project without a knowledge base is told that no epic or tasks were made
   await expect(page.getByTestId("new-video-result")).not.toContainText("Epic");
 });
 
-test("with the videos feature off the card says why instead of offering a form", async ({ page }) => {
+test("with the videos feature off the Overview has no New video card and starts with the checks (REVIEW-0067 M5)", async ({ page }) => {
   await stub(page, { videos: false });
   await page.goto(`/console/app/projects/${ID}`);
-  await expect(page.getByTestId("new-video-off")).toContainText("videos feature is off");
+  await expect(page.getByTestId("health-headline")).toBeVisible();
+  await expect(page.getByTestId("new-video-card")).toHaveCount(0);
   await expect(page.getByTestId("new-video-name")).toHaveCount(0);
+  // the first thing in the Overview tab is the checks' headline, not a card about another feature
+  await expect(page.getByTestId("overview-tab").locator("> *").first()).toContainText(/check/i);
 });

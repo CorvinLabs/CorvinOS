@@ -17,7 +17,7 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { browse, browsePlaces, clearRecent, setFavourites, type BrowsePlace, type BrowseVerdict, type PickerPurpose } from "@/lib/api/projects";
 import {
-  INITIAL_PICKER, SLOW_MESSAGE, UNREADABLE_MESSAGE, allowsNewFolder, canChoose, crumbsView, enterable, entryNote, initialPath,
+  INITIAL_PICKER, SLOW_MESSAGE, UNREADABLE_MESSAGE, allowsNewFolder, canChoose, crumbsView, enterable, entryNote, initialPath, pickerStart,
   cannotOpen, keyHandler, listingError, newFolderNameRule, placeGroups, reducer, target, toggleFavourite, verdictText, verdictWarnings,
 } from "@/pages/projects/picker-logic";
 
@@ -83,7 +83,7 @@ function PickerBody({ purpose, projectId, title, initialPath: given, inputTestId
       if (r.verdict && !r.verdict.ok) { setPlacesError(r.verdict.message || SLOW_MESSAGE); setPlaces([]); }
       else setPlaces(r.places);
       if (!started.current) {
-        const p = initialPath(r.places, given);
+        const p = initialPath(r.places, given, pickerStart(purpose));   // an own folder starts at home, not in the workspace
         if (p) { started.current = true; dispatch({ type: "navigate", path: p }); }
       }
     }).catch((e) => {

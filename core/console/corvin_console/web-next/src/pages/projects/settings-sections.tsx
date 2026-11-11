@@ -9,7 +9,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
-import { deleteProjectFiles, getHealth, listProjects, openProject, rekeyWorkspace, relocateProject, removeProjectFromList, repairProject, type OpenCommands, type ProjectDetail } from "@/lib/api/projects";
+import { deleteProjectFiles, getHealth, listProjects, listTemplates, openProject, rekeyWorkspace, relocateProject, removeProjectFromList, repairProject, type OpenCommands, type ProjectDetail } from "@/lib/api/projects";
 import { cn } from "@/lib/utils";
 import { templateLabel, whereLabel } from "./encodings";
 import { DELETE_ROW_TEXT, DELETE_SENTENCE, MARKER_TRASH, confirmMatches, doctorSummary, settingsSections, type ActionGate, type SectionId } from "./inspector-logic";
@@ -94,6 +94,8 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 }
 
 function General({ d, csrf, rename, onChanged }: { d: ProjectDetail; csrf: string; rename?: ActionGate; onChanged: () => void }) {
+  // the same cache the Projects list fills: the template's title instead of its id (REVIEW-0067 #8)
+  const templates = useQuery({ queryKey: ["projects", "templates"], queryFn: ({ signal }) => listTemplates(signal), staleTime: 30_000, retry: false });
   return (
     <div className="space-y-2">
       <Row label="Title">
@@ -103,7 +105,7 @@ function General({ d, csrf, rename, onChanged }: { d: ProjectDetail; csrf: strin
       <Row label="Id">
         <span className="flex items-center gap-2"><span className="font-mono text-sm" data-testid="general-id">{d.id}</span><CopyButton text={d.id} label="Copy the id" /></span>
       </Row>
-      <Row label="Template"><span className="text-sm">{templateLabel(d.template)}</span></Row>
+      <Row label="Template"><span className="text-sm">{templateLabel(d.template, templates.data?.templates)}</span></Row>
       {roleLabel(d.role) && <Row label="Role"><span className="text-sm">{roleLabel(d.role)}</span></Row>}
       {d.added_at && <Row label="Added"><span className="text-sm">{d.added_at.slice(0, 10)}</span></Row>}
     </div>

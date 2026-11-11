@@ -205,11 +205,11 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
                       <input type="checkbox" className="mt-1" data-testid="feature-toggle" data-feature={id}
                         checked={on} onChange={() => set(toggleFeature(s, cat.data, id))} />
                       <span className="min-w-0">
-                        <span className="block font-medium">{featureLabel(id)}</span>
+                        <span className="block font-medium">{featureLabel(id, f?.title)}</span>
                         {f?.description && <span className="block text-xs text-muted-foreground">{f.description}</span>}
                         {f && f.requires.filter((r) => r !== "core").length > 0 && (
                           <span className="block text-xs text-muted-foreground" data-testid="feature-requires">
-                            Needs: {f.requires.filter((r) => r !== "core").map(featureLabel).join(", ")}
+                            Needs: {f.requires.filter((r) => r !== "core").map((x) => featureLabel(x)).join(", ")}
                           </span>
                         )}
                         {f?.plugins.filter((p) => p.state !== "enabled").map((p) => (
@@ -250,7 +250,7 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
             </dl>
             {plan.pulled.length > 0 && (
               <p data-testid="review-pulled" className="text-muted-foreground">
-                Added because they are needed: {plan.pulled.map(featureLabel).join(", ")}.
+                Added because they are needed: {plan.pulled.map((x) => featureLabel(x)).join(", ")}.
               </p>
             )}
             {plan.plugins.filter((p) => p.state !== "enabled").map((p) => (

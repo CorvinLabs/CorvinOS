@@ -153,7 +153,7 @@ describe("settings sections (T-0387)", () => {
     expect(doctorSummary([{ id: "a", ok: true, detail: "x", at: "" }, { id: "b", ok: true, detail: "y", at: "" }])).toBe("2 checks, none failed");
     expect(doctorSummary([{ id: "a", ok: true, detail: "x", at: "" }, { id: "b", ok: false, detail: "generated CLAUDE.md out of date", at: "" },
       { id: "c", ok: false, detail: "z", at: "" }, { id: "n", ok: true, note: true, detail: "hint", at: "" }]))
-      .toBe("3 checks, 2 failed — generated CLAUDE.md out of date");
+      .toBe("3 checks, 2 failed — Generated CLAUDE.md out of date.");   // the detail as a sentence (REVIEW-0067 #9)
   });
 });
 

@@ -57,6 +57,11 @@ export function accessOf(p: { assistant_access?: Access }): Access {
   return p.assistant_access === "write" ? "write" : "read";
 }
 
+/** What "Use in a chat" says the assistant may do there - from the project's own access, never a fixed sentence (REVIEW-0067 M3). */
+export function chatAccessSentence(p: { assistant_access?: Access }): string {
+  return accessOf(p) === "write" ? "The assistant may create and change files in the project." : "The assistant can read the project but not change its files.";
+}
+
 /** Lowering the class, or letting the assistant write, is the direction that needs a second look. */
 export function lowersProtection(from: DataClass, to: DataClass, fromAccess: Access, toAccess: Access): boolean {
   return CLASS_ORDER.indexOf(to) < CLASS_ORDER.indexOf(from) || (fromAccess === "read" && toAccess === "write");

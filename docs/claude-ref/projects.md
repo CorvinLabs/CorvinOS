@@ -952,6 +952,28 @@ the feature-off switch), `tests/unit/projects-inspector.test.ts` (13).
 missing; the open part is a Playwright run of every tab against a real created project (the stubs answer the shape). Proof so far: `tests/unit/projects-inspector.test.ts` (9, incl. a mutation
 probe on the dependants confirmation), `tests/e2e/projects-inspector.spec.ts` (6, served bundle, network stubbed).
 
+**Usability fixes (REVIEW-0067, 2026-11-11).** The Overview opens with the checks; the **New video** card is drawn only
+while the videos feature is on (M5). Check details are sentences (`inspector-logic.checkDetail`: "kb check: blocking 0" ->
+"The knowledge base check finds no blocking problem.", a Python list -> "a, b", "the path gate's hint test is loadable" -> "The
+rules that guard file paths in a chat are available."; any other server text kept, capitalised; the server's own text is the
+tooltip), also in Maintenance (`doctorSummary`). The header shows `display_path` (full path on hover). Features: `core` reads
+"Always on" with no switch (`rowState().on/status`, also for an adopted folder whose manifest lists none); every feature has a
+name (`FEATURE_LABEL` incl. the role fragments `software`, `datasci`, `marketing`, `product`, `sales`, `legal`; else the
+catalogue's `title`; `dashboard` is "Project dashboard", never "Overview" like the first tab). Templates are shown by their
+catalogue title ("Research and experiments"; `builtin` "Built in", `adopted` "Adopted folder"; a version only from 2 on). Docs
+names the kinds in words (`docsRows`: "Plans", "Reviews"), its empty state names no file path; Tasks shows "In progress"
+(`taskStatusLabel`); Structure shows "2.0 KB" and "folder". A glance tile's accessible name names the tab it opens
+(`glanceAriaLabel`: Knowledge -> "Open the Docs tab" while the graph is off). "Use in a chat" says what the assistant may do
+from the project's `assistant_access` (`roles.chatAccessSentence`, M3). The chat menu's link to the Structure tab is called
+"Structure". The Explorer and Changes panels are modal (`aria-modal`, `hooks/use-focus-trap.ts`: Tab and Shift+Tab stay
+inside, Esc closes). A folder picker for a folder of one's own (`create`, `adopt`, `projects_root`: `picker-logic.pickerStart`)
+opens at the last used place outside the Corvin workspace, else home - never in the workspace with a refusal. Export and
+Duplicate offer "Knowledge base" only for a project that has one (`share-logic.offersKbPart`). The unused client
+`setProjectsRoot` was removed (the default-place dialog uses `PUT /settings/storage`; `PUT /projects/root` has no console
+caller). The Trash link still appears only while the Trash holds something (the reviewer accepted it; after a delete it is
+there). Proof: `tests/unit/projects-review67.test.ts`; stubbed `projects-inspector`, `-tabs`, `-settings`, `-share`, `-picker`,
+`-explorer`, `-chat-menu`, `-videos`, `-scope` specs.
+
 ## Settings sections, Where and the default place (T-0387, T-0388, ADR-2321 Decision 18, CONCEPT-0131 § C)
 
 **Settings tab** (`web-next/src/pages/projects/settings-sections.tsx`; which sections and actions are drawn is the pure

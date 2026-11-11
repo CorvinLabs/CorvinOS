@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { getTaskItems } from "@/lib/api/task-tracking";
 import { getHealth, getStructure, setFeatures, type ProjectDetail, type StructureEntry } from "@/lib/api/projects";
 import { featureLabel } from "./encodings";
+import { docsRows, sizeLabel, taskStatusLabel } from "./inspector-logic";
 import { explain } from "./wizard";
 import { useAuth } from "@/lib/auth";
 
@@ -22,7 +23,8 @@ export function FeatureOff({ d, feature, onNotice }: { d: ProjectDetail; feature
   const csrf = session?.csrf_token ?? "";
   const qc = useQueryClient();
   const row = d.catalogue?.features?.find((f) => f.id === feature);
-  const requires = (row?.requires ?? []).filter((r) => r !== "core").map(featureLabel);
+  const requires = (row?.requires ?? []).filter((r) => r !== "core").map((r) => featureLabel(r));
+  const name = featureLabel(feature, row?.title);
   const mut = useMutation({
     mutationFn: () => setFeatures(d.id, { set: { [feature]: true }, accept_dependencies: true }, csrf),
     onSuccess: (r) => {
@@ -35,12 +37,12 @@ export function FeatureOff({ d, feature, onNotice }: { d: ProjectDetail; feature
   return (
     <div className="space-y-3 rounded-lg border p-4" data-testid="feature-off" data-feature={feature}>
       <p className="font-medium">Feature off</p>
-      <p className="text-sm text-muted-foreground">{featureLabel(feature)} is switched off for this project. Its files are not touched either way.</p>
+      <p className="text-sm text-muted-foreground">{name} is switched off for this project. Its files are not touched either way.</p>
       {requires.length > 0 && (
         <p className="text-xs text-muted-foreground" data-testid="feature-off-requires">Switching it on also adds: {requires.join(", ")}.</p>
       )}
       <Button size="sm" onClick={() => mut.mutate()} disabled={mut.isPending} data-testid="feature-off-enable">
-        Switch {featureLabel(feature)} on
+        Switch {name} on
       </Button>
       {mut.error && <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="feature-off-error">{explain(mut.error)}</p>}
     </div>
@@ -60,7 +62,7 @@ export function StructureTab({ id }: { id: string }) {
           {entries.map((e) => (
             <li key={e.path} data-testid="structure-entry" data-kind={e.kind} className="flex justify-between gap-3 border-b px-3 py-1 last:border-b-0">
               <span className="truncate font-mono text-xs">{e.kind === "dir" ? `${e.path}/` : e.path}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">{e.kind === "file" && e.size !== null ? `${e.size} B` : e.kind}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{e.kind === "file" && e.size !== null ? sizeLabel(e.size) : e.kind === "dir" ? "folder" : e.kind}</span>
             </li>
           ))}
         </ul>
@@ -72,21 +74,20 @@ export function StructureTab({ id }: { id: string }) {
 
 export function DocsTab({ id }: { id: string }) {
   const q = useQuery({ queryKey: ["projects", "structure", id], queryFn: ({ signal }) => getStructure(id, signal), refetchInterval: 60_000 });
-  const counts = q.data?.kb_counts ?? {};
-  const rows = Object.entries(counts);
-  const total = rows.reduce((n, [, v]) => n + v, 0);
+  const rows = docsRows(q.data?.kb_counts);
+  const total = rows.reduce((n, r) => n + r.n, 0);
   if (q.isLoading) return <p className="text-sm text-muted-foreground">Counting the knowledge base…</p>;
   if (!q.isLoading && !q.data) return <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="structure-error">The folder could not be read.</p>;
   return (
     <section className="space-y-3" data-testid="docs-tab">
       {total === 0 ? (
-        <Explained testId="docs-empty">The knowledge base has no entries yet. Create the first idea or decision with the commands in .corvin/local/kb-commands.md.</Explained>
+        <Explained testId="docs-empty">The knowledge base has no entries yet. Ideas, decisions, plans and tasks appear here, counted by kind, as soon as the first one is written.</Explained>
       ) : (
         <table className="w-full text-sm" data-testid="docs-counts">
           <tbody>
-            {rows.map(([k, v]) => (
-              <tr key={k} data-testid="docs-count-row" data-kind={k} className="border-b last:border-b-0">
-                <td className="py-1 font-mono text-xs">{k}</td><td className="py-1 text-right tabular-nums">{v}</td>
+            {rows.map((r) => (
+              <tr key={r.kind} data-testid="docs-count-row" data-kind={r.kind} className="border-b last:border-b-0">
+                <td className="py-1">{r.label}</td><td className="py-1 text-right tabular-nums">{r.n}</td>
               </tr>
             ))}
           </tbody>
@@ -128,7 +129,7 @@ export function TasksTab({ id }: { id: string }) {
           {items.map((it) => (
             <li key={it.id} data-testid="tasks-row" className="flex justify-between gap-3 px-3 py-2">
               <span className="truncate">{it.title}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">{it.status}</span>
+              <span className="shrink-0 text-xs text-muted-foreground" data-status={it.status}>{taskStatusLabel(it.status)}</span>
             </li>
           ))}
         </ul>

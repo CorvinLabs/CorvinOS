@@ -18,7 +18,7 @@ import { createVideo, getHealth, getProject, setFeatures, type FeatureRow, type 
 import { ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { explain } from "./wizard";
-import { TABS, conflictOf, healthHeadline, parseTab, rowState, tabGate, videoNameProblem, type Conflict, type Tab } from "./inspector-logic";
+import { TABS, checkDetail, conflictOf, healthHeadline, parseTab, rowState, tabGate, videoNameProblem, type Conflict, type Tab } from "./inspector-logic";
 import { ComputeTab, DirectoryTab, DocsTab, FeatureOff, KnowledgeTab, StructureTab, TasksTab, VideosTab } from "./inspector-tabs";
 import { stateOf } from "./encodings";
 import { SettingsSections } from "./settings-sections";
@@ -100,7 +100,8 @@ export default function ProjectInspectorPage() {
             <span className="min-w-0 truncate" title={d.title ?? d.id}>{d.title ?? d.id}</span>
             {d.builtin && <span className="rounded-full border px-2 py-0.5 text-[11px] font-normal text-muted-foreground" data-testid="inspector-builtin">Built in</span>}
           </h1>
-          <p className="truncate font-mono text-xs text-muted-foreground" title={d.path}>{d.path}</p>
+          {/* the same short path the list and Location show; the full one on hover (REVIEW-0067 #13) */}
+          <p className="truncate font-mono text-xs text-muted-foreground" title={d.path} data-testid="inspector-path">{d.display_path || d.path}</p>
           {d.state === "ok" && (
             <div className="mt-1 flex flex-wrap items-center gap-1.5" data-testid="inspector-protection">
               {roleLabel(d.role) && <span className="text-xs font-medium">{roleLabel(d.role)}</span>}
@@ -176,7 +177,8 @@ export default function ProjectInspectorPage() {
   );
 }
 
-function NewVideoCard({ projectId, videosOn, csrf, onCreated }: { projectId: string; videosOn: boolean; csrf: string; onCreated: () => void }) {
+/** Drawn only while the videos feature is on (REVIEW-0067 M5): a project without videos does not open on an unrelated card. */
+function NewVideoCard({ projectId, csrf, onCreated }: { projectId: string; csrf: string; onCreated: () => void }) {
   const [name, setName] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -195,9 +197,6 @@ function NewVideoCard({ projectId, videosOn, csrf, onCreated }: { projectId: str
   return (
     <div className="space-y-2 rounded-lg border p-4" data-testid="new-video-card">
       <h2 className="font-medium">New video</h2>
-      {!videosOn ? (
-        <p className="text-sm text-muted-foreground" data-testid="new-video-off">The videos feature is off. Switch it on in Features to create videos here.</p>
-      ) : (
         <>
           <p className="text-sm text-muted-foreground">Creates the video's folder with source/, build/ and a sources.md of the eight sections. With the knowledge base on, it also makes the epic VIDEO-&lt;name&gt; with the German and English tasks.</p>
           <div className="flex flex-wrap items-start gap-2">
@@ -214,7 +213,6 @@ function NewVideoCard({ projectId, videosOn, csrf, onCreated }: { projectId: str
           {result && <p role="status" className="break-all text-sm" data-testid="new-video-result">{result}</p>}
           {error && <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="new-video-error">{error}</p>}
         </>
-      )}
     </div>
   );
 }
@@ -234,7 +232,7 @@ function OverviewTab({ projectId, builtin, videosOn, csrf, onChanged }: { projec
   const head = healthHeadline(health.data?.checks ?? []);
   return (
     <section className="space-y-3" aria-label="Checks" data-testid="overview-tab">
-      {!builtin && <NewVideoCard projectId={projectId} videosOn={videosOn} csrf={csrf} onCreated={() => {
+      {!builtin && videosOn && <NewVideoCard projectId={projectId} csrf={csrf} onCreated={() => {
         onChanged();
         // the new folder, its INDEX row and (with the KB) its epic and tasks show in these tabs at once
         void qc.invalidateQueries({ queryKey: ["projects", "structure", projectId] });
@@ -259,7 +257,7 @@ function OverviewTab({ projectId, builtin, videosOn, csrf, onChanged }: { projec
           <li key={c.id} data-testid="health-check" data-check={c.id} data-ok={String(c.ok)} className="flex items-start gap-2 rounded-md border p-3 text-sm">
             {c.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" aria-label="passed" />
               : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" aria-label="failed" />}
-            <span><span className="block font-medium">{CHECK_LABEL[c.id] ?? c.id}</span><span className="text-muted-foreground">{c.detail}</span></span>
+            <span><span className="block font-medium">{CHECK_LABEL[c.id] ?? c.id}</span><span className="text-muted-foreground" title={c.detail} data-testid="health-detail">{checkDetail(c)}</span></span>
           </li>
         ))}
       </ul>
@@ -307,19 +305,21 @@ function FeaturesTab({ d, csrf, onChanged }: { d: ProjectDetail; csrf: string; o
         {rows.map((f) => {
           const rs = rowState(f);
           return (
-            <li key={f.id} data-testid="feature-row" data-feature={f.id} data-active={String(f.active)} className="rounded-lg border p-3">
+            <li key={f.id} data-testid="feature-row" data-feature={f.id} data-active={String(rs.on)} className="rounded-lg border p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
                   <span className="font-medium">{rs.label}</span>{" "}
-                  <span data-testid="feature-status" className={cn("text-xs", f.active ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground")}>
-                    {f.active ? "On" : "Feature off"}
+                  <span data-testid="feature-status" className={cn("text-xs", rs.on ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground")}>
+                    {rs.status}
                   </span>
                   {f.description && <p className="text-xs text-muted-foreground">{f.description}</p>}
                 </div>
-                <Button size="sm" variant={f.active ? "outline" : "default"} data-testid="feature-action"
-                  disabled={!rs.canToggle || mut.isPending} onClick={() => mut.mutate({ feature: f.id, on: !f.active })}>
-                  {f.active ? "Switch off" : "Switch on"}
-                </Button>
+                {f.id !== "core" && (
+                  <Button size="sm" variant={f.active ? "outline" : "default"} data-testid="feature-action"
+                    disabled={!rs.canToggle || mut.isPending} onClick={() => mut.mutate({ feature: f.id, on: !f.active })}>
+                    {f.active ? "Switch off" : "Switch on"}
+                  </Button>
+                )}
               </div>
               {!f.active && rs.preview.length > 0 && (
                 <p className="mt-2 text-xs text-muted-foreground" data-testid="feature-preview">Switching on also adds: {rs.preview.join(", ")}.</p>

@@ -42,10 +42,9 @@ test("Choose stays disabled until the server's verdict is ok; choosing fills the
   await page.route(/\/v1\/console\/projects\/adopt$/, (r) => { body = r.request().postDataJSON(); return r.fulfill({ status: 201, json: { id: "notes" } }); });
   const picker = await openAdoptPicker(page);
   await expect(picker.getByTestId("picker-title")).toHaveText("Choose a folder");
-  // opens at the Corvin workspace; the workspace itself is not a choice
-  await expect(current(picker)).toHaveText("w-0123456789");
-  await expect(picker.getByTestId("picker-verdict-text")).toHaveText(SENT.workspace_root);
-  await expect(picker.getByTestId("picker-choose")).toBeDisabled();
+  // a folder of one's own opens at the last place used outside the Corvin workspace, never inside it with a refusal (REVIEW-0067 #16)
+  await expect(current(picker)).toHaveText("notes");
+  await expect(picker.getByTestId("picker-verdict-text")).not.toHaveText(SENT.workspace_root);
   await picker.locator('[data-testid="picker-place"][data-kind="home"]').click();
   await expect(picker.getByTestId("picker-verdict-text")).toHaveText(SENT.top_level);
   await expect(picker.getByTestId("picker-choose")).toBeDisabled();
@@ -65,6 +64,14 @@ test("Choose stays disabled until the server's verdict is ok; choosing fills the
   await page.getByTestId("adopt-submit").click();
   await expect.poll(() => body?.location).toBe(`${HOME}/code/notes`);
   expect(st.calls.every((c) => c.endsWith("|adopt|"))).toBe(true);
+});
+
+test("with no recent place, a folder of one's own opens at home, not in the Corvin workspace (REVIEW-0067 #16)", async ({ page }) => {
+  await base(page);
+  await stubPicker(page, { recent: [] });
+  const picker = await openAdoptPicker(page);
+  await expect(current(picker)).toHaveText("u");
+  await expect(picker.getByTestId("picker-verdict-text")).not.toHaveText(SENT.workspace_root);
 });
 
 test("a foreign row, a link, Corvin's data and a system folder cannot be entered and say why", async ({ page }) => {
@@ -125,9 +132,9 @@ test("keyboard only: open, type to jump, Enter in, Backspace up, Space marks, En
   await page.keyboard.press("Enter");
   const picker = page.getByTestId("folder-picker");
   await expect(picker.getByTestId("picker-list")).toBeFocused();
-  await expect(current(picker)).toHaveText("w-0123456789");
+  await expect(current(picker)).toHaveText("notes");
   await page.keyboard.press("Backspace");
-  await expect(current(picker)).toHaveText("projects");
+  await expect(current(picker)).toHaveText("code");
   // Ctrl+L: the path field, from the keyboard
   await page.keyboard.press("Control+l");
   await expect(picker.getByTestId("adopt-location")).toBeFocused();

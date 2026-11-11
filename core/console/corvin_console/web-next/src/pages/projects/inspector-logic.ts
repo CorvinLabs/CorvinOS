@@ -6,6 +6,7 @@ import { ApiError } from "@/lib/api/client";
 import type { ChangeList, FeatureRow, HealthCheck, ProjectDetail, VideoRow, WorkspaceState } from "@/lib/api/projects";
 import type { Summary } from "@/lib/api/task-tracking";
 import { featureLabel } from "./encodings";
+import { formatBytes } from "./share-logic";
 
 export type Tab = "overview" | "structure" | "docs" | "knowledge" | "tasks" | "videos" | "directory" | "compute" | "features" | "settings";
 
@@ -23,6 +24,11 @@ export const TABS: { id: Tab; label: string; feature: string | null }[] = [
   { id: "settings", label: "Settings", feature: null },
 ];
 
+/** The label of a tab, as the tab bar draws it. */
+export function tabLabel(tab: Tab): string {
+  return TABS.find((t) => t.id === tab)?.label ?? tab;
+}
+
 export function parseTab(v: string | null): Tab {
   return TABS.some((t) => t.id === v) ? (v as Tab) : "overview";
 }
@@ -37,6 +43,10 @@ export function tabGate(tab: Tab, active: string[]): { open: boolean; feature: s
 /** What one feature row offers: switch on/off, and why it cannot be switched on yet. */
 export interface RowState {
   label: string;
+  /** On for this project. `core` is always on, also when an adopted project's manifest lists no features (REVIEW-0067 #6). */
+  on: boolean;
+  /** "On", "Always on" or "Feature off". */
+  status: string;
   canToggle: boolean;
   action: "on" | "off";
   /** Shown when the feature is off: the requirements that would be pulled in when it is switched on. */
@@ -51,11 +61,14 @@ export function rowState(f: FeatureRow): RowState {
   const blockedBy = missingPlugins.length && !f.active
     ? `needs the ${missingPlugins.map((p) => p.plugin.replace(/_/g, " ")).join(", ")} plugin, which is not enabled for this tenant`
     : null;
+  const core = f.id === "core";
   return {
-    label: featureLabel(f.id),
-    canToggle: f.id !== "core" && blockedBy === null,
+    label: featureLabel(f.id, f.title),
+    on: core || f.active,
+    status: core ? "Always on" : f.active ? "On" : "Feature off",
+    canToggle: !core && blockedBy === null,
     action: f.active ? "off" : "on",
-    preview: f.active ? [] : f.requires.filter((r) => r !== "core").map(featureLabel),
+    preview: f.active || core ? [] : f.requires.filter((r) => r !== "core").map((r) => featureLabel(r)),
     blockedBy,
   };
 }
@@ -74,10 +87,10 @@ export function conflictOf(err: unknown): Conflict | null {
   const reason = typeof d.reason_class === "string" ? d.reason_class : "";
   const message = typeof d.message === "string" ? d.message : "The change was refused.";
   if (reason === "has_dependants" && Array.isArray(d.dependants)) {
-    return { kind: "dependants", feature: String(d.feature ?? ""), dependants: (d.dependants as string[]).map(featureLabel) };
+    return { kind: "dependants", feature: String(d.feature ?? ""), dependants: (d.dependants as string[]).map((x) => featureLabel(x)) };
   }
   if (reason === "needs_dependencies" && Array.isArray(d.requires)) {
-    return { kind: "requires", requires: (d.requires as string[]).map(featureLabel) };
+    return { kind: "requires", requires: (d.requires as string[]).map((x) => featureLabel(x)) };
   }
   if (reason === "plugin_missing") return { kind: "plugin", message };
   return { kind: "other", message };
@@ -237,7 +250,67 @@ export function doctorSummary(checks: HealthCheck[]): string {
   if (real.length === 0) return "No checks have run.";
   const failed = real.filter((c) => !c.ok);
   if (failed.length === 0) return `${real.length} checks, none failed`;
-  return `${real.length} checks, ${failed.length} failed — ${failed[0].detail}`;
+  return `${real.length} checks, ${failed.length} failed — ${checkDetail(failed[0])}`;
+}
+
+/** "['a', 'b']" (a Python list the server formats into some details) as "a, b". */
+function plainList(s: string): string {
+  return s.replace(/\[((?:\s*'[^']*'\s*,?)*)\]/g, (_m, inner: string) => (inner.match(/'([^']*)'/g) ?? []).map((x) => x.slice(1, -1)).join(", "));
+}
+
+function sentence(s: string): string {
+  const t = s.trim();
+  if (!t) return "";
+  // a sentence that starts with a file name ("project.yaml is valid") keeps the name as it is written
+  const first = t.split(/\s/)[0];
+  const c = /[./]/.test(first) ? t : t.charAt(0).toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(c) ? c : `${c}.`;
+}
+
+/**
+ * A health check's detail in words (REVIEW-0067 #9). The server's details are fixed sentences for an operator log; the ones a
+ * user cannot read ("kb check: blocking 0", a Python list, "the path gate's hint test is loadable") are said again here, every
+ * other text is kept as it is (capitalised, with a period). The server's own text stays available as a tooltip in the UI.
+ */
+export function checkDetail(c: HealthCheck): string {
+  const d = (c.detail ?? "").trim();
+  let m = /^kb check: blocking (\d+)$/.exec(d);
+  if (m) {
+    const n = Number(m[1]);
+    return n === 0 ? "The knowledge base check finds no blocking problem." : `The knowledge base check finds ${n} blocking problem${n === 1 ? "" : "s"}.`;
+  }
+  if (d === "the path gate's hint test is loadable") return "The rules that guard file paths in a chat are available.";
+  m = /^out of sync \(repair fixes\): (.*)$/.exec(d);
+  if (m) return `Generated files are out of date: ${plainList(m[1])}. Repair rewrites them.`;
+  m = /^missing requirements: (\[.*\])$/.exec(d);
+  if (m) return `Features this project needs are off: ${(m[1].match(/'([^']*)'/g) ?? []).map((x) => featureLabel(x.slice(1, -1))).join(", ")}.`;
+  return sentence(plainList(d));
+}
+
+/** The Docs tab's rows: every kind the server counted, in words, biggest first (REVIEW-0067 #10). */
+export function docsRows(counts: Record<string, number> | undefined): { kind: string; label: string; n: number }[] {
+  return Object.entries(counts ?? {}).filter(([, n]) => Number.isFinite(n))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([kind, n]) => {
+      const w = KB_KIND[kind];
+      const word = w ? w[1] : kind.replace(/[-_]/g, " ");
+      return { kind, label: word.charAt(0).toUpperCase() + word.slice(1), n };
+    });
+}
+
+const TASK_STATUS: Record<string, string> = { open: "Open", in_progress: "In progress", blocked: "Blocked", done: "Done", cancelled: "Cancelled" };
+
+/** A task's status as words: "In progress", never "in_progress" (REVIEW-0067 #11). */
+export function taskStatusLabel(status: string | null | undefined): string {
+  const s = String(status ?? "");
+  if (TASK_STATUS[s]) return TASK_STATUS[s];
+  const w = s.replace(/_/g, " ");
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
+/** A file size for the Structure tab: "2.0 KB", not "2048 B". */
+export function sizeLabel(bytes: number): string {
+  return formatBytes(bytes);
 }
 
 
@@ -258,6 +331,11 @@ export function glanceTiles(d: Pick<ProjectDetail, "active" | "kb" | "builtin">)
   if (active.includes("videos")) out.push({ id: "videos", label: "Videos", tab: "videos" });
   if (!d.builtin) out.push({ id: "changes", label: "Changes", tab: null });
   return out;
+}
+
+/** A leading tile's accessible name: its number, and the tab it really opens (Knowledge may lead to Docs; REVIEW-0067 #12). */
+export function glanceAriaLabel(tile: GlanceTile, v: GlanceValue): string {
+  return `${tile.label}: ${v.value} ${v.detail}. Open the ${tile.tab ? tabLabel(tile.tab) : tile.label} tab`;
 }
 
 /** The task board of a project: its open tasks first, because that is the question ("what is left?"). */

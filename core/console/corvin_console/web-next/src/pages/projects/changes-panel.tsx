@@ -4,6 +4,7 @@
  * keep already-committed work traceable; ids in file names and commit subjects link to Tasks and the Knowledge Graph.
  * Read-only: nothing here writes to the project.
  */
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -70,6 +71,8 @@ export function ChangesPanel({ projectId, title, onClose }: { projectId: string;
   const [commit, setCommit] = useState<string | null>(null);
   const [file, setFile] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  useFocusTrap(panelRef);   // a modal panel keeps Tab inside it (REVIEW-0067 #15)
   const q = useQuery({ queryKey: changesKey(projectId, commit), queryFn: ({ signal }) => getChanges(projectId, commit, signal), refetchInterval: 10_000, retry: false,
     staleTime: 0, refetchOnMount: "always",            // opening the panel always shows the files as they are now
     placeholderData: (prev) => prev });                 // switching commits keeps the picker (and its focus) on screen
@@ -86,7 +89,7 @@ export function ChangesPanel({ projectId, title, onClose }: { projectId: string;
   const loadingOther = q.isPlaceholderData;                // the rows below still belong to the PREVIOUS selection
   const groups = d ? groupByArea(d.files) : [];
   return (
-    <aside role="dialog" aria-label={`Changes in ${title}`} data-testid="changes-panel"
+    <aside ref={panelRef} role="dialog" aria-modal="true" tabIndex={-1} aria-label={`Changes in ${title}`} data-testid="changes-panel"
       className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[34rem] flex-col border-l border-border bg-background shadow-xl">
       <header className="flex items-center gap-2 border-b px-3 py-2">
         {file && <Button variant="ghost" size="sm" onClick={() => setFile(null)} aria-label="Back to the list" data-testid="changes-back"><ArrowLeft className="h-4 w-4" /></Button>}

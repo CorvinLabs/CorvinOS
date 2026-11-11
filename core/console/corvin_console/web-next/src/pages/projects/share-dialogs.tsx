@@ -22,7 +22,7 @@ import { explain } from "./wizard";
 import { parentOf } from "./picker-logic";
 import {
   ARCHIVE_NOTE, ID_RULE, ORIGIN_HINT, ORIGIN_LABEL, PROTECTION_LATER, conflictRows, exportEnabled, exportGate, fromLine, importEnabled,
-  importProtection, includedLine, initialChoices, jobLine, leftOutLines, offersWithoutHistory, refusalOf, skippableParts, suggestId,
+  importProtection, includedLine, initialChoices, jobLine, leftOutLines, offersKbPart, offersWithoutHistory, refusalOf, skippableParts, suggestId,
   verdictKey, willCreateLine, type ImportChoices,
 } from "./share-logic";
 
@@ -130,7 +130,8 @@ function ExportBody({ ids, label, onClose }: { ids: string[]; label: string; onC
           <div className="flex flex-wrap gap-x-4 gap-y-2" role="group" aria-label="Parts">
             <Check checked={parts.git_history} onChange={(v) => { setParts({ ...parts, git_history: v }); setError(null); }} label="Git history" testid="export-part-history" disabled={!!done || mut.isPending} />
             <Check checked={parts.generated} onChange={(v) => setParts({ ...parts, generated: v })} label="Generated folders (node_modules, .venv …)" testid="export-part-generated" disabled={!!done || mut.isPending} />
-            <Check checked={parts.kb} onChange={(v) => setParts({ ...parts, kb: v })} label="Knowledge base" testid="export-part-kb" disabled={!!done || mut.isPending} />
+            {/* only a project that has a knowledge base offers it (REVIEW-0067 #17) */}
+            {offersKbPart(pv) && <Check checked={parts.kb} onChange={(v) => setParts({ ...parts, kb: v })} label="Knowledge base" testid="export-part-kb" disabled={!!done || mut.isPending} />}
           </div>
           {withoutHistory && parts.git_history && (
             <div className="space-y-1 rounded border border-amber-600/50 p-2 text-sm" data-testid="export-history-findings">
@@ -485,7 +486,7 @@ function DuplicateBody({ d, onClose, setBusy }: { d: ProjectDetail; onClose: () 
         </Line>
         <div className="flex flex-wrap gap-x-4 gap-y-2" role="group" aria-label="Parts">
           <Check checked={parts.git_history} onChange={(v) => setParts({ ...parts, git_history: v })} label="Git history" testid="duplicate-part-history" disabled={mut.isPending} />
-          <Check checked={parts.kb} onChange={(v) => setParts({ ...parts, kb: v })} label="Knowledge base" testid="duplicate-part-kb" disabled={mut.isPending} />
+          {(d.kb === true || (d.active ?? []).includes("kb")) && <Check checked={parts.kb} onChange={(v) => setParts({ ...parts, kb: v })} label="Knowledge base" testid="duplicate-part-kb" disabled={mut.isPending} />}
           <Check checked={parts.generated} onChange={(v) => setParts({ ...parts, generated: v })} label="Generated folders" testid="duplicate-part-generated" disabled={mut.isPending} />
         </div>
         <p className="text-xs text-muted-foreground">{ARCHIVE_NOTE}</p>

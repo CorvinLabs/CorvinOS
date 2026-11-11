@@ -74,7 +74,7 @@ async function stub(page: Page, opts: { gpg?: boolean; reject?: boolean; jobFail
     st.previews.push([...on].sort().join(","));
     return r.fulfill({ json: { gpg: !!opts.gpg, notes: ["Archives inside the project are not checked for secrets."],
       warnings: [], projects: ids.map((id) => ({ id, title: PROJECTS[id].title, template: "research@1", role: "research",
-        classification: PROJECTS[id].classification, docs_mode: "plain", features: {},
+        classification: PROJECTS[id].classification, docs_mode: "plain", features: PROJECTS[id].features,   // the live shape names the features
         parts: parts({ kb: on.has("kb"), git_history: on.has("git_history"), generated: on.has("generated") }),
         left_out: [{ path: ".env", reason: "secret_name" }, { path: "docs/latest", reason: "link" }, { path: ".mcp.json", reason: "machine_local" }],
         counts: { files: 212, bytes: 5_347_738 }, commits: on.has("git_history") ? 38 : null, kb_entries: 41,
@@ -176,6 +176,19 @@ test("export of an internal project: Included and Left out from the preview, the
   await expect(dlg.getByTestId("export-done")).toContainText("corvin-project-alpha-20261111.zip");
   expect(st.exports).toEqual([{ project_ids: ["alpha"], parts: { git_history: true, generated: false, kb: true }, confirm: false }]);
   await cleanText(page, "export-dialog");
+});
+
+test("a project without a knowledge base is not offered one in the export (REVIEW-0067 #17)", async ({ page }) => {
+  await stub(page);
+  await page.route(/\/v1\/console\/projects\/-\/export\/preview\?/, (r) => r.fulfill({ json: { gpg: false, notes: [], warnings: [], projects: [{
+    id: "alpha", title: "Alpha research", template: "adopted@1", role: "", classification: "internal", docs_mode: "plain", features: {},
+    parts: parts({ git_history: true }), left_out: [], counts: { files: 3, bytes: 900 }, commits: 2, kb_entries: 0, history_findings: 0 }] } }));
+  await page.goto("/console/app/projects/alpha?tab=settings");
+  await page.getByTestId("share-export").click();
+  const dlg = page.getByTestId("export-dialog");
+  await expect(dlg.getByTestId("export-included")).toContainText("3 files");
+  await expect(dlg.getByTestId("export-part-history")).toBeVisible();
+  await expect(dlg.getByTestId("export-part-kb")).toHaveCount(0);
 });
 
 test("a confidential project needs its typed id before Export ZIP turns on; gpg offers a passphrase", async ({ page }) => {

@@ -140,5 +140,5 @@ export function idProblem(err: unknown): string | null {
 
 /** Human names for the review list. */
 export function featureNames(ids: string[]): string[] {
-  return ids.filter((f) => f !== "core").map(featureLabel);
+  return ids.filter((f) => f !== "core").map((x) => featureLabel(x));
 }

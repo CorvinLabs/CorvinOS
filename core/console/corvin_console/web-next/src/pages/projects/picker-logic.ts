@@ -266,14 +266,30 @@ export function placeGroups(places: BrowsePlace[]): PlaceGroup[] {
   return groups.filter((g) => g.places.length > 0);
 }
 
-/** Where the picker opens: the given folder, else the first available of the workspace, the projects folder, home. */
-export function initialPath(places: BrowsePlace[], given?: string | null): string | null {
+/**
+ * Where the picker opens: the given folder, else the first available of the workspace, the projects folder, home. A pick of a folder
+ * of one's OWN (`start: "own"`) never starts in the Corvin workspace, where every folder is refused for that purpose: it starts at the
+ * last used place outside the workspace, else home (REVIEW-0067 #16).
+ */
+export function initialPath(places: BrowsePlace[], given?: string | null, start: "workspace" | "own" = "workspace"): string | null {
   if (given) return given;
+  if (start === "own") {
+    const ws = places.find((x) => x.kind === "managed")?.path;
+    const recent = places.find((x) => x.kind === "recent" && x.available && !underRoot(x.path, ws));
+    if (recent) return recent.path;
+    const home = places.find((x) => x.kind === "home" && x.available);
+    if (home) return home.path;
+  }
   for (const kind of ["managed", "root", "home"] as const) {
     const p = places.find((x) => x.kind === kind && x.available);
     if (p) return p.path;
   }
   return places.find((p) => p.available)?.path ?? null;
+}
+
+/** Purposes that pick a folder of the user's own (a custom place, a folder to adopt, the projects folder): never the workspace. */
+export function pickerStart(purpose: PickerPurpose): "workspace" | "own" {
+  return purpose === "create" || purpose === "adopt" || purpose === "projects_root" ? "own" : "workspace";
 }
 
 /** The favourites after starring or un-starring *path*; null = already 10. */

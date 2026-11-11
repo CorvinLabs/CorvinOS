@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { getChanges, getStructure, type ProjectDetail } from "@/lib/api/projects";
 import { getTaskItems } from "@/lib/api/task-tracking";
 import { cn } from "@/lib/utils";
-import { changesGlance, glanceTiles, knowledgeGlance, tasksGlance, videosGlance, type GlanceId, type GlanceTile, type GlanceValue } from "./inspector-logic";
+import { changesGlance, glanceAriaLabel, glanceTiles, knowledgeGlance, tasksGlance, videosGlance, type GlanceId, type GlanceTile, type GlanceValue } from "./inspector-logic";
 
 type Loaded = { state: "loading" } | { state: "error"; retry: () => void } | { state: "none" } | { state: "ok"; v: GlanceValue };
 
@@ -66,7 +66,7 @@ function Tile({ d, tile }: { d: ProjectDetail; tile: GlanceTile }) {
       data-testid="glance-tile" data-tile={tile.id}>
       {lead ? (
         <Link to={`/app/projects/${encodeURIComponent(d.id)}?tab=${tile.tab}`} className="block rounded-[inherit] focus:outline-none"
-          aria-label={`${tile.label}: ${got.v.value} ${got.v.detail}. Open the ${tile.label} tab`} data-testid="glance-link">
+          aria-label={glanceAriaLabel(tile, got.v)} data-testid="glance-link">
           {body}
         </Link>
       ) : body}

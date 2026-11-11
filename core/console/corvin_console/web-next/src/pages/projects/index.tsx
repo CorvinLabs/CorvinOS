@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
-import { listProjects, listTemplates, type ProjectList, type ProjectSummary } from "@/lib/api/projects";
+import { listProjects, listTemplates, type ProjectList, type ProjectSummary, type TemplateInfo } from "@/lib/api/projects";
 import { cn } from "@/lib/utils";
 import { WHERE_LABEL, defaultPlaceSentence, emptyState, featureChips, offFeatures, presentWhere, sortProjects, stateOf, templateLabel,
   whereFilter, whereLabel, type WhereContext, type WhereKind } from "./encodings";
@@ -31,7 +31,7 @@ import { CLASS_META, NO_FILTER, ROLE_LABEL, accessOf, classOf, filterProjects, p
 const PROJECTS_KEY = ["projects", "list"] as const;
 const TEMPLATES_KEY = ["projects", "templates"] as const;
 
-function ProjectCard({ p, where, selected, onSelect }: { p: ProjectSummary; where: WhereContext; selected: boolean; onSelect: (() => void) | null }) {
+function ProjectCard({ p, where, selected, onSelect, templates }: { p: ProjectSummary; where: WhereContext; selected: boolean; onSelect: (() => void) | null; templates?: TemplateInfo[] }) {
   const st = stateOf(p);
   const w = whereLabel(p, where);
   const chips = featureChips(p);
@@ -91,7 +91,7 @@ function ProjectCard({ p, where, selected, onSelect }: { p: ProjectSummary; wher
           <p className="text-xs text-muted-foreground" data-testid="project-off">Off: {off.join(", ")}</p>
         )}
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <dt>Template</dt><dd>{templateLabel(p.template)}</dd>
+          <dt>Template</dt><dd>{templateLabel(p.template, templates)}</dd>
           {p.docs_mode && (<><dt>Docs</dt><dd>{p.docs_mode === "nested" ? "own repository" : "inside the project repository"}</dd></>)}
           <dt>Where</dt>
           <dd className="flex min-w-0 items-center gap-1.5" data-testid="project-where" data-storage={w.kind}>
@@ -238,7 +238,7 @@ export default function ProjectsPage() {
       {!showTrash && list.length > 0 && (
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2" aria-label="Projects" data-testid="projects-list">
           {list.map((p) => (
-            <ProjectCard key={p.id} p={p} where={where} selected={selected.includes(p.id)}
+            <ProjectCard key={p.id} p={p} where={where} selected={selected.includes(p.id)} templates={templates.data?.templates}
               onSelect={selectable(p) ? () => setPicked((cur) => toggleSelected(pruneSelected(cur, all), p.id)) : null} />
           ))}
         </section>

@@ -82,6 +82,7 @@ test("the change view groups files, opens a diff and a new file, links ids, swit
   await page.getByTestId("project-menu-button").click();
   await expect(page.getByTestId("project-menu-settings")).toHaveAttribute("href", /\/app\/projects\/alpha\?tab=settings/);
   await expect(page.getByTestId("project-menu-storage")).toHaveAttribute("href", /\/app\/projects\/alpha\?tab=structure/);
+  await expect(page.getByTestId("project-menu-storage")).toHaveText("Structure");   // one name for one place: the tab it opens (REVIEW-0067 #14)
   await page.getByTestId("project-menu-changes").click();
   const panel = page.getByTestId("changes-panel");
   await expect(panel).toBeVisible();

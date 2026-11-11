@@ -41,8 +41,38 @@ test("the overview shows every check and never claims all is well over a red one
   await page.goto(`/console/app/projects/${ID}`);
   await expect(page.getByTestId("inspector-title")).toHaveText("Plumbline explainer");
   await expect(page.getByTestId("health-headline")).toHaveText("1 of 2 checks need attention.");
-  await expect(page.getByTestId("health-check").filter({ hasText: "kb check: blocking 2" })).toHaveAttribute("data-ok", "false");
-  await expect(page.getByTestId("health-check").filter({ hasText: "the project directory exists" })).toHaveAttribute("data-ok", "true");
+  // the details are sentences; the server's own text stays as the tooltip (REVIEW-0067 #9)
+  const kb = page.getByTestId("health-check").filter({ hasText: "The knowledge base check finds 2 blocking problems." });
+  await expect(kb).toHaveAttribute("data-ok", "false");
+  await expect(kb.getByTestId("health-detail")).toHaveAttribute("title", "kb check: blocking 2");
+  await expect(page.getByTestId("health-check").filter({ hasText: "The project directory exists." })).toHaveAttribute("data-ok", "true");
+  await expect(page.getByTestId("health-checks")).not.toContainText("kb check:");
+});
+
+test("the header shows the short path, the full one on hover (REVIEW-0067 #13)", async ({ page }) => {
+  await page.route(new RegExp(`/v1/console/projects/${ID}$`), (r) => r.fulfill({ json: { ...DETAIL, display_path: "~/projects/plumbline" } }));
+  await page.route(new RegExp(`/v1/console/projects/${ID}/health$`), (r) => r.fulfill({ json: CHECKS }));
+  await page.goto(`/console/app/projects/${ID}`);
+  await expect(page.getByTestId("inspector-path")).toHaveText("~/projects/plumbline");
+  await expect(page.getByTestId("inspector-path")).toHaveAttribute("title", "/home/u/projects/plumbline");
+});
+
+test("the core feature reads Always on, with no switch, even for an adopted folder that lists no features (REVIEW-0067 #6, #7)", async ({ page }) => {
+  const adopted = { ...DETAIL, template: "adopted@1", active: [], features: {}, catalogue: { available: true, suggestions: [], features: [
+    { id: "core", title: "Project", description: "Always on.", active: false, requires: [], suggests: [], dependants: [], plugins: [] },
+    { id: "datasci", title: "Data science", description: "", active: false, requires: ["core"], suggests: [], dependants: [], plugins: [] },
+    { id: "dashboard", title: "Overview", description: "", active: false, requires: ["core"], suggests: [], dependants: [], plugins: [] },
+  ] } };
+  await page.route(new RegExp(`/v1/console/projects/${ID}$`), (r) => r.fulfill({ json: adopted }));
+  await page.route(new RegExp(`/v1/console/projects/${ID}/health$`), (r) => r.fulfill({ json: CHECKS }));
+  await page.goto(`/console/app/projects/${ID}?tab=features`);
+  const core = page.locator('[data-testid="feature-row"][data-feature="core"]');
+  await expect(core.getByTestId("feature-status")).toHaveText("Always on");
+  await expect(core).toHaveAttribute("data-active", "true");
+  await expect(core.getByTestId("feature-action")).toHaveCount(0);
+  await expect(page.locator('[data-testid="feature-row"][data-feature="datasci"]')).toContainText("Data science");
+  // the feature is not called "Overview" like the first tab
+  await expect(page.locator('[data-testid="feature-row"][data-feature="dashboard"]')).toContainText("Project dashboard");
 });
 
 test("switching off a feature with dependants asks first, then sends the cascade", async ({ page }) => {

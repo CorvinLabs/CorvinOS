@@ -24,8 +24,8 @@ function detail(opts: { videos: boolean; kb: boolean; peers?: string[]; more?: s
 }
 const STRUCTURE = {
   project_id: ID, truncated: false, videos_root: "/home/u/Corvin-Videos",
-  entries: [{ path: "project.yaml", kind: "file", size: 120 }, { path: "docs", kind: "dir", size: null }, { path: "videos", kind: "dir", size: null }],
-  kb_counts: { initiatives: 1, epics: 2, tasks: 7, decisions: 0, concepts: 0 },
+  entries: [{ path: "project.yaml", kind: "file", size: 120 }, { path: "notes.pdf", kind: "file", size: 2048 }, { path: "docs", kind: "dir", size: null }, { path: "videos", kind: "dir", size: null }],
+  kb_counts: { initiatives: 1, epics: 2, tasks: 7, decisions: 0, concepts: 0, "implementation-plans": 3 },
   videos: [{ name: "plumbline-intro", de: true, en: true, folder: "/home/u/Corvin-Videos/plumbline-intro", state: "started", folder_exists: true }],
 };
 const HEALTH = { project_id: ID, ok: false, checks: [{ id: "compute_worker", ok: false, detail: "the compute worker of this tenant is not reachable", at: "x" }] };
@@ -37,6 +37,7 @@ async function stub(page: Page, d: ReturnType<typeof detail>, onPut?: (body: unk
   await page.route(new RegExp(`/v1/console/projects/${ID}/features$`), (r) => { onPut?.(r.request().postDataJSON()); return r.fulfill({ json: d }); });
   await page.route(/\/v1\/console\/task-tracking\/items/, (r) => r.fulfill({ json: { items: [
     { id: "t1", title: "T-0001 · Narration DE", status: "open", labels: ["kb", "prj-plumbline"], project: ID },
+    { id: "t2", title: "T-0002 · Narration EN", status: "in_progress", labels: ["kb", "prj-plumbline"], project: ID },
   ], server_time: new Date().toISOString(), summary: {}, import_available: false } }));
 }
 
@@ -44,8 +45,14 @@ test("Structure lists the folder; Docs counts the knowledge base; Compute report
   await stub(page, detail({ videos: true, kb: true, more: ["acs"] }));
   await page.goto(`/console/app/projects/${ID}?tab=structure`);
   await expect(page.getByTestId("structure-entry").filter({ hasText: "project.yaml" })).toHaveAttribute("data-kind", "file");
+  // sizes in words, folders as "folder" (REVIEW-0067 #11)
+  await expect(page.getByTestId("structure-entry").filter({ hasText: "notes.pdf" })).toContainText("2.0 KB");
+  await expect(page.getByTestId("structure-entry").filter({ hasText: "docs/" })).toContainText("folder");
   await page.getByRole("tab", { name: "Docs" }).click();
-  await expect(page.getByTestId("docs-count-row").filter({ hasText: "tasks" })).toContainText("7");
+  await expect(page.getByTestId("docs-count-row").filter({ hasText: "Tasks" })).toContainText("7");
+  // kinds in words, not folder names (REVIEW-0067 #10)
+  await expect(page.locator('[data-testid="docs-count-row"][data-kind="implementation-plans"]')).toContainText("Plans");
+  await expect(page.getByTestId("docs-counts")).not.toContainText("implementation-plans");
   await page.getByRole("tab", { name: "Compute" }).click();
   await expect(page.getByTestId("compute-worker")).toContainText("not reachable");
 });
@@ -56,7 +63,9 @@ test("Videos lists the video rows; Tasks lists the project's items and links to 
   await expect(page.getByTestId("video-row")).toContainText("plumbline-intro");
   await expect(page.getByTestId("video-row")).toContainText("folder present");
   await page.getByRole("tab", { name: "Tasks" }).click();
-  await expect(page.getByTestId("tasks-row")).toContainText("Narration DE");
+  await expect(page.getByTestId("tasks-row").filter({ hasText: "Narration DE" })).toContainText("Open");
+  await expect(page.getByTestId("tasks-row").filter({ hasText: "Narration EN" })).toContainText("In progress");   // REVIEW-0067 #11
+  await expect(page.getByTestId("tasks-list")).not.toContainText("in_progress");
   await expect(page.getByTestId("tasks-open")).toHaveAttribute("href", /scope=project%3Aplumbline|scope=project:plumbline/);
 });
 
@@ -90,4 +99,13 @@ test("Knowledge opens this project's graph, and an empty Videos tab says how to 
   await expect(page.getByTestId("knowledge-open")).toHaveAttribute("href", /scope=project%3Aplumbline|scope=project:plumbline/);
   await page.getByRole("tab", { name: "Videos" }).click();
   await expect(page.getByTestId("videos-empty")).toContainText("No videos yet");
+});
+
+test("the Knowledge tile that leads to Docs says Docs in its accessible name (REVIEW-0067 #12)", async ({ page }) => {
+  await stub(page, detail({ videos: false, kb: true }));
+  await page.route(new RegExp(`/v1/console/projects/${ID}/changes`), (r) => r.fulfill({ json: { project_id: ID, commit: null, files: [], commits: [], has_repository: false, truncated: false } }));
+  await page.goto(`/console/app/projects/${ID}`);
+  const link = page.locator('[data-testid="glance-tile"][data-tile="knowledge"]').getByTestId("glance-link");
+  await expect(link).toHaveAttribute("href", /tab=docs/);
+  await expect(link).toHaveAttribute("aria-label", /Open the Docs tab$/);
 });

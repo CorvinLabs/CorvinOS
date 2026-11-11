@@ -6,6 +6,7 @@
  * (a real HTTP status - EventSource cannot show one), then opens the stream with its cursor. The server ends a stream after 10 s so a
  * restart is never held; the browser reconnects by itself with Last-Event-ID, which is a normal rollover and is not shown as a problem.
  */
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -27,6 +28,8 @@ export function ExplorerPanel({ projectId, title, onClose, onOpenChanges }: { pr
   const [spoken, setSpoken] = useState("");
   const prevAgents = useRef<ActivityAgent[]>([]);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  useFocusTrap(panelRef);   // a modal panel keeps Tab inside it (REVIEW-0067 #15)
 
   useEffect(() => { closeRef.current?.focus(); }, []);
   useEffect(() => {
@@ -99,7 +102,7 @@ export function ExplorerPanel({ projectId, title, onClose, onOpenChanges }: { pr
   const toneCls = st.tone === "ok" ? "bg-emerald-500" : st.tone === "wait" ? "bg-amber-500" : "bg-red-500";
 
   return (
-    <aside role="dialog" aria-label={`Explorer for ${title}`} data-testid="explorer-panel"
+    <aside ref={panelRef} role="dialog" aria-modal="true" tabIndex={-1} aria-label={`Explorer for ${title}`} data-testid="explorer-panel"
       className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[34rem] flex-col border-l border-border bg-background shadow-xl">
       <header className="flex items-center gap-2 border-b px-3 py-2">
         <div className="min-w-0 flex-1">
@@ -149,7 +152,7 @@ export function ExplorerPanel({ projectId, title, onClose, onOpenChanges }: { pr
           {tasks.isLoading && <Skeleton className="h-8 w-full" />}
           {tasks.data && running.length === 0 && <p className="text-sm text-muted-foreground" data-testid="explorer-tasks-empty">No task of this project is in progress.</p>}
           {tasks.error && (tasks.error instanceof ApiError && tasks.error.status === 404
-            ? <p className="text-sm text-muted-foreground" data-testid="explorer-tasks-none">This project has no task board yet. Switch on the knowledge base in its settings to get one.</p>
+            ? <p className="text-sm text-muted-foreground" data-testid="explorer-tasks-none">This project has no task board yet. Switch on the knowledge base in the project's <Link to={`/app/projects/${encodeURIComponent(projectId)}?tab=features`} className="underline" data-testid="explorer-tasks-features">Features</Link> to get one.</p>
             : <p className="text-xs text-muted-foreground" data-testid="explorer-tasks-error">The board could not be read just now.</p>)}
           <ul className="space-y-1">
             {running.map((t) => (

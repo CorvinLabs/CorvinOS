@@ -166,7 +166,7 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
                   <FileDiff className="h-3.5 w-3.5" aria-hidden /> Changes{count > 0 ? ` (${count})` : ""}
                 </button>
                 <Link to={`/app/projects/${encodeURIComponent(pid)}?tab=structure`} className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted" data-testid="project-menu-storage">
-                  <FolderOpen className="h-3.5 w-3.5" aria-hidden /> Storage
+                  <FolderOpen className="h-3.5 w-3.5" aria-hidden /> Structure
                 </Link>
                 <Link to={`/app/projects/${encodeURIComponent(pid)}?tab=settings`} className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted" data-testid="project-menu-settings">
                   <Settings className="h-3.5 w-3.5" aria-hidden /> Settings

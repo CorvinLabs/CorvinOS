@@ -74,13 +74,35 @@ test("a managed project shows the seven sections in order; delete is offered, Sh
   await expect(page.getByTestId("storage-badge").first()).toHaveText("Corvin workspace");
   await expect(page.getByTestId("location-path")).toHaveText("Corvin workspace › alpha");
   await expect(page.getByTestId("location-path")).toHaveAttribute("title", OK.path);
-  await expect(page.getByTestId("doctor-summary")).toHaveText("3 checks, 1 failed — out of sync (repair fixes): ['CLAUDE.md']");
+  await expect(page.getByTestId("doctor-summary")).toHaveText("3 checks, 1 failed — Generated files are out of date: CLAUDE.md. Repair rewrites them.");   // REVIEW-0067 #9
   await expect(page.getByTestId("share-export")).toBeEnabled();
   await expect(page.getByTestId("share-duplicate")).toBeEnabled();
   await expect(page.getByTestId("delete-files")).toBeEnabled();
   await expect(page.getByTestId("delete-row")).toContainText("Delete project files — only for projects in the Corvin workspace; goes to Trash for 30 days.");
   await expect(page.getByTestId("locate-box")).toHaveCount(0);
   await noIds(page);
+});
+
+test("'Use in a chat' says what the assistant may do, from the project's own access (REVIEW-0067 M3)", async ({ page }) => {
+  await stub(page, OK);
+  await page.goto(`/console/app/projects/${ID}?tab=settings`);
+  await expect(page.getByTestId("attach-explain")).toContainText("The assistant can read the project but not change its files.");
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  await stub(page, { ...OK, assistant_access: "write" });
+  await page.reload();
+  await expect(page.getByTestId("attach-explain")).toContainText("The assistant may create and change files in the project.");
+  await expect(page.getByTestId("attach-explain")).not.toContainText("not change its files");
+  // the same page's Protection says the same
+  await expect(page.locator('[data-testid="settings-access"][data-access="write"]')).toBeChecked();
+});
+
+test("the template is shown by its title, not as an id with a version (REVIEW-0067 #8)", async ({ page }) => {
+  await stub(page, OK);
+  await page.route(/\/v1\/console\/projects\/templates/, (r) => r.fulfill({ json: { available: true, features: [],
+    templates: [{ id: "research", version: 1, title: "Research and experiments", description: "", features: [], offered: [], docs_mode: "plain" }] } }));
+  await page.goto(`/console/app/projects/${ID}?tab=settings`);
+  await expect(page.getByTestId("project-inspector")).toContainText("Research and experiments");
+  await expect(page.getByTestId("project-inspector")).not.toContainText("research v1");
 });
 
 test("an own folder has no delete row at all (only Remove from the list), and a hint word in its path is warned about", async ({ page }) => {

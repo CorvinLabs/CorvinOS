@@ -28,6 +28,13 @@ export function formatBytes(n: number): string {
   return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+/** The export's "Knowledge base" part is offered only while one of the projects has one (REVIEW-0067 #17). Until the preview
+ *  answered it is offered, so the first preview asks for it. */
+export function offersKbPart(pv: { projects: { features?: Record<string, boolean> }[] } | undefined): boolean {
+  if (!pv) return true;
+  return pv.projects.some((p) => p.features?.kb === true);
+}
+
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 function part(parts: PartRow[] | undefined, name: PartRow["name"]): PartRow | undefined {

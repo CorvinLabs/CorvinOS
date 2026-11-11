@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
 import { adoptProject, attachProject, detachProject, getChatAttachment, getHealth, moveProject, renameProject, setDefaultStorage, setProjectSettings, type Access, type DataClass, type DefaultStorage, type ProjectDetail, type ProjectList } from "@/lib/api/projects";
-import { ACCESS_META, CLASS_META, CLASS_ORDER, accessOf, classOf, lowersProtection, needsConfirmation } from "./roles";
+import { ACCESS_META, CLASS_META, CLASS_ORDER, accessOf, chatAccessSentence, classOf, lowersProtection, needsConfirmation } from "./roles";
 import { listChatSessions } from "@/lib/api/sessions";
 import { explain } from "./wizard";
 import { FolderField, FolderPicker } from "@/components/folder-picker";
@@ -173,7 +173,7 @@ export function AttachSection({ d, csrf }: { d: ProjectDetail; csrf: string }) {
   const attachedHere = current.data?.project_id === d.id;
   return (
     <div className="space-y-2" data-testid="attach-section">
-      <p className="text-sm text-muted-foreground">Attach this project to one console chat: the chat can follow the project's rules and use its tools. The assistant can read the project but not change its files. The chat keeps its own folder and history.</p>
+      <p className="text-sm text-muted-foreground" data-testid="attach-explain">Attach this project to one console chat: the chat can follow the project's rules and use its tools. {chatAccessSentence(d)} The chat keeps its own folder and history.</p>
       {chats.error ? (
         <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="attach-chats-error">The chats could not be loaded. Reload the page to try again.</p>
       ) : chats.isLoading ? <p className="text-sm text-muted-foreground">Loading chats…</p> : list.length === 0 ? (

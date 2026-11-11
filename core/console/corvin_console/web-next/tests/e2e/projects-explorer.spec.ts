@@ -160,6 +160,8 @@ test("a project without a knowledge base says it has no task board instead of a 
   await page.route(/\/v1\/console\/task-tracking\/items/, (r) => r.fulfill({ status: 404, json: { detail: "no such project" } }));
   await open(page);
   await expect(page.getByTestId("explorer-tasks-none")).toContainText("no task board yet");
+  // the switch is in Features, and the sentence leads there (REVIEW-0067 M2)
+  await expect(page.getByTestId("explorer-tasks-features")).toHaveAttribute("href", /\/app\/projects\/alpha\?tab=features$/);
   await expect(page.getByTestId("explorer-tasks-error")).toHaveCount(0);
   await expect(page.getByTestId("explorer-tasks-empty")).toHaveCount(0);
 });
@@ -170,4 +172,32 @@ test("a board that fails for another reason says so plainly", async ({ page }) =
   await open(page);
   await expect(page.getByTestId("explorer-tasks-error")).toContainText("could not be read just now");
   await expect(page.getByTestId("explorer-tasks-none")).toHaveCount(0);
+});
+
+test("Tab stays inside the explorer: it is a modal panel (REVIEW-0067 #15)", async ({ page }) => {
+  await setup(page);
+  await open(page);
+  await expect(page.getByTestId("explorer-panel")).toHaveAttribute("aria-modal", "true");
+  let outside = 0;
+  for (let i = 0; i < 30; i++) {
+    await page.keyboard.press(i % 7 === 6 ? "Shift+Tab" : "Tab");
+    const inPanel = await page.evaluate(() => !!document.activeElement?.closest('[data-testid="explorer-panel"]'));
+    if (!inPanel) outside += 1;
+  }
+  expect(outside).toBe(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("explorer-panel")).toHaveCount(0);
+});
+
+test("Tab stays inside the Changes panel too", async ({ page }) => {
+  await setup(page);
+  await page.getByTestId("project-menu-button").click();
+  await page.getByTestId("project-menu-changes").click();
+  await expect(page.getByTestId("changes-panel")).toHaveAttribute("aria-modal", "true");
+  let outside = 0;
+  for (let i = 0; i < 20; i++) {
+    await page.keyboard.press("Tab");
+    if (!(await page.evaluate(() => !!document.activeElement?.closest('[data-testid="changes-panel"]')))) outside += 1;
+  }
+  expect(outside).toBe(0);
 });
