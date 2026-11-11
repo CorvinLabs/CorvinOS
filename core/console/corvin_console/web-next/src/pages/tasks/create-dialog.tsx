@@ -9,6 +9,8 @@ const inputCls = "h-9 w-full rounded-md border bg-background px-2 text-sm";
 
 /** The kinds a project's knowledge base holds; on its board only these are offered, each but an initiative under a parent. */
 export const PROJECT_KINDS: ItemKind[] = ["initiative", "epic", "task"];
+/** The knowledge base's own hierarchy: an epic under an initiative, a task under an epic (the server refuses anything else). */
+const KB_PARENT: Partial<Record<ItemKind, (ItemKind | null)[]>> = { initiative: [null], epic: ["initiative"], task: ["epic"] };
 
 export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, error, onCreate, project = null }: {
   open: boolean; onOpenChange: (v: boolean) => void; items: Item[]; defaultParent: Item | null;
@@ -18,7 +20,7 @@ export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, e
 }) {
   const initialKind = (p: Item | null): ItemKind => {
     const k: ItemKind = !p ? "initiative" : p.kind === "initiative" ? "epic" : p.kind === "task" || p.kind === "issue" || p.kind === "proposal" ? "subtask" : "task";
-    return project && !PROJECT_KINDS.includes(k) ? "initiative" : k;      // a project's knowledge base has no subtasks
+    return project && !PROJECT_KINDS.includes(k) ? "task" : k;
   };
   const [kind, setKind] = useState<ItemKind>(initialKind(defaultParent));
   const [parent, setParent] = useState<string>(defaultParent?.id ?? "");
@@ -36,7 +38,9 @@ export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, e
     }
   }, [open, defaultParent]);
 
-  const allowed = PARENT_RULES[kind];
+  const allowed = (project ? KB_PARENT[kind] : undefined) ?? PARENT_RULES[kind];
+  // a task in a project's knowledge base has no children: say so instead of turning the request into another item (REVIEW-0084 N33)
+  const noChildren = !!project && !!defaultParent && !["initiative", "epic"].includes(defaultParent.kind);
   const parents = useMemo(() => items.filter((i) => !i.deleted_at && allowed.includes(i.kind)), [items, allowed]);
   // Switching the kind can make the chosen parent invalid — drop it rather than
   // keep an id the select cannot show (which left Create stuck disabled).
@@ -57,6 +61,12 @@ export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, e
             ? `Saved to ${project}'s knowledge base and recorded in the audit log.`
             : "Saved to the task store and recorded in the audit log."}</DialogDescription>
         </DialogHeader>
+        {noChildren ? (
+          <div className="space-y-3">
+            <p className="text-sm" data-testid="create-no-children">A {kindMeta(defaultParent!.kind).label.toLowerCase()} in {project}'s knowledge base has no children. Add a task to its epic instead.</p>
+            <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button></DialogFooter>
+          </div>
+        ) : (
         <form className="space-y-3" onSubmit={(e) => {
           e.preventDefault();
           if (!title.trim() || !parentOk) return;
@@ -107,6 +117,7 @@ export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, e
             <Button type="submit" disabled={busy || !title.trim() || !parentOk}>Create</Button>
           </DialogFooter>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   );

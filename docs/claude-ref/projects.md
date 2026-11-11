@@ -1285,7 +1285,10 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   after a restart keeps the other projects carried (N31). `POST /task-tracking/items?scope=project:<id>` (sent by "New item" on a project's
   board) writes into THAT project's knowledge base: only an initiative, an epic or a task (409 otherwise), each but an
   initiative under its parent, 404 for a project the board does not carry; the dialog offers just those kinds and names the
-  target. Without a scope nothing changes (REVIEW-0083 N32). A chain failure between two opening records of `_audited` closes the ones already
+  target; on a project board the parent list follows the knowledge base (an initiative for an epic, an epic for a task) and
+  "Add child" under a task says the knowledge base holds no children of a task. Priority, deadline and assignee given at
+  create are written onto the projected card right after `kb new` (`_keep_local_fields`, both boards). Without a scope
+  nothing changes (REVIEW-0083 N32, REVIEW-0084 N33-N35). A chain failure between two opening records of `_audited` closes the ones already
   open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
   feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,

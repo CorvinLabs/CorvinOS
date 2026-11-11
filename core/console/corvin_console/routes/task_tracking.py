@@ -271,6 +271,19 @@ def _board_project(tenant_id: str, scope: str | None) -> str | None:
     return pid
 
 
+def _keep_local_fields(tenant_id: str, item: dict, body: ItemCreate, rec: session_auth.SessionRecord) -> dict:
+    """A knowledge-base item is created by ``kb new``, which knows title, parent and text only. Priority, deadline and assignee
+    are board fields of the card (editable on a KB card too): they are written onto the projected card right away, so what the
+    dialog asked for is what the card shows (REVIEW-0084 N35)."""
+    local = {k: getattr(body, k) for k in ("priority", "deadline", "assignee") if getattr(body, k, None) not in (None, "")}
+    if not local or local == {"priority": item.get("priority")}:
+        return item
+    from core.task_tracking.models import ItemPatch  # noqa: PLC0415
+
+    return _call(service.update, tenant_id, item["id"], ItemPatch(version=int(item.get("version") or 1), **local),
+                 actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint)
+
+
 @router.post("/items", status_code=201)
 def post_item(body: ItemCreate, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
               scope: str | None = Query(default=None, max_length=40,
@@ -291,8 +304,9 @@ def post_item(body: ItemCreate, rec: Annotated[session_auth.SessionRecord, Depen
         if body.status != "open":
             raise HTTPException(status_code=409, detail={
                 "message": "a knowledge-base item starts open — move it on the board (kb transition)", "kb_refused": True})
-        return _call(kb_projection.create_item, rec.tenant_id, kind=body.kind, title=body.title, parent_id=body.parent_id,
+        made = _call(kb_projection.create_item, rec.tenant_id, kind=body.kind, title=body.title, parent_id=body.parent_id,
                      description=body.description or "", actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint, scope=project)
+        return _keep_local_fields(rec.tenant_id, made, body, rec)
     if body.kind in ("initiative", "epic", "task") and _kb_bound(rec.tenant_id):
         from .. import kb_projection  # noqa: PLC0415
 
@@ -308,9 +322,10 @@ def post_item(body: ItemCreate, rec: Annotated[session_auth.SessionRecord, Depen
                 raise HTTPException(status_code=409, detail={
                     "message": "a knowledge-base item starts open — move it on the board (kb transition)",
                     "kb_refused": True})
-            return _call(kb_projection.create_item, rec.tenant_id, kind=body.kind, title=body.title,
+            made = _call(kb_projection.create_item, rec.tenant_id, kind=body.kind, title=body.title,
                          parent_id=body.parent_id, description=body.description or "",
                          actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint)
+            return _keep_local_fields(rec.tenant_id, made, body, rec)
     return _call(service.create, rec.tenant_id, body, actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint)
 
 

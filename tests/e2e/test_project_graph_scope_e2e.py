@@ -262,6 +262,11 @@ class ProjectGraphScopeE2E(unittest.TestCase):
             self.assertEqual(epic.status_code, 201, epic.text)
             self.assertTrue(epic.json()["external_ref"].endswith("@alpha"))
             self.assertEqual(own.post(f"{_TT}/items", params={"scope": "project:ghost"}, json={"kind": "initiative", "title": "x"}, headers=h).status_code, 404)
+            # what the dialog asked for besides title and parent is kept on the card (REVIEW-0084 N35)
+            t = own.post(f"{_TT}/items", params={"scope": "project:alpha"}, json={"kind": "task", "title": "with fields",
+                         "parent_id": epic.json()["id"], "priority": "high", "deadline": "2026-12-01", "assignee": "bob"}, headers=h)
+            self.assertEqual(t.status_code, 201, t.text)
+            self.assertEqual((t.json()["priority"], (t.json()["deadline"] or "")[:10], t.json()["assignee"]), ("high", "2026-12-01", "bob"))
 
 
 if __name__ == "__main__":
