@@ -8,6 +8,7 @@
  */
 import type { Access, DataClass, ProjectSummary, Role, TemplateInfo } from "@/lib/api/projects";
 import { ApiError } from "@/lib/api/client";
+import { featureLabel } from "./encodings";
 
 export const ROLE_LABEL: Record<Role, string> = {
   software: "Software engineering",
@@ -60,6 +61,36 @@ export function accessOf(p: { assistant_access?: Access }): Access {
 /** What "Use in a chat" says the assistant may do there - from the project's own access, never a fixed sentence (REVIEW-0067 M3). */
 export function chatAccessSentence(p: { assistant_access?: Access }): string {
   return accessOf(p) === "write" ? "The assistant may create and change files in the project." : "The assistant can read the project but not change its files.";
+}
+
+/** The backend rule (attachment.spawn_parts): a feature's MCP tools are handed to an attached chat only with write access. */
+export const TOOLS_NEED_EDIT = "Its tools reach a chat only when the assistant may edit files.";
+
+interface ToolRow { id: string; title?: string; tools?: boolean; active?: boolean }
+
+/** Where "what the assistant may do" is changed: the Protection section of the project's Settings tab. */
+export function protectionHref(id: string): string {
+  return `/app/projects/${encodeURIComponent(id)}?tab=settings#settings-protection`;
+}
+
+/** The note under a feature row that brings tools, while the assistant reads only; null when there is nothing to say. */
+export function featureToolsNote(f: ToolRow, p: { assistant_access?: Access }): string | null {
+  if (!f.tools || accessOf(p) === "write") return null;
+  return f.active ? `On, but its tools are not given to a chat. ${TOOLS_NEED_EDIT}` : TOOLS_NEED_EDIT;
+}
+
+/** The active features whose tools an attached chat does not get, because the assistant reads only. */
+export function toolsWithheldFeatures(d: { assistant_access?: Access; catalogue?: { features?: ToolRow[] } }): string[] {
+  if (accessOf(d) === "write") return [];
+  return (d.catalogue?.features ?? []).filter((f) => f.tools && f.active).map((f) => featureLabel(f.id, f.title));
+}
+
+/** What "Use in a chat" says about the tools of a read-only project; null when every tool reaches the chat (or there are none). */
+export function chatToolsNote(d: { assistant_access?: Access; catalogue?: { features?: ToolRow[] } }): string | null {
+  const names = toolsWithheldFeatures(d);
+  if (!names.length) return null;
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `The tools of ${list} are not given to a chat while the assistant reads only. ${TOOLS_NEED_EDIT}`;
 }
 
 /** Lowering the class, or letting the assistant write, is the direction that needs a second look. */

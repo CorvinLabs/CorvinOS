@@ -481,7 +481,7 @@ def list_templates(tenant_id: str) -> dict[str, Any]:
     for fid in cat.order:
         f = cat.fragments[fid]
         feats.append({"id": fid, "title": f.title, "description": f.description, "requires": list(f.requires),
-                      "suggests": list(f.suggests),
+                      "suggests": list(f.suggests), "tools": bool(f.mcp),
                       "plugins": [{"plugin": p, "state": plugin_state(tenant_id, p)} for p in f.requires_plugins]})
     return {"available": True, "projects_root": str(registry.projects_root(tenant_id)),
             "templates": [{"id": t.id, "version": t.version, "title": t.title, "description": t.description,
@@ -1166,6 +1166,8 @@ def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
         f = cat.fragments[fid]
         feats.append({"id": fid, "title": f.title, "description": f.description, "active": fid in act,
                       "requires": list(f.requires), "suggests": list(f.suggests),
+                      # brings MCP tools: they reach an attached chat only with write access (REVIEW-0069 N1, attachment.spawn_parts)
+                      "tools": bool(f.mcp),
                       "dependants": F.dependants(cat, act, fid) if fid in act else [],
                       "plugins": [{"plugin": p, "state": plugin_state(tenant_id, p)} for p in f.requires_plugins]})
     return {**out, "catalogue": {"available": True, "features": feats,
@@ -2517,8 +2519,12 @@ def chat_attachment(tenant_id: str, session_id: str) -> dict[str, Any]:
     from core.projects import builtin  # noqa: PLC0415
     e = (builtin.entry(tenant_id) if builtin.is_builtin(pid) else registry.get(tenant_id, pid)) if pid else None
     if not e:
-        return {"session_id": session_id, "project_id": None, "title": None, "withheld": None}
+        return {"session_id": session_id, "project_id": None, "title": None, "withheld": None, "tools_withheld": False}
     summ = _summary(tenant_id, e)
+    # an MCP feature is on but the assistant may only read: spawn_parts hands the chat none of its tools (REVIEW-0068 #4); the
+    # console says so instead of showing the feature as if its tools were there (REVIEW-0069 N1)
+    tools_withheld = (summ.get("assistant_access") != "write"
+                      and registry.mcp_sha(tenant_id=tenant_id, project_id=pid) is not None) if not e.get("builtin") else False
     withheld = None                                    # attached, but not sent to the assistant now (release review R10)
     if summ.get("state") != "ok":
         withheld = "the project folder is missing or its project.yaml is not usable"
@@ -2538,7 +2544,8 @@ def chat_attachment(tenant_id: str, session_id: str) -> dict[str, Any]:
                     withheld = "a rules file of the project (CLAUDE.md, .claude/...) is too large, a link or unreadable; it is not sent"
                 elif txt and not chat_runtime.project_rules_allowed(tenant_id, txt):
                     withheld = "the project's CLAUDE.md may not go to the assistant's engine (data-flow rule)"
-    return {"session_id": session_id, "project_id": pid, "title": summ.get("title"), "withheld": withheld}
+    return {"session_id": session_id, "project_id": pid, "title": summ.get("title"), "withheld": withheld,
+            "tools_withheld": tools_withheld}
 
 
 def _class_refusal(tenant_id: str, classification: str) -> Optional[str]:

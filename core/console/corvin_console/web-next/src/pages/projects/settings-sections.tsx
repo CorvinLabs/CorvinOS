@@ -4,8 +4,8 @@
  * this file only draws them. Every action goes through the server, which judges it again. The only file deletion is "Delete project
  * files…" of a project in the Corvin workspace: it moves the folder to the Trash for 30 days (ADR-2321 Decision 12).
  */
-import { useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState, type ReactNode } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
@@ -35,6 +35,12 @@ export function SettingsSections({ d, onRemoved }: { d: ProjectDetail; onRemoved
   const qc = useQueryClient();
   const list = useQuery({ queryKey: LIST, queryFn: ({ signal }) => listProjects(signal), staleTime: 10_000 });
   const sections = settingsSections(d, { workspace: list.data?.workspace });
+  // a link to one section (`#settings-protection`, from a "tools need edit access" note) lands on it
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (!hash.startsWith("#settings-")) return;
+    requestAnimationFrame(() => document.getElementById(hash.slice(1))?.scrollIntoView({ block: "start" }));
+  }, [hash]);
   const changed = () => {
     void qc.invalidateQueries({ queryKey: KEY(d.id) });
     void qc.invalidateQueries({ queryKey: HEALTH(d.id) });
@@ -60,7 +66,7 @@ export function SettingsSections({ d, onRemoved }: { d: ProjectDetail; onRemoved
         </p>
       )}
       {sections.map((s) => (
-        <div key={s.id} data-testid="settings-section" data-section={s.id}
+        <div key={s.id} id={`settings-${s.id}`} data-testid="settings-section" data-section={s.id}
           className={cn("space-y-3 rounded-lg border p-4", s.id === "danger" && "border-red-500/40")}>
           <h2 className={cn("font-medium", s.id === "danger" && "text-red-700 dark:text-red-300")}>{s.title}</h2>
           <div data-testid={`${s.id}-section`}>{body(s.id, s.actions, s.notes)}</div>

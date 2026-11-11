@@ -24,7 +24,7 @@ import { stateOf } from "./encodings";
 import { SettingsSections } from "./settings-sections";
 import { Glance } from "./inspector-glance";
 import { AccessBadge, ClassBadge } from "./badges";
-import { accessOf, classOf, roleLabel } from "./roles";
+import { accessOf, classOf, featureToolsNote, protectionHref, roleLabel } from "./roles";
 
 const KEY = (id: string) => ["projects", "detail", id] as const;
 const HEALTH = (id: string) => ["projects", "health", id] as const;
@@ -313,6 +313,14 @@ function FeaturesTab({ d, csrf, onChanged }: { d: ProjectDetail; csrf: string; o
                     {rs.status}
                   </span>
                   {f.description && <p className="text-xs text-muted-foreground">{f.description}</p>}
+                  {(() => {
+                    const note = featureToolsNote(f, d);
+                    return note && (
+                      <p className="mt-1 text-xs text-amber-800 dark:text-amber-300" data-testid="feature-tools-note">
+                        {note} <Link className="underline" to={protectionHref(d.id)} data-testid="feature-tools-link">Change what the assistant may do</Link>
+                      </p>
+                    );
+                  })()}
                 </div>
                 {f.id !== "core" && (
                   <Button size="sm" variant={f.active ? "outline" : "default"} data-testid="feature-action"

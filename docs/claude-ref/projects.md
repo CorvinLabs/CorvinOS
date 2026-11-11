@@ -365,12 +365,17 @@ Fragments are DATA: no template code runs. The only active steps are the closed 
 * Placeholders are a closed set (`{{project.id}}`, `{{paths.python}}` ...); an unknown or unvalued one
   is an error, never an empty string. Writes go through `fsutil.atomic_write` (fresh temp file +
   `os.replace`) and refuse any symlinked component.
-* **Protected targets** (REVIEW-0066 m2, `fragments._safe_target`): `load_catalogue` refuses a file `dst` below `.git`,
-  `.claude` or `.vscode` (at any depth), `.github/workflows`, `kb/_meta`, anything below `.corvin` except `.corvin/forge/`,
-  and a file named `project.yaml`, `.mcp.json`, `.gitattributes`, `.gitmodules` or `.envrc` - compared case-insensitively
-  and without trailing dots/spaces (the Windows spelling). The console's own git is neutral; the operator's terminal git
-  and a terminal `claude` are not, so a catalogue must never seed what they execute. Proof:
-  `tests/projects/test_fragment_targets_review_0066.py`.
+* **Protected targets** (REVIEW-0066 m2, REVIEW-0069, `fragments._safe_target`): `load_catalogue` refuses a file `dst` in
+  which ANY component - a folder on the way OR the final file name - is `.git`, `.claude`, `.vscode`, `HEAD`, `.corvin`
+  (except a file below the engine-owned `.corvin/forge/`), `project.yaml`, `.mcp.json`, `.gitattributes`, `.gitmodules` or
+  `.envrc`, plus the pairs `.github/workflows` and `kb/_meta` - compared case-insensitively and without trailing dots/spaces
+  (the Windows spelling). The final component counts because a FILE named `.git` is a `gitdir:` redirect to a planted git
+  directory whose `config` sets `core.fsmonitor` (REVIEW-0069's bypass of the first fix); `HEAD` because a folder holding
+  `HEAD` + `objects/` + `refs/` is a git directory git discovers, and with `core.worktree = ..` in its `config` a plain
+  `git status` there runs fsmonitor - no template needs a file named `HEAD`. The console's own git is neutral; the operator's
+  terminal git and a terminal `claude` are not, so a catalogue must never seed what they execute. Proof:
+  `tests/projects/test_fragment_targets_review_0066.py`, `tests/projects/test_fragment_targets_review_0069.py` (the verifier's
+  gitdir and bare-layout attacks through the real loader, planner, writer and `git`).
 
 **Must NOT do:** execute code from a template · overwrite a seed or a non-generated `CLAUDE.md` ·
 write an absolute path into a committed file · follow a symlink · take a path from a request outside
@@ -1242,7 +1247,7 @@ working directory). The project is NEVER the CLI's cwd. On each spawn (`chat_run
 | Need | Mechanism |
 |---|---|
 | project rules in context | `--add-dir <project>` + env `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` (`--add-dir` alone only grants file access) |
-| project MCP servers | an extra `--mcp-config <project>/.corvin/local/mcp.json` - the engine's own copy, only while its sha equals the registry's `mcp_sha`, and only with `assistant_access: write`: read-only means no tool that writes, and the acs servers carry `forge_exec`, `acs_delegate`, `skill_create` (REVIEW-0068 #4). Additive: the persona's servers stay; a symlinked or oversized file is not passed |
+| project MCP servers | an extra `--mcp-config <project>/.corvin/local/mcp.json` - the engine's own copy, only while its sha equals the registry's `mcp_sha`, and only with `assistant_access: write`: read-only means no tool that writes, and the acs servers carry `forge_exec`, `acs_delegate`, `skill_create` (REVIEW-0068 #4). Additive: the persona's servers stay; a symlinked or oversized file is not passed. The console says so (REVIEW-0069 N1): a feature row carries `tools` (its fragment declares `mcp`), `GET /projects/chat-attachment` carries `tools_withheld` (an MCP feature is on, `mcp_sha` set, access not `write`); the Features row, "Use in a chat" and the chat's project menu then say "its tools reach a chat only when the assistant may edit files" with a link to Settings → Protection (`?tab=settings#settings-protection`). Proof: `tests/e2e/test_projects_review_0066_0068_attach_e2e.py`, `web-next/tests/unit/projects-tools-access.test.ts`, `web-next/tests/e2e/projects-tools-access.spec.ts` |
 | read-only project | `--disallowedTools Write(//<abs>/**) Edit(//...) NotebookEdit(//...)` - the `//` form holds even under `--dangerously-skip-permissions`; the `/<abs>/**` form does NOT |
 | data flow | the project's `CLAUDE.md` passes L34 against the OS engine per spawn; a refusal or an error withholds the whole attachment |
 | project title in the system prompt | one line (`manifest.one_line`: control characters and line breaks become spaces, leading `#`/`>` markers dropped) and judged by the SAME L34 call as the rules text; a title the gate refuses or cannot judge is replaced by the project id, the attachment stays. `project.yaml` itself refuses a title with a line break or control character (REVIEW-0066 m1) |

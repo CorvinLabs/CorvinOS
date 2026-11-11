@@ -137,8 +137,10 @@ def _safe_rel(rel: str, what: str) -> str:
 
 #: file names a template never writes, at any depth: what git, the Claude CLI, direnv or Corvin read as configuration or as a grant
 _PROTECTED_NAMES = frozenset({"project.yaml", ".mcp.json", ".gitattributes", ".gitmodules", ".envrc"})
-#: folders a template never writes into, at any depth (``.github/workflows`` and ``kb/_meta`` as a pair)
-_PROTECTED_DIRS = frozenset({".git", ".claude", ".vscode"})
+#: names a template never writes, as a folder OR as a file, at any depth (REVIEW-0069): a FILE named ``.git`` is a ``gitdir:``
+#: redirect, so the final component is checked like every other one; ``head`` because a folder holding ``HEAD`` + ``objects/``
+#: + ``refs/`` is a git directory git discovers (and its ``config`` may set ``core.worktree`` + ``core.fsmonitor``)
+_PROTECTED_DIRS = frozenset({".git", ".claude", ".vscode", "head"})
 #: the one engine-owned folder below ``.corvin/`` a fragment may seed (the acs fragment's notes); ``.corvin/local`` is generated
 _CORVIN_SEEDABLE = (".corvin", "forge")
 
@@ -149,16 +151,19 @@ def _norm_part(part: str) -> str:
 
 
 def _safe_target(rel: str, what: str) -> str:
-    """A fragment file's ``dst``: a safe relative path (:func:`_safe_rel`) that names no control file (REVIEW-0066 m2) - nothing
-    below ``.git``, ``.claude`` or ``.vscode``, no ``.github/workflows``, nothing below ``.corvin`` except ``.corvin/forge/``, no
-    ``kb/_meta`` (the knowledge base's own configuration), and no ``project.yaml``, ``.mcp.json``, ``.gitattributes``,
-    ``.gitmodules`` or ``.envrc``. The console's own git calls are neutral, the operator's terminal git and claude are not."""
+    """A fragment file's ``dst``: a safe relative path (:func:`_safe_rel`) in which NO component - folder or final file name,
+    case-insensitively and with Windows' trailing dots/spaces ignored - is a control name (REVIEW-0066 m2, REVIEW-0069):
+    no ``.git``, ``.claude``, ``.vscode`` or ``HEAD``, no ``.github/workflows`` and no ``kb/_meta`` (the knowledge base's own
+    configuration), no ``.corvin`` except a file below the engine-owned ``.corvin/forge/``, and no ``project.yaml``,
+    ``.mcp.json``, ``.gitattributes``, ``.gitmodules`` or ``.envrc``. The console's own git calls are neutral, the operator's
+    terminal git and claude are not."""
     _safe_rel(rel, what)
     parts = [_norm_part(x) for x in rel.replace("\\", "/").split("/") if x not in ("", ".")]
-    bad = (not parts or parts[-1] in _PROTECTED_NAMES or any(x in _PROTECTED_DIRS for x in parts[:-1])
-           or any(parts[i:i + 2] == [".github", "workflows"] for i in range(len(parts) - 1))
-           or any(parts[i:i + 2] == ["kb", "_meta"] for i in range(len(parts) - 1))
-           or (".corvin" in parts[:-1] and tuple(parts[:2]) != _CORVIN_SEEDABLE))
+    pairs = [tuple(parts[i:i + 2]) for i in range(len(parts) - 1)]
+    bad = (not parts or any(x in _PROTECTED_NAMES or x in _PROTECTED_DIRS for x in parts)
+           or (".github", "workflows") in pairs or ("kb", "_meta") in pairs
+           or (".corvin" in parts and not (len(parts) > 2 and tuple(parts[:2]) == _CORVIN_SEEDABLE
+                                           and ".corvin" not in parts[1:])))
     if bad:
         raise FragmentError(f"{what}: {rel!r} names a protected file (git, Claude, editor or Corvin configuration)")
     return rel

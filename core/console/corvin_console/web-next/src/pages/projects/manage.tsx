@@ -1,12 +1,13 @@
 /** Adopt, rename, move, protection, chat attachment and the default place (T-0362, T-0387, T-0388). Every action says what it will and
  * will not touch before it runs. */
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
 import { adoptProject, attachProject, detachProject, getChatAttachment, getHealth, moveProject, renameProject, setDefaultStorage, setProjectSettings, type Access, type DataClass, type DefaultStorage, type ProjectDetail, type ProjectList } from "@/lib/api/projects";
-import { ACCESS_META, CLASS_META, CLASS_ORDER, accessOf, chatAccessSentence, classOf, lowersProtection, needsConfirmation } from "./roles";
+import { ACCESS_META, CLASS_META, CLASS_ORDER, accessOf, chatAccessSentence, chatToolsNote, classOf, lowersProtection, needsConfirmation, protectionHref } from "./roles";
 import { listChatSessions } from "@/lib/api/sessions";
 import { explain } from "./wizard";
 import { FolderField, FolderPicker } from "@/components/folder-picker";
@@ -171,9 +172,15 @@ export function AttachSection({ d, csrf }: { d: ProjectDetail; csrf: string }) {
   });
   const list = chats.data?.sessions ?? [];
   const attachedHere = current.data?.project_id === d.id;
+  const toolsNote = chatToolsNote(d);
   return (
     <div className="space-y-2" data-testid="attach-section">
-      <p className="text-sm text-muted-foreground" data-testid="attach-explain">Attach this project to one console chat: the chat can follow the project's rules and use its tools. {chatAccessSentence(d)} The chat keeps its own folder and history.</p>
+      <p className="text-sm text-muted-foreground" data-testid="attach-explain">Attach this project to one console chat: the chat can follow the project's rules{toolsNote ? "" : " and use its tools"}. {chatAccessSentence(d)} The chat keeps its own folder and history.</p>
+      {toolsNote && (
+        <p className="rounded border border-amber-600/40 p-2 text-sm" data-testid="attach-tools-note">
+          {toolsNote} <Link className="underline" to={protectionHref(d.id)} data-testid="attach-tools-link">Change what the assistant may do</Link>
+        </p>
+      )}
       {chats.error ? (
         <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="attach-chats-error">The chats could not be loaded. Reload the page to try again.</p>
       ) : chats.isLoading ? <p className="text-sm text-muted-foreground">Loading chats…</p> : list.length === 0 ? (

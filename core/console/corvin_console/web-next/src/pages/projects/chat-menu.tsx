@@ -15,7 +15,7 @@ import { anyWorking } from "./activity-logic";
 import { whereLabel } from "./encodings";
 import { ChangesPanel, changesKey } from "./changes-panel";
 import { ExplorerPanel } from "./explorer-panel";
-import { accessOf, badgeLine, classOf, roleLabel } from "./roles";
+import { accessOf, badgeLine, classOf, protectionHref, roleLabel } from "./roles";
 import { explain } from "./wizard";
 
 const attachKey = (sid: string) => ["projects", "chat-attachment", sid] as const;
@@ -119,6 +119,12 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
           {att.data?.withheld && (
             <p role="status" className="rounded border border-amber-600/40 p-2 text-xs" data-testid="project-menu-withheld">
               Attached, but not sent to the assistant right now: {att.data.withheld}
+            </p>
+          )}
+          {pid && att.data?.tools_withheld && (
+            <p role="status" className="rounded border border-amber-600/40 p-2 text-xs" data-testid="project-menu-tools">
+              This project's tools are not given to this chat. They reach a chat only when the assistant may edit files.{" "}
+              <Link className="underline" to={protectionHref(pid)} onClick={() => setOpen(false)} data-testid="project-menu-tools-link">Change what the assistant may do</Link>
             </p>
           )}
           <div role="radiogroup" aria-label="Project" className="space-y-1">

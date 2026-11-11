@@ -72,6 +72,8 @@ export interface TemplateFeature {
   requires: string[];
   suggests: string[];
   plugins: PluginNeed[];
+  /** Brings MCP tools; they reach an attached chat only when the assistant may edit files. */
+  tools?: boolean;
 }
 
 export interface TemplateInfo {
@@ -170,6 +172,8 @@ export interface FeatureRow {
   suggests: string[];
   dependants: string[];
   plugins: PluginNeed[];
+  /** Brings MCP tools; they reach an attached chat only when the assistant may edit files. */
+  tools?: boolean;
 }
 
 export interface ProjectDetail extends ProjectSummary {
@@ -294,14 +298,18 @@ export function moveProject(id: string, location: string, csrf: string): Promise
   return api(`/projects/${encodeURIComponent(id)}/move`, { method: "POST", body: { location }, csrf });
 }
 
-export interface ChatAttachment { session_id: string; project_id: string | null; title: string | null; withheld?: string | null }
+export interface ChatAttachment {
+  session_id: string; project_id: string | null; title: string | null; withheld?: string | null;
+  /** A feature with tools is on, but the assistant reads only: the chat gets none of them. */
+  tools_withheld?: boolean;
+}
 
 /** Which project (if any) one console chat is attached to. */
 export function getChatAttachment(sessionId: string, signal?: AbortSignal): Promise<ChatAttachment> {
   return api<ChatAttachment>(`/projects/chat-attachment?session_id=${encodeURIComponent(sessionId)}`, { signal });
 }
 
-/** Attaches the project to one chat: its rules and tools become available there; its files stay read-only. */
+/** Attaches the project to one chat: its rules become available there, its tools only when the assistant may edit files. */
 export function attachProject(id: string, sessionId: string, csrf: string): Promise<{ attached: boolean; note: string }> {
   return api(`/projects/${encodeURIComponent(id)}/attach`, { method: "POST", body: { session_id: sessionId }, csrf });
 }

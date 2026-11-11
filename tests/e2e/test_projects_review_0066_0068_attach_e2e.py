@@ -112,10 +112,18 @@ class Review0066TitleAndReview0068Offered(_Base):
             parts = attachment.spawn_parts("_default", sid, class_allows=lambda x: True)
             self.assertEqual(parts["access"], "read")
             self.assertIsNone(parts["mcp_config"], "a read-only project must not hand write-capable MCP tools to the chat")
+            # REVIEW-0069 N1: the console says so - the feature row names the tools, the attachment says they are withheld
+            rows = {f["id"]: f for f in c.own.get(f"{_URL}/{pid}").json()["catalogue"]["features"]}
+            self.assertIs(rows["acs"]["tools"], True)
+            self.assertIs(rows["core"]["tools"], False)
+            self.assertIs({f["id"]: f for f in c.own.get(f"{_URL}/templates").json()["features"]}["acs"]["tools"], True)
+            got = c.own.get(f"{_URL}/chat-attachment", params={"session_id": sid}).json()
+            self.assertIs(got["tools_withheld"], True)
             s = c.own.put(f"{_URL}/{pid}/settings", json={"assistant_access": "write", "confirm": True}, headers=self._h(c))
             self.assertEqual(s.status_code, 200, s.text)
             self.assertEqual(attachment.spawn_parts("_default", sid, class_allows=lambda x: True)["mcp_config"],
                              str(root / ".corvin/local/mcp.json"))
+            self.assertIs(c.own.get(f"{_URL}/chat-attachment", params={"session_id": sid}).json()["tools_withheld"], False)
 
 
 if __name__ == "__main__":
