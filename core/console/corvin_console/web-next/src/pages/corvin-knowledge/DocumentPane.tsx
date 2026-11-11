@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/markdown";
 import { api, ApiError } from "@/lib/api/client";
-import { NODE_HREF_PREFIX, linkifyMarkdown, type LinkIndex } from "./link-resolver";
+import { NODE_HREF_PREFIX, linkifyMarkdown, resolveKey, type LinkIndex } from "./link-resolver";
 
 export interface DocRef { id: string; label: string; title: string; type: string; relation: string }
 export interface KnowledgeDoc {
@@ -65,6 +65,8 @@ export function DocumentPane({ nodeKey, project = null, index, basePath, onOpen,
     () => (q.data ? linkifyMarkdown(q.data.markdown, index, q.data.entity.id, project) : ""),
     [q.data, index, project],
   );
+  // a link list entry is a raw uid of this document's knowledge base; in a joined view it must open THIS base's node, not the original's
+  const openRef = useMemo(() => (k: string) => onOpen(resolveKey(index, k, project)), [index, project, onOpen]);
   const internal = useMemo(
     () => ({ prefix: NODE_HREF_PREFIX, onNavigate: (rest: string) => { try { onOpen(decodeURIComponent(rest)); } catch { /* malformed href */ } } }),
     [onOpen],
@@ -94,8 +96,8 @@ export function DocumentPane({ nodeKey, project = null, index, basePath, onOpen,
         <div data-testid="knowledge-doc-body">
           {body.trim() ? <Markdown text={body} internalHref={internal} /> : <p className="text-sm font-semibold">{d.entity.title}</p>}
         </div>
-        <RefList title="Links" refs={d.outgoing} onOpen={onOpen} testid="knowledge-doc-outgoing" />
-        <RefList title="Linked from" refs={d.incoming} onOpen={onOpen} testid="knowledge-doc-incoming" />
+        <RefList title="Links" refs={d.outgoing} onOpen={openRef} testid="knowledge-doc-outgoing" />
+        <RefList title="Linked from" refs={d.incoming} onOpen={openRef} testid="knowledge-doc-incoming" />
       </>
     );
   }

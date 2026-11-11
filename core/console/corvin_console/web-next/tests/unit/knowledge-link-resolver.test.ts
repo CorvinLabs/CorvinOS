@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLinkIndex, linkifyMarkdown, nodeHref, parseNodeHref } from "@/pages/corvin-knowledge/link-resolver";
+import { buildLinkIndex, linkifyMarkdown, nodeHref, parseNodeHref, resolveKey } from "@/pages/corvin-knowledge/link-resolver";
 import { neighbourhood, newestDecisionKey, searchNodes } from "@/pages/corvin-knowledge/graph-model";
 
 const index = buildLinkIndex([
@@ -110,5 +110,20 @@ describe("a joined view resolves a document's references inside its own knowledg
   });
   it("outside a joined view nothing changes", () => {
     expect(lk("see ADR-2206")).toBe("see [ADR-2206](?node=UID-A)");
+  });
+});
+
+describe("the Links and Linked from lists open the node of the document's own knowledge base", () => {
+  const joined = buildLinkIndex([
+    { id: "U2", uid: "U2", label: "orig/T-0001", scope: "orig" },
+    { id: "U2@copy", uid: "U2", label: "copy/T-0001", scope: "copy" },
+  ]);
+  it("a raw uid from a copy's list resolves to the copy's node, from the original's to the original's", () => {
+    expect(resolveKey(joined, "U2", "copy")).toBe("U2@copy");
+    expect(resolveKey(joined, "U2", "orig")).toBe("U2");
+  });
+  it("an unknown key and a view that is not joined keep the key", () => {
+    expect(resolveKey(joined, "nope", "copy")).toBe("nope");
+    expect(resolveKey(index, "UID-A", null)).toBe("UID-A");
   });
 });

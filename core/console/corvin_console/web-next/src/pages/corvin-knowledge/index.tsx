@@ -27,7 +27,7 @@ import { DocumentPane } from "./DocumentPane";
 import { listProjects } from "@/lib/api/projects";
 import { ScopeSelect } from "@/pages/projects/scope-select";
 import { boundName, boundRepoLabel, graphScopes, listedProjects, mergeGraphs, resolveScope, scopeLabel, scopeList, scopeParam, selectableProjects } from "@/pages/projects/scope";
-import { buildLinkIndex } from "./link-resolver";
+import { buildLinkIndex, viewFor } from "./link-resolver";
 import { neighbourhood, newestDecisionKey, searchNodes } from "./graph-model";
 
 export interface KnowledgeEntity { id: string; label?: string; file?: string; type: string; title: string; status: string; tags: string[]; /** the project whose knowledge base holds the node (ADR-2316); null/absent = the bound KB */ scope?: string | null; /** the uid in its own knowledge base when the joined view had to qualify the node id */ uid?: string }
@@ -153,10 +153,16 @@ export function CorvinKnowledgePage() {
   const nodeParam = params.get("node");
   const known = useMemo(() => new Set(entities.map((e) => e.id)), [entities]);
   // The parameter may be a node key (uid) or the human id of a hand-written link (ADR-2206).
-  const resolvedParam = nodeParam ? (linkIndex.byKey.get(nodeParam) ?? linkIndex.byLabel.get(nodeParam) ?? null) : null;
+  // In ONE project's view its labels are qualified ("<project>/ADR-2206"), so the human id is looked up in that knowledge base's own
+  // lookups; the joined view keeps the qualified labels, where a bare id could name several knowledge bases.
+  const oneProject = scope.kind === "project" ? scope.id : null;
+  const paramIndex = useMemo(() => (oneProject !== null ? viewFor(linkIndex, oneProject) : linkIndex), [linkIndex, oneProject]);
+  const resolvedParam = nodeParam ? (paramIndex.byKey.get(nodeParam) ?? paramIndex.byLabel.get(nodeParam) ?? null) : null;
   const unknownParam = nodeParam !== null && resolvedParam === null && entities.length > 0;
   const selectedKey = resolvedParam ?? newestDecisionKey(entities);
-  const select = useCallback((key: string) => setParams({ node: key }), [setParams]);
+  // opening a node keeps every other parameter, the chosen knowledge base above all: replacing the query with ?node= alone sent the
+  // reader of a joined view back to the default knowledge base on the first click
+  const select = useCallback((key: string) => setParams((p) => { const n = new URLSearchParams(p); n.set("node", key); return n; }), [setParams]);
   const canGoBack = location.key !== "default";
   // the document is requested by the entity's own uid: in the joined view a copy's node id is "<uid>@<project>" (REVIEW-0071 N6)
   const selectedEntity = selectedKey && known.has(selectedKey) ? entities.find((e) => e.id === selectedKey) ?? null : null;

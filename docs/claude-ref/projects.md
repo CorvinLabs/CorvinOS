@@ -1152,7 +1152,12 @@ Pure decisions in `pages/projects/scope.ts` (`tests/unit/projects-scope.test.ts`
   and that part's relation endpoints are remapped the same way (a dangling endpoint gets a key no node has), so the joined
   total is the sum of the parts - until REVIEW-0071 N6 the later node was dropped (live: 19 entities of two copies missing)
   and the copy's relations attached to the original's nodes. A node's document is read with its own uid and project
-  (`/doc/{uid}?project=<id>`). `projects-scope-live.spec.ts` computes the expected All total from the per-scope counts it
+  (`/doc/{uid}?project=<id>`). References resolve inside the knowledge base the document belongs to (`buildLinkIndex`
+  keeps per-scope lookups, `viewFor`/`resolveKey` layer them over the joined ones): a bare id, a `[[uid]]`, a relative
+  `.md` link and the "Links"/"Linked from" lists of a copy's document open the copy's nodes, never the original's
+  (REVIEW-0071 follow-up, REVIEW-0072 N7). In ONE project's view `?node=ADR-2206` resolves against that project's own
+  ids, although its labels are qualified. Opening a node only sets `node` and keeps every other parameter: until
+  REVIEW-0072 the first click replaced the query with `?node=` and dropped the chosen knowledge base. `projects-scope-live.spec.ts` computes the expected All total from the per-scope counts it
   reads (every selectable scope, same endpoint), not from an assumption about which projects exist. Each answer carries `repo_path` and `graph_state` (`ok`/`built`/`empty`/`missing`/
   `error` + `graph_error`); the stats line shows "<scope> · Repository: <that path>" (or "N knowledge bases"), an
   empty project KB says so with its own path, and a graph that could not be built is named in a banner. Pull/Push/Sync

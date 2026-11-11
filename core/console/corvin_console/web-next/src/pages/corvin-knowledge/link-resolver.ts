@@ -71,6 +71,14 @@ export function viewFor(index: LinkIndex, scope: string | null | undefined): Lin
   return { byLabel: layer(own.byLabel, index.byLabel), byKey: layer(own.byKey, index.byKey), byFile: layer(own.byFile, index.byFile), scoped: index.scoped };
 }
 
+/**
+ * The node a key names, as the knowledge base of `scope` names it. The server's link lists ("Links", "Linked from") carry raw uids of
+ * the document's own knowledge base; in a joined view the same uid may belong to the original first, so it is translated here.
+ */
+export function resolveKey(index: LinkIndex, key: string, scope: string | null | undefined): string {
+  return viewFor(index, scope).byKey.get(key) ?? key;
+}
+
 export function buildLinkIndex(entities: LinkTarget[]): LinkIndex {
   const byLabel = new Map<string, string>();
   const byFile = new Map<string, string>();

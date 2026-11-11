@@ -190,3 +190,66 @@ test("when the graph reads Corvin's own knowledge base, Corvin is the default an
     ["All knowledge bases", "Corvin", "Plumbline", "demo (no knowledge base - switch it on in Features)"]);
   await expect(page.getByTestId("scope-bound-note")).toHaveCount(0);
 });
+
+test("in the joined view a copy's document and its link list open the copy's nodes, not the original's (REVIEW-0071, REVIEW-0072 N7)", async ({ page }) => {
+  // a duplicated project carries its original's knowledge base verbatim: same uids, same ids
+  const two = { projects_root: "/home/u/projects", projects: [
+    { id: "orig", path: "/home/u/projects/orig", template: "blank@1", state: "ok", title: "Original", kb: true, active: ["core", "kb"] },
+    { id: "copy", path: "/home/u/projects/copy", template: "blank@1", state: "ok", title: "Original (copy)", kb: true, active: ["core", "kb"] },
+  ] };
+  await stub(page);
+  await page.unroute(/\/v1\/console\/projects$/);
+  await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: two }));
+  const ent = (uid: string, label: string) => ({ id: uid, label, file: `${label}.md`, type: "decision", title: label, status: "accepted", tags: [] });
+  await page.unroute(/\/v1\/console\/plugins\/corvin-knowledge\/graph(\?|$)/);
+  await page.route(/\/v1\/console\/plugins\/corvin-knowledge\/graph(\?|$)/, (r) => {
+    const project = new URL(r.request().url()).searchParams.get("project");
+    const entities = project ? [ent("U1", "ADR-0001"), ent("U2", "ADR-0002")] : [];
+    return r.fulfill({ json: { entities, relations: project ? [{ from_id: "U1", to_id: "U2", type: "related" }] : [], duplicate_rows: 0,
+      graph_state: "ok", graph_error: null, repo_path: project ? `/home/u/projects/${project}/docs` : "/k" } });
+  });
+  // the real /doc route answers with the knowledge base's own raw uids, the project named by ?project=
+  await page.route(/\/v1\/console\/plugins\/corvin-knowledge\/doc\//, (r) => {
+    const u = new URL(r.request().url());
+    const uid = decodeURIComponent(u.pathname.split("/").pop() ?? "");
+    const project = u.searchParams.get("project") ?? "bound";
+    const label = uid === "U1" ? "ADR-0001" : "ADR-0002";
+    const ref = { id: "U2", label: "ADR-0002", title: "ADR-0002", type: "decision", relation: "related" };
+    return r.fulfill({ json: { entity: { id: uid, label, type: "decision", title: label, status: "accepted", realization: "" }, frontmatter: {},
+      markdown: uid === "U1" ? `# ${project} ADR-0001\n\nsee ADR-0002` : `# ${project} ADR-0002`, outgoing: uid === "U1" ? [ref] : [], incoming: [] } });
+  });
+  await page.goto(`/console/app/corvin-knowledge?scope=all&node=${encodeURIComponent("U1@copy")}`);
+  const body = page.getByTestId("knowledge-doc-body");
+  await expect(body).toContainText("copy ADR-0001");
+  // the link in the text
+  await body.getByRole("link", { name: "ADR-0002" }).click();
+  await expect(page).toHaveURL(/node=U2%40copy/);
+  await expect(body).toContainText("copy ADR-0002");
+  // the "Links" list
+  await page.goBack();
+  await expect(body).toContainText("copy ADR-0001");
+  await page.getByTestId("knowledge-doc-outgoing").getByRole("button", { name: "ADR-0002" }).click();
+  await expect(page).toHaveURL(/node=U2%40copy/);
+  await expect(body).toContainText("copy ADR-0002");
+  // and the original stays the original
+  await page.goto(`/console/app/corvin-knowledge?scope=all&node=U1`);
+  await expect(body).toContainText("orig ADR-0001");
+  await page.getByTestId("knowledge-doc-outgoing").getByRole("button", { name: "ADR-0002" }).click();
+  await expect(body).toContainText("orig ADR-0002");
+});
+
+test("in one project's view a hand-written link with a human id opens that project's node, and a click keeps the view", async ({ page }) => {
+  await stub(page);
+  await page.route(/\/v1\/console\/plugins\/corvin-knowledge\/doc\//, (r) => {
+    const u = new URL(r.request().url());
+    return r.fulfill({ json: { entity: { id: decodeURIComponent(u.pathname.split("/").pop() ?? ""), label: "T-0001", type: "decision", title: "Project decision",
+      status: "accepted", realization: "" }, frontmatter: {}, markdown: `# from ${u.searchParams.get("project") ?? "bound"}`, outgoing: [], incoming: [] } });
+  });
+  // the project's labels are qualified ("alpha/T-0001") inside the page; the human id of the project's own knowledge base still resolves
+  await page.goto("/console/app/corvin-knowledge?scope=project:alpha&node=T-0001");
+  await expect(page.getByTestId("knowledge-doc-body")).toContainText("from alpha");
+  await expect(page.getByTestId("knowledge-unknown-node")).toHaveCount(0);
+  await page.getByTestId("knowledge-search-input").fill("decision");
+  await page.getByTestId("knowledge-search-hits").getByRole("button").first().click();
+  await expect(page).toHaveURL(/scope=project(%3A|:)alpha/);
+});

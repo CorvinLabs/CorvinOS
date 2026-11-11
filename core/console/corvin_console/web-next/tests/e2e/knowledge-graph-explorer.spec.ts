@@ -52,7 +52,8 @@ test("opens on a document and a real graph canvas", async () => {
   await expect(page).toHaveURL(/\/app\/corvin-knowledge/);
   await expect(page.getByTestId("knowledge-hint")).toContainText("Click a node to read its document.");
   await expect(page.getByTestId("knowledge-doc-body")).not.toBeEmpty({ timeout: 20_000 });
-  await expect(page.getByTestId("knowledge-doc-id")).toContainText(/^ADR-\d{4}$/);
+  // the newest decision, or the first node of a knowledge base without decisions: the graph's Repository setting is the operator's
+  await expect(page.getByTestId("knowledge-doc-id")).toContainText(/^[A-Z]+-\d{2,4}$/);
   await expect(page.getByTestId("knowledge-graph-canvas").locator("canvas")).toHaveCount(1);
 });
 
@@ -71,11 +72,15 @@ test("mouse-wheel zoom changes the graph view", async () => {
 });
 
 test("a node found by search opens its Markdown and puts it in the URL", async () => {
+  // from here on the suite reads Corvin's own knowledge base, chosen explicitly; every later click must keep that choice in the URL
+  await page.getByTestId("scope-select").selectOption("project:corvin");
+  await expect(page).toHaveURL(/scope=project(%3A|:)corvin/);
   await page.getByLabel("Find a node").fill("ADR-2206");
   await page.getByTestId("knowledge-search-hits").getByRole("button").first().click();
   await expect(page).toHaveURL(/[?&]node=/);
   await expect(page.getByTestId("knowledge-doc-id")).toHaveText("ADR-2206");
   await expect(page.getByTestId("knowledge-doc-body")).toContainText(/Knowledge Graph/i);
+  await expect(page).toHaveURL(/scope=project(%3A|:)corvin/);             // opening a node keeps the chosen knowledge base
 });
 
 let first = "";
@@ -103,7 +108,7 @@ test("Focus mode shows a neighbourhood, All mode the whole graph", async () => {
 });
 
 test("the whole graph is drawn as separate islands, not one clump; Force is still selectable", async () => {
-  await page.goto(`${BASE_URL}/app/corvin-knowledge`);
+  await page.goto(`${BASE_URL}/app/corvin-knowledge?scope=project:corvin`);
   await page.getByRole("button", { name: "All", exact: true }).click();
   const canvas = page.getByTestId("knowledge-graph-canvas");
   await expect(canvas).toHaveAttribute("data-layout", "islands", { timeout: 20_000 });
@@ -116,10 +121,10 @@ test("the whole graph is drawn as separate islands, not one clump; Force is stil
 });
 
 test("a hand-written link with a human id opens that node; an unknown id says so", async () => {
-  await page.goto(`${BASE_URL}/app/corvin-knowledge?node=ADR-2206`);
+  await page.goto(`${BASE_URL}/app/corvin-knowledge?scope=project:corvin&node=ADR-2206`);
   await expect(page.getByTestId("knowledge-doc-id")).toHaveText("ADR-2206", { timeout: 20_000 });
   expect(await shown()).toBeLessThan(200);   // Focus mode, not the whole graph
-  await page.goto(`${BASE_URL}/app/corvin-knowledge?node=ADR-9999`);
+  await page.goto(`${BASE_URL}/app/corvin-knowledge?scope=project:corvin&node=ADR-9999`);
   await expect(page.getByTestId("knowledge-unknown-node")).toContainText("ADR-9999");
   await expect(page.getByTestId("knowledge-doc-id")).toContainText(/^ADR-\d{4}$/);
 });
