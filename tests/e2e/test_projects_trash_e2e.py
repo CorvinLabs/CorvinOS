@@ -382,17 +382,24 @@ class Sweep(TrashBase):
             self.assertTrue((mr / ".trash" / entry).is_dir())
             self.assertEqual(c.svc.sweep_trash("_default", busy=True, now=now + 31 * DAY), {"purged": 0, "skipped": "busy"})
             self.assertTrue((mr / ".trash" / entry).is_dir())
-            # a pending entry (a delete that has not finished) is never swept
+            # a pending entry whose delete is RUNNING (it holds the project lock) is never swept (REVIEW-0064 #8)
+            from core.projects import registry
+            from core.projects.fsutil import file_lock
             pend = mr / ".trash" / "iota-20260101T000000Z"
             (pend / "project").mkdir(parents=True)
             (pend / "trash.json").write_text(json.dumps({"id": "iota", "title": "Iota", "deleted_at": "2026-01-01T00:00:00Z",
                                                          "deleted_ts": 0, "state": "pending"}))
-            res = c.svc.sweep_trash("_default", now=now + 31 * DAY)
+            with file_lock(registry.registry_path("_default").with_name("project-iota.lock")):
+                res = c.svc.sweep_trash("_default", now=now + 31 * DAY)
             self.assertEqual(res["purged"], 1)
             self.assertFalse((mr / ".trash" / entry).exists())
-            self.assertTrue(pend.is_dir(), "a pending entry is skipped")
+            self.assertTrue(pend.is_dir(), "a pending entry under a running delete is skipped")
             self.assertTrue((self.managed_root(c, "acme") / ".trash" / oentry).is_dir(), "the other tenant's trash is its own")
             self.assertEqual(self.outcomes(c, "project.deleted"), ["requested", "applied", "purged"])
+            # ... and once no delete holds the lock it is a crash's: settled, then swept like any expired entry
+            self.assertEqual(c.svc.sweep_trash("_default", now=now + 31 * DAY)["purged"], 1)
+            self.assertFalse(pend.exists())
+            self.assertEqual(self.outcomes(c, "project.deleted"), ["requested", "applied", "purged", "recovered", "purged"])
             from core.projects import registry
             self.assertIsNone(registry.get("_default", pid))
 
@@ -492,6 +499,122 @@ class Erasure(TrashBase):
             self.assertEqual((r.status, r.count), (LayerStatus.SKIPPED, 0))
             self.assertEqual(_tree(mr / ".trash"), before)
             self.assertEqual([t["entry"] for t in self.trash(c)], [entry])
+
+
+class CrashWindows(TrashBase):
+    """REVIEW-0064 #8: a delete a crash interrupted never leaves an entry ``pending`` forever. Each crash point is planted the
+    way ``delete_project_files`` leaves it; the trash listing (and Restore, Delete permanently, the sweep) settle it under the
+    project lock."""
+
+    def _sidecar(self, d: Path) -> dict:
+        return json.loads((d / "trash.json").read_text())
+
+    def _set_pending(self, d: Path) -> None:
+        side = self._sidecar(d)
+        side["state"] = "pending"
+        (d / "trash.json").write_text(json.dumps(side))
+
+    def test_a_crash_after_the_list_followed_is_settled_by_the_listing(self):
+        with self.ctx() as c:
+            pid, _root = self.create(c, "Kappa")
+            entry = self.delete(c, pid).json()["trash_entry"]
+            d = self.managed_root(c) / ".trash" / entry
+            self._set_pending(d)                                         # the crash: set_trashed done, sidecar not yet
+            rows = self.trash(c)
+            self.assertEqual([(r["entry"], r["pending"]) for r in rows], [(entry, False)])
+            self.assertEqual(self._sidecar(d)["state"], "trashed")
+            self.assertIn("recovered", self.outcomes(c, "project.deleted"))
+            r = self.purge(c, entry, pid)
+            self.assertEqual(r.status_code, 200, r.text)
+
+    def test_a_crash_between_the_rename_and_the_list_is_completed_and_restorable(self):
+        with self.ctx() as c:
+            pid, root = self.create(c, "Lambda")
+            (root / "keep.txt").write_text("kept\n")
+            t = self.managed_root(c) / ".trash"
+            t.mkdir(exist_ok=True)
+            d = t / f"{pid}-20260102T030405Z"
+            d.mkdir()
+            (d / "trash.json").write_text(json.dumps({"schema": 1, "id": pid, "title": "Lambda", "deleted_at": "2026-01-02T03:04:05Z",
+                                                      "deleted_ts": c.svc._now(), "original_path": str(root), "state": "pending"}))
+            os.rename(root, d / "project")                               # the crash: renamed, the list still names the old place
+            self.assertEqual(self.trash(c)[0]["pending"], False)
+            lst = c.own.get(_URL).json()
+            self.assertNotIn(pid, [p["id"] for p in lst["projects"]])
+            self.assertIn(pid, [p["id"] for p in lst["trashed"]])
+            r = self.restore(c, d.name)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual((root / "keep.txt").read_text(), "kept\n")
+            self.assertIn(pid, self.ids(c))
+
+    def test_a_crash_before_the_rename_leaves_nothing_behind(self):
+        with self.ctx() as c:
+            pid, root = self.create(c, "Mu")
+            t = self.managed_root(c) / ".trash"
+            t.mkdir(exist_ok=True)
+            d = t / f"{pid}-20260102T030405Z"
+            d.mkdir()
+            (d / "trash.json").write_text(json.dumps({"schema": 1, "id": pid, "title": "Mu", "deleted_at": "2026-01-02T03:04:05Z",
+                                                      "deleted_ts": c.svc._now(), "original_path": str(root), "state": "pending"}))
+            self.assertEqual(self.trash(c), [])
+            self.assertFalse(d.exists())
+            self.assertTrue(root.is_dir())
+            self.assertIn(pid, self.ids(c))
+
+    def test_a_running_delete_is_never_touched_by_the_listing(self):
+        from core.projects import registry
+        from core.projects.fsutil import file_lock
+        with self.ctx() as c:
+            pid, _root = self.create(c, "Nu")
+            entry = self.delete(c, pid).json()["trash_entry"]
+            d = self.managed_root(c) / ".trash" / entry
+            self._set_pending(d)
+            with file_lock(registry.registry_path("_default").with_name(f"project-{pid}.lock")):
+                self.assertEqual(self.trash(c)[0]["pending"], True)
+            self.assertEqual(self._sidecar(d)["state"], "pending")
+            self.assertNotIn("recovered", self.outcomes(c, "project.deleted"))
+
+
+class ExplicitRefusals(TrashBase):
+    # REVIEW-0064 #9 (no assert as control flow) and #10 (a pending import has its own sentence)
+    def test_a_missing_workspace_is_an_answer_not_an_assertion(self):
+        from core.projects import registry
+        with self.ctx() as c:
+            pid, _root = self.create(c, "Xi")
+            with mock.patch.object(c.svc, "_trash_root", lambda tenant, create=False: None):
+                r = self.delete(c, pid)
+                self.assertEqual(r.status_code, 409, r.text)
+                self.assertEqual(r.json()["detail"]["reason_class"], "missing")
+                self.assertTrue(r.json()["detail"]["message"].startswith("The Corvin workspace is not available"))
+                with self.assertRaises(c.svc.Conflict):
+                    c.svc._remove_entry("_default", self.tmp, {"id": pid})
+            entry = self.delete(c, pid).json()["trash_entry"]
+            d = self.managed_root(c) / ".trash" / entry
+            real = registry.known_managed_root
+            calls = {"n": 0}
+
+            def gone_after_lookup(tenant):
+                return None if calls["n"] else real(tenant)
+
+            with mock.patch.object(c.svc, "_trash_entry_dir", lambda tenant, e: (calls.__setitem__("n", 1), d)[1]), \
+                    mock.patch.object(registry, "known_managed_root", gone_after_lookup):
+                r = self.restore(c, entry)
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertEqual(r.json()["detail"]["reason_class"], "missing")
+
+    def test_deleting_a_pending_import_names_the_import(self):
+        from core.projects import registry
+        with self.ctx() as c:
+            pid, _root = self.create(c, "Omicron")
+            f = registry.registry_path("_default")
+            data = json.loads(f.read_text())
+            for e in data["projects"]:
+                if e.get("id") == pid:
+                    e["pending"] = "import"
+            f.write_text(json.dumps(data))
+            r = self.delete(c, pid)
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertEqual(r.json()["detail"], {"message": c.svc.PENDING_DELETE, "reason_class": "pending"})
 
 
 if __name__ == "__main__":

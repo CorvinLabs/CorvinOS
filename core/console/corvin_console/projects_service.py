@@ -1268,6 +1268,11 @@ _TRASH_SIDECAR = "trash.json"
 _TRASH_FILES = "project"
 _TRASH_ENTRY_RE = re.compile(r"^([a-z0-9][a-z0-9-]{0,27})-(\d{8}T\d{6}Z)(?:-([2-9]|[1-9]\d))?$")
 NOT_MANAGED = "Only projects in the Corvin workspace can be deleted here; this one lives in your own folder."
+PENDING_DELETE = ("This project is still being imported; wait until the import finishes, or remove the unfinished import "
+                  "with the doctor's Repair, then delete it.")
+WORKSPACE_MISSING = "The Corvin workspace is not available right now; nothing changed."
+#: how long a pending trash listing waits for the project lock before it leaves the row pending (a delete is running)
+TRASH_SETTLE_WAIT_S = 0.2
 CONFIRM_MISMATCH = "Type the project id exactly to confirm."
 IN_TRASH = "In Trash"
 
@@ -1400,8 +1405,14 @@ def list_trash(tenant_id: str, *, offset: int = 0, limit: int = TRASH_SCAN_LIMIT
     ``TRASH_SCAN_LIMIT`` entries; ``total`` counts every entry, ``next_offset`` is None on the last page."""
     offset = max(int(offset), 0)
     limit = min(max(int(limit), 1), TRASH_SCAN_LIMIT)
+    rows = []
+    for d, side in _trash_scan(tenant_id, newest_first=True, offset=offset, limit=limit):
+        if side.get("state") != "trashed":
+            side = _settle_if_idle(tenant_id, d, side)              # REVIEW-0064 #8: a crash's pending entry is settled here
+            if side is None:
+                continue
+        rows.append(_trash_row(d.name, side))
     total = trash_count(tenant_id)
-    rows = [_trash_row(d.name, side) for d, side in _trash_scan(tenant_id, newest_first=True, offset=offset, limit=limit)]
     nxt = offset + limit if offset + limit < total else None
     return {"entries": rows, "ttl_days": int(TRASH_TTL_S // 86400), "total": total, "offset": offset, "limit": limit,
             "next_offset": nxt}
@@ -1434,7 +1445,11 @@ def delete_project_files(tenant_id: str, project_id: str, *, confirm_id: str) ->
     """``DELETE /projects/{id}/files``: move a MANAGED project's folder to the trash (restorable for 30 days)."""
     _refuse_builtin(project_id)
     e = _entry(tenant_id, project_id)
-    if (e.get("storage") or "own") != "managed" or e.get("pending"):
+    if e.get("pending"):
+        # REVIEW-0064 #10: an import that has not finished is not "your own folder"
+        _audit_refusal(tenant_id, "pending", project_id)
+        raise Conflict(PENDING_DELETE, "pending")
+    if (e.get("storage") or "own") != "managed":
         _audit_refusal(tenant_id, "not_managed", project_id)
         raise Conflict(NOT_MANAGED, "not_managed")
     if confirm_id != project_id:
@@ -1448,7 +1463,8 @@ def delete_project_files(tenant_id: str, project_id: str, *, confirm_id: str) ->
     if not root.is_dir():
         raise Conflict("the project folder is missing; remove the project from the list instead", "missing")
     t = _trash_root(tenant_id, create=True)
-    assert t is not None
+    if t is None:                                                    # REVIEW-0064 #9: an explicit answer, never an assert
+        raise Conflict(WORKSPACE_MISSING, "missing")
     now = _now()
     name = _trash_name(t, project_id, now)
     title = project_id
@@ -1498,6 +1514,51 @@ def _audit_tenant_error(tenant_id: str, project_id: str) -> None:
         _tt._chain(tenant_id, "project.deleted", {"project_id": project_id, "outcome": "error"})
 
 
+def _settle_pending(tenant_id: str, d: Path, side: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """REVIEW-0064 #8: finish a delete-to-trash a crash interrupted. Called with the project's lock held - every delete holds it
+    from the sidecar's ``pending`` write to its ``trashed`` write, so a pending sidecar seen under the lock is a crash's.
+
+    * no ``project/`` folder: the folder never moved (the crash came before the rename) - the entry is removed (None), unless
+      the list already points at it (then it is marked ``trashed`` so Delete permanently and the sweep can clear it);
+    * the list points at this entry (crash after ``set_trashed``): the sidecar is set ``trashed``;
+    * the list still points at the original folder, which is gone (crash between the rename and ``set_trashed``): the list
+      follows (``set_trashed``), then the sidecar - the delete the operator confirmed is completed, never undone;
+    * otherwise (no list entry, or one that names another folder or entry): the sidecar is set ``trashed``; Restore then
+      answers ``id_taken``/``trash_entry_mismatch`` as for any trashed entry, Delete permanently and the sweep work.
+
+    Audit-first: ``project.deleted outcome=recovered`` before the list or the entry changes (an unavailable chain leaves the
+    entry pending, :class:`AuditUnavailable` propagates). Returns the new sidecar, or None when the entry is gone."""
+    pid = side["id"]
+    files = d / _TRASH_FILES
+    e = registry.get(tenant_id, pid)
+    here = registry.is_trashed(e) and e.get("trash_entry") == d.name
+    _audit(tenant_id, "project.deleted", project_id=pid, outcome="recovered")
+    if is_link(files) or not files.is_dir():
+        if not here:
+            shutil.rmtree(d, ignore_errors=True)
+            return None
+    elif (e is not None and not registry.is_trashed(e) and str(e.get("path") or "") == str(side.get("original_path") or "")
+          and not os.path.lexists(str(e.get("path") or ""))):
+        registry.set_trashed(tenant_id, pid, files, d.name)
+    new = {**side, "state": "trashed"}
+    _write_sidecar(d, new)
+    return new
+
+
+def _settle_if_idle(tenant_id: str, d: Path, side: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """For the listing: settle a pending entry when its project lock is free right now, else leave it pending (a delete is
+    running). Any failure leaves the row as it was."""
+    from core.projects.fsutil import file_lock  # noqa: PLC0415
+    try:
+        with file_lock(registry.registry_path(tenant_id).with_name(f"project-{side['id']}.lock"), timeout=TRASH_SETTLE_WAIT_S):
+            again = _entry_sidecar(d)
+            if again is None or again.get("state") == "trashed":
+                return again
+            return _settle_pending(tenant_id, d, again)
+    except Exception:  # noqa: BLE001 - LockBusy, an unavailable chain, an OSError: the row stays pending, the next look retries
+        return side
+
+
 def restore_project(tenant_id: str, entry: str) -> dict[str, Any]:
     """``POST /projects/-/trash/{entry}/restore``: rename the folder back to ``<managed_root>/<id>`` when that place is free."""
     d = _trash_entry_dir(tenant_id, entry)
@@ -1513,6 +1574,10 @@ def _restore_locked(tenant_id: str, project_id: str, entry: str) -> dict[str, An
     side = _entry_sidecar(d)
     if side is None or side["id"] != project_id:
         raise NotFound("no such trash entry")
+    if side.get("state") != "trashed":
+        side = _settle_pending(tenant_id, d, side)                  # REVIEW-0064 #8: a delete a crash interrupted
+        if side is None:
+            raise NotFound("no such trash entry")
     files = d / _TRASH_FILES
     if is_link(files) or not files.is_dir():
         raise Conflict("this trash entry holds no project folder", "missing")
@@ -1524,7 +1589,8 @@ def _restore_locked(tenant_id: str, project_id: str, entry: str) -> dict[str, An
         _audit_refusal(tenant_id, "trash_entry_mismatch", project_id)
         raise Conflict("another trash entry holds this project; restore that one", "id_taken")
     mr = registry.known_managed_root(tenant_id)
-    assert mr is not None
+    if mr is None:                                                   # REVIEW-0064 #9
+        raise Conflict(WORKSPACE_MISSING, "missing")
     target = mr / project_id
     if target.exists() or is_link(target):
         _audit_refusal(tenant_id, "folder_not_empty", project_id)
@@ -1564,7 +1630,8 @@ def _remove_entry(tenant_id: str, d: Path, side: dict[str, Any]) -> None:
     """Audit-first permanent removal of one trash entry; never outside ``.trash``, never through a link."""
     from core.projects.fsutil import ensure_inside  # noqa: PLC0415
     t = _trash_root(tenant_id)
-    assert t is not None
+    if t is None:                                                    # REVIEW-0064 #9
+        raise Conflict(WORKSPACE_MISSING, "missing")
     d = ensure_inside(t, d)
     if d.parent != Path(os.path.abspath(t)) or is_link(d):
         raise UnsafePath("not a trash entry")
@@ -1595,7 +1662,9 @@ def _purge_locked(tenant_id: str, project_id: str, entry: str) -> dict[str, Any]
     if side is None or side["id"] != project_id:
         raise NotFound("no such trash entry")
     if side.get("state") != "trashed":
-        raise Conflict("this entry is still being moved to the trash; try again in a moment", "pending")
+        side = _settle_pending(tenant_id, d, side)                  # REVIEW-0064 #8: we hold the lock, so no delete is running
+        if side is None:
+            return {"entry": entry, "purged": True}                  # it held nothing: the folder never left the workspace
     try:
         _remove_entry(tenant_id, d, side)
     except UnsafePath:
@@ -1606,7 +1675,8 @@ def _purge_locked(tenant_id: str, project_id: str, entry: str) -> dict[str, Any]
 
 def sweep_trash(tenant_id: str, *, busy: bool = False, now: Optional[float] = None) -> dict[str, Any]:
     """The projector tick's trash sweep: entries older than 30 days, at most ``TRASH_SWEEP_LIMIT`` per tick, skipped while the
-    host is saturated; a pending entry (a delete that has not finished) is never swept."""
+    host is saturated. A pending entry is settled first under the project lock (:func:`_settle_pending`; a delete that is
+    running holds that lock, so it is never touched)."""
     if busy:
         return {"purged": 0, "skipped": "busy"}
     now = _now() if now is None else now
@@ -1623,11 +1693,13 @@ def sweep_trash(tenant_id: str, *, busy: bool = False, now: Optional[float] = No
         if side is None:
             continue
         ts = side.get("deleted_ts")
-        if side.get("state") != "trashed" or not isinstance(ts, (int, float)) or now - float(ts) <= TRASH_TTL_S:
+        if not isinstance(ts, (int, float)) or now - float(ts) <= TRASH_TTL_S:
             continue
         try:
-            with _project_lock_of(tenant_id, side["id"]):
+            with _project_lock_of(tenant_id, side["id"], timeout=TRASH_SWEEP_LOCK_S):
                 again = _entry_sidecar(d)
+                if again is not None and again.get("state") != "trashed":
+                    again = _settle_pending(tenant_id, d, again)    # REVIEW-0064 #8: never pending forever
                 if again is None or again.get("state") != "trashed":
                     continue
                 _remove_entry(tenant_id, d, again)
@@ -1638,10 +1710,14 @@ def sweep_trash(tenant_id: str, *, busy: bool = False, now: Optional[float] = No
     return {"purged": purged}
 
 
+#: how long the sweep waits for a project's lock before it leaves that entry to the next tick (it runs on the projector thread)
+TRASH_SWEEP_LOCK_S = 1.0
+
+
 @contextlib.contextmanager
-def _project_lock_of(tenant_id: str, project_id: str):
+def _project_lock_of(tenant_id: str, project_id: str, timeout: float = 20.0):
     from core.projects.fsutil import file_lock  # noqa: PLC0415
-    with file_lock(registry.registry_path(tenant_id).with_name(f"project-{project_id}.lock"), timeout=20.0):
+    with file_lock(registry.registry_path(tenant_id).with_name(f"project-{project_id}.lock"), timeout=timeout):
         yield
 
 
