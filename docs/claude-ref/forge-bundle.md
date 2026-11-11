@@ -477,6 +477,18 @@ passed the first linear port (511 of 1 M fuzz cases). It can only reject more. M
 ≈ 14 s per 40 MiB of NUL-heavy text; the ratio rule caps what a small upload
 can expand to (100×). A rejection names the detector, never the matched value.
 
+**Shared with the project bundle (ADR-2323 Decision 11, T-0395).** The container rules (`check_name`,
+`check_container` with an optional per-entry rule), the ratio rule with its shared budget and budgeted
+inflate (`check_ratio`, `Budget`, `inflate`) and the credential-shape scan (`scan_text`, `scan_bytes`,
+`text_views`, `unescape`, `ascii_view`, `has_jwt`, plus a windowed `StreamScanner`/`scan_stream` for a file
+read in chunks) live in `core/bundle_common/{names,ratio,secrets}.py`, with the limits as a parameter
+(default: this format's `LIMITS`). `core/forge_bundle/validate.py` calls them with its own `LIMITS` and
+detector, read at call time, and turns their `BundleCheckError(stage, reason, detail)` into
+`BundleRejected` with the reason unchanged (`BundleRejected` subclasses it). The old private names
+(`_check_name`, `_check_container`, `_scan_text`, `_scan_bytes`, `_check_ratio`, `_Budget`, `_inflate`,
+`_text_views`, …) stay as aliases for one release. `detail` is a content-free short reason for callers
+whose message must never echo the archive (the project bundle). The forge suite passed unchanged.
+
 `known` is the target install's inventory, `{kind: {id: versions}}`. Without it,
 requirements that point outside the bundle come back in
 `report.unchecked_references`. An importer must pass `known`.

@@ -22,20 +22,20 @@ what SkillInstaller / StagingManager will later unpack.
 """
 from __future__ import annotations
 
-import bz2
+import contextlib
+import functools
 import hashlib
 import io
 import json
-import lzma
-import re
-import stat
 import zipfile
-import zlib
 from dataclasses import dataclass
 from typing import Collection, Iterator, Mapping
 
-from core.pii.jwt_scan import LinearJwtPattern
-from core.pii.sensitive import PIIDetectionFailedClosed, detect_named_types
+from core.bundle_common import BundleCheckError
+from core.bundle_common import names as _names
+from core.bundle_common import ratio as _ratio
+from core.bundle_common import secrets as _secrets
+from core.pii.sensitive import detect_named_types
 
 from .envelope import (
     ARTIFACTS_PREFIX,
@@ -50,31 +50,17 @@ from .envelope import (
 
 STAGES = ("container", "envelope", "integrity", "references", "staleness", "secrets")
 
-# Only the credential detectors of the ADR-0297 gate. Its prose detectors
-# (personal names, addresses, @-handles, high entropy, `token = …`) fire on
-# ordinary source code and on every sha256 in the envelope.
-_SECRET_TYPES = frozenset({
-    "private_key_block",
-    "aws_access_key",
-    "aws_secret_key",
-    "github_token",
-    "github_pat",
-    "slack_token",
-    "google_api_key",
-    "prefixed_secret_key",
-    "jwt",
-})
+# The secret types live in core.bundle_common.secrets (ADR-2323 Decision 11); this name stays for one release.
+_SECRET_TYPES = _secrets.SECRET_TYPES  # deprecated alias, remove after the next release
 
 Known = Mapping[str, Mapping[str, Collection[str]]]
 
 
-class BundleRejected(Exception):
+class BundleRejected(BundleCheckError):
     """The bundle failed a validation stage; nothing may be imported from it."""
 
     def __init__(self, stage: str, reason: str):
-        super().__init__(f"[{stage}] {reason}")
-        self.stage = stage
-        self.reason = reason
+        super().__init__(stage, reason)
 
 
 @dataclass(frozen=True)
@@ -91,49 +77,36 @@ def _reject(stage: str, reason: str) -> BundleRejected:
     return BundleRejected(stage, reason)
 
 
+@contextlib.contextmanager
+def _as_rejected() -> Iterator[None]:
+    """A refusal of the shared validators (core.bundle_common) becomes this module's BundleRejected, reason unchanged."""
+    try:
+        yield
+    except BundleRejected:
+        raise
+    except BundleCheckError as exc:
+        raise BundleRejected(exc.stage, exc.reason) from None
+
+
+def _wrapped(fn):
+    @functools.wraps(fn)
+    def inner(*args, **kwargs):
+        with _as_rejected():
+            return fn(*args, **kwargs)
+    return inner
+
+
+# The shared validators of ADR-2323 Decision 11, called with THIS module's LIMITS and detector (read at call time, so a
+# test that replaces either keeps working). The private names are aliases kept for one release; remove after it.
+@_wrapped
 def _check_name(name: str, where: str) -> None:
-    if not name or len(name) > 512:
-        raise _reject("container", f"{where}: entry name empty or longer than 512 chars")
-    if "\\" in name or ":" in name or name.startswith("/"):
-        raise _reject("container", f"{where}: unsafe entry name {name!r}")
-    if any(ord(c) < 32 or ord(c) == 127 for c in name):
-        raise _reject("container", f"{where}: control character in entry name {name!r}")
-    parts = name[:-1].split("/") if name.endswith("/") else name.split("/")
-    if any(p in ("", ".", "..") for p in parts):
-        raise _reject("container", f"{where}: path traversal or empty segment in {name!r}")
+    _names.check_name(name, where, limits=LIMITS)
 
 
+@_wrapped
 def _check_container(zf: zipfile.ZipFile, *, where: str) -> list[zipfile.ZipInfo]:
     """Container-level safety for one archive; returns its file (non-dir) entries."""
-    infos = zf.infolist()
-    if len(infos) > LIMITS["max_entries"]:
-        raise _reject("container", f"{where}: more than {LIMITS['max_entries']} entries")
-    seen: set[str] = set()
-    total = 0
-    files: list[zipfile.ZipInfo] = []
-    for info in infos:
-        _check_name(info.filename, where)
-        # Case-insensitive: two names that differ only in case collide on
-        # Windows and default macOS filesystems.
-        folded = info.filename.casefold()
-        if folded in seen:
-            raise _reject("container", f"{where}: duplicate entry {info.filename!r}")
-        seen.add(folded)
-        if stat.S_ISLNK(info.external_attr >> 16):
-            raise _reject("container", f"{where}: symlink entry {info.filename!r}")
-        if info.flag_bits & 0x1:
-            raise _reject("container", f"{where}: encrypted entry {info.filename!r}")
-        if info.is_dir():
-            continue
-        total += info.file_size
-        if total > LIMITS["max_uncompressed_bytes"]:
-            raise _reject("container", f"{where}: uncompressed size exceeds {LIMITS['max_uncompressed_bytes']} bytes")
-        if info.file_size >= LIMITS["ratio_check_min_bytes"]:
-            ratio = info.file_size / max(info.compress_size, 1)
-            if ratio > LIMITS["max_compression_ratio"]:
-                raise _reject("container", f"{where}: compression ratio {ratio:.0f}:1 on {info.filename!r}")
-        files.append(info)
-    return files
+    return _names.check_container(zf, where=where, limits=LIMITS)
 
 
 def _open_zip(data: bytes, *, where: str) -> zipfile.ZipFile:
@@ -246,176 +219,51 @@ def _check_staleness(external: list[Requirement], known: Known) -> None:
         raise _reject("staleness", f"requires what the target install does not have: {stale[:10]}")
 
 
-# The credential detectors of core.pii.sensitive. "jwt" there is now the
-# linear core.pii.jwt_scan matcher (2026-10-08); this module keeps its own
-# instance WITHOUT either word boundary — it can only reject more, never less. (The old comment here said "a 999-byte upload cost 43 s";
-# that figure did not reproduce — 1.5 M samples of 0.5-2 KB, worst 3.3 ms —
-# but the regex IS quadratic: 160 KB took 3.1 s, x4 input = x16 time.)
-_REGEX_SECRET_TYPES = _SECRET_TYPES - {"jwt"}
-# No start boundary on purpose: the previous check treated any non-ASCII-word char as a
-# boundary, \b is Unicode — a JWT glued to "é" or "²" slipped through (R4-R-1, 511 of 1M
-# fuzz cases). Without it every "eyJ…" candidate is judged, which can only reject more.
-_JWT = LinearJwtPattern(10, 10, 10, start_boundary=False, end_boundary=False)
+_REGEX_SECRET_TYPES = _secrets.REGEX_SECRET_TYPES   # deprecated alias
+_JWT = _secrets.JWT                                 # deprecated alias
+_has_jwt = _secrets.has_jwt                         # deprecated alias
+_ASCII = _secrets.ASCII                             # deprecated alias
+_unescape = _secrets.unescape                       # deprecated alias
+_ascii_view = _secrets.ascii_view                   # deprecated alias
+_text_views = _secrets.text_views                   # deprecated alias
+_WINDOW = _secrets.WINDOW                           # deprecated alias
+_OVERLAP = _secrets.OVERLAP                         # deprecated alias
+_decompressor = _ratio.decompressor                 # deprecated alias
 
 
-def _has_jwt(text: str) -> bool:
-    return _JWT.search(text) is not None
-
-
+@_wrapped
 def _scan_text(text: str, where: str) -> None:
-    try:
-        hits = set(detect_named_types(text, _REGEX_SECRET_TYPES))
-        if _has_jwt(text):
-            hits.add("jwt")
-    except PIIDetectionFailedClosed as exc:
-        raise _reject("secrets", f"{where}: scan failed, treated as sensitive") from exc
-    except Exception as exc:  # noqa: BLE001 — a scan that cannot finish must refuse
-        raise _reject("secrets", f"{where}: scan failed ({type(exc).__name__}), treated as sensitive") from None
-    if hits:
-        # Names the detector class only — never the matched value.
-        raise _reject("secrets", f"{where}: credential-shaped content ({', '.join(sorted(hits))})")
+    _secrets.scan_text(text, where, detect=detect_named_types)
 
 
-# bytes -> printable ASCII; every other byte (NUL, high bytes, controls but \t\n) becomes a space.
-_ASCII = bytes(b if 0x20 <= b <= 0x7E or b in (0x09, 0x0A) else 0x20 for b in range(256))
-_ESCAPE_RE = re.compile(
-    r"\\(?:u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|x([0-9a-fA-F]{2})"
-    r"|N\{([A-Za-z0-9 \-]{1,80})\}|([0-7]{1,3}))"
-)
-
-
-def _unescape(text: str) -> str:
-    import unicodedata
-
-    def sub(m: re.Match) -> str:
-        if m.group(5):
-            try:
-                return unicodedata.lookup(m.group(5))
-            except KeyError:
-                return " "
-        if m.group(6):
-            return chr(int(m.group(6), 8))
-        cp = int(m.group(1) or m.group(2) or m.group(3) or m.group(4), 16)
-        return chr(cp) if cp < 0x110000 else " "
-    return _ESCAPE_RE.sub(sub, text)
-
-
-def _ascii_view(text: str) -> str:
-    return text.encode("ascii", errors="replace").translate(_ASCII).decode("ascii")
-
-
-def _text_views(data: bytes) -> Iterator[str]:
-    views = [data.translate(_ASCII).decode("ascii")]
-    nuls = data.count(b"\x00")
-    bom = data[:2] in (b"\xff\xfe", b"\xfe\xff")
-    if bom or nuls * 50 >= len(data) > 0:
-        # UTF-16/32 text is >= 2 % NUL bytes even when mostly CJK without a BOM
-        # (~6 %); random binary is ~0.4 %. UTF-32 carries >= 2 NULs per BMP char.
-        codecs = ["utf-16-le", "utf-16-be"]
-        if nuls * 5 >= len(data) * 2 or data[:4] in (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff"):
-            codecs += ["utf-32-le", "utf-32-be"]
-        for codec in codecs:
-            unit = 4 if codec.startswith("utf-32") else 2
-            for shift in range(unit):  # every alignment: a window may start mid-character
-                chunk = data[shift:]
-                chunk = chunk[: len(chunk) - len(chunk) % unit]
-                views.append(_ascii_view(chunk.decode(codec, errors="replace")))
-    for view in views:
-        yield view
-        if "\\" in view:
-            resolved = _unescape(view)
-            if resolved != view:
-                yield resolved
-
-
-_WINDOW = 1 << 20
-_OVERLAP = 64 << 10   # longer than any credential shape the detectors know
-
-
+@_wrapped
 def _scan_bytes(data: bytes, where: str) -> None:
     """Scan in overlapping 1 MiB windows: memory stays flat on a 200 MiB payload."""
-    step = _WINDOW - _OVERLAP
-    for off in range(0, max(len(data), 1), step):
-        window = data[off: off + _WINDOW]
-        for view in _text_views(window):
-            _scan_text(view, where)
-        if off + _WINDOW >= len(data):
-            break
+    _secrets.scan_bytes(data, where, detect=detect_named_types)
 
 
+@_wrapped
 def _check_ratio(packed: int, unpacked: int, where: str) -> None:
     """The container rule (<= 100:1 beyond 1 MiB) for a whole nested archive or stream:
     caps how much scanning a small upload can buy."""
-    if unpacked >= LIMITS["ratio_check_min_bytes"] and unpacked > LIMITS["max_compression_ratio"] * max(packed, 1):
-        raise _reject("container", f"{where}: expands more than {LIMITS['max_compression_ratio']}:1")
+    _ratio.check_ratio(packed, unpacked, where, limits=LIMITS)
 
 
-class _Budget:
+class _Budget(_ratio.Budget):
     """Uncompressed bytes left for every nested archive / stream of one bundle together."""
 
     def __init__(self, left: int) -> None:
-        self.left = left
+        super().__init__(left, limits=LIMITS)
 
     def spend(self, n: int, where: str) -> None:
-        self.left -= n
-        if self.left < 0:
-            raise _reject("container", f"{where}: nested content exceeds the bundle's "
-                                       f"{LIMITS['max_uncompressed_bytes']}-byte uncompressed budget")
+        with _as_rejected():
+            super().spend(n, where)
 
 
-def _decompressor(data: bytes):
-    if data[:2] == b"\x1f\x8b":
-        return (lambda: zlib.decompressobj(16 + zlib.MAX_WBITS)), "gzip"
-    if data[:3] == b"BZh":
-        return bz2.BZ2Decompressor, "bz2"
-    if data[:6] == b"\xfd7zXZ\x00":
-        return lzma.LZMADecompressor, "xz"
-    return None, None
-
-
+@_wrapped
 def _inflate(data: bytes, where: str, budget: _Budget) -> bytes | None:
     """Decompress EVERY member of a gzip/bz2/xz stream within the budget; None if it is not one."""
-    make, kind = _decompressor(data)
-    if make is None:
-        return None
-    out = bytearray()
-    rest = data
-    try:
-        while rest:
-            dec = make()
-            if kind == "gzip":
-                chunk = dec.decompress(rest, 1 << 20)
-                while True:
-                    budget.spend(len(chunk), where)
-                    out += chunk
-                    _check_ratio(len(data), len(out), where)
-                    if not dec.unconsumed_tail:
-                        break
-                    chunk = dec.decompress(dec.unconsumed_tail, 1 << 20)
-                if not dec.eof:
-                    break
-                rest = dec.unused_data
-            else:
-                chunk = dec.decompress(rest, max_length=1 << 20)
-                while True:
-                    budget.spend(len(chunk), where)
-                    out += chunk
-                    _check_ratio(len(data), len(out), where)
-                    if dec.eof or (not chunk and dec.needs_input):
-                        break
-                    chunk = dec.decompress(b"", max_length=1 << 20)
-                if not dec.eof:
-                    break
-                rest = dec.unused_data
-            # Concatenated members/streams (and trailing bytes) — the raw view of
-            # the whole payload already covers non-stream trailing data.
-            if rest and _decompressor(rest)[0] is None:
-                break
-    except BundleRejected:
-        raise
-    except (zlib.error, OSError, EOFError, lzma.LZMAError, ValueError) as exc:
-        raise _reject("container", f"{where}: unreadable {kind} stream ({type(exc).__name__})") from None
-    return bytes(out)
+    return _ratio.inflate(data, where, budget, limits=LIMITS)
 
 
 def _is_tar(data: bytes) -> bool:
