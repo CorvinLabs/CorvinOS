@@ -1,9 +1,11 @@
-/** Adopt, rename and move (T-0362). Every action says what it will and will not touch before it runs. */
-import { useState } from "react";
+/** Adopt, rename, move, protection, chat attachment and the default place (T-0362, T-0387, T-0388). Every action says what it will and
+ * will not touch before it runs. */
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
-import { adoptProject, attachProject, detachProject, getChatAttachment, getHealth, moveProject, renameProject, setProjectSettings, setProjectsRoot, type Access, type DataClass, type ProjectDetail } from "@/lib/api/projects";
+import { adoptProject, attachProject, detachProject, getChatAttachment, getHealth, moveProject, renameProject, setDefaultStorage, setProjectSettings, type Access, type DataClass, type DefaultStorage, type ProjectDetail, type ProjectList } from "@/lib/api/projects";
 import { ACCESS_META, CLASS_META, CLASS_ORDER, accessOf, classOf, lowersProtection, needsConfirmation } from "./roles";
 import { listChatSessions } from "@/lib/api/sessions";
 import { explain } from "./wizard";
@@ -30,7 +32,7 @@ export function AdoptSection() {
           requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-testid=adopt-start]")?.focus());
         }
       }}>
-      <p className="text-sm text-muted-foreground">The folder must be inside the projects root. If it has no project.yaml, exactly that one file is added; nothing else in the folder changes.</p>
+      <p className="text-sm text-muted-foreground">Any folder of your own. If it has no project.yaml, exactly that one file is added; nothing else in the folder changes.</p>
       <label className="block text-sm">Folder (absolute path)
         <input className="mt-1 w-full rounded border bg-background px-2 py-1 font-mono text-xs" value={location} onChange={(e) => setLocation(e.target.value)} data-testid="adopt-location" autoFocus />
       </label>
@@ -46,23 +48,62 @@ export function AdoptSection() {
   );
 }
 
-export function RenameMoveSection({ d, csrf, onChanged }: { d: ProjectDetail; csrf: string; onChanged: () => void }) {
+/** How long a rename can be undone with one click (CONCEPT-0131 § C1). */
+export const UNDO_MS = 10_000;
+
+/** The title, renamed in place; for 10 s an "Undo" sends the old title back. The id never changes. */
+export function RenameField({ d, csrf, enabled, onChanged }: { d: ProjectDetail; csrf: string; enabled: boolean; onChanged: () => void }) {
   const [title, setTitle] = useState(d.title ?? "");
+  const [undo, setUndo] = useState<string | null>(null);              // the title before the last rename, while Undo is offered
+  const [msg, setMsg] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const offerUndo = (old: string | null) => {
+    if (timer.current) clearTimeout(timer.current);
+    setUndo(old);
+    if (old !== null) timer.current = setTimeout(() => setUndo(null), UNDO_MS);
+  };
+  const rename = useMutation({
+    mutationFn: (v: { to: string; from: string | null }) => renameProject(d.id, v.to, csrf),
+    onSuccess: (_r, v) => {
+      setTitle(v.to);
+      if (v.from === null) { offerUndo(null); setMsg("Undone. The old title is back."); } else { offerUndo(v.from); setMsg("Renamed. Only project.yaml changed."); }
+      onChanged();
+    },
+    onError: (e) => setMsg(explain(e)),
+  });
+  const current = d.title ?? "";
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <input className="w-full min-w-0 max-w-sm flex-1 rounded border bg-background px-2 py-1 text-sm" value={title} maxLength={120}
+          onChange={(e) => setTitle(e.target.value)} aria-label="Project title" data-testid="rename-input" disabled={!enabled}
+          placeholder={enabled ? undefined : "the title cannot be read right now"} />
+        <Button size="sm" variant="outline" onClick={() => rename.mutate({ to: title.trim(), from: current })}
+          disabled={!enabled || rename.isPending || !title.trim() || title.trim() === current} data-testid="rename-submit">Rename</Button>
+        {undo !== null && (
+          <button type="button" className="text-xs underline" disabled={rename.isPending} data-testid="rename-undo"
+            onClick={() => rename.mutate({ to: undo, from: null })}>Undo</button>
+        )}
+      </div>
+      {msg && <p role="status" className="text-sm" data-testid="manage-note">{msg}</p>}
+    </div>
+  );
+}
+
+/** Move the folder (this phase: a validated path; the folder picker replaces the field later). Same disk only, asked twice. */
+export function MoveFlow({ d, csrf, onChanged }: { d: ProjectDetail; csrf: string; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
   const [dest, setDest] = useState("");
   const [sure, setSure] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const rename = useMutation({
-    mutationFn: () => renameProject(d.id, title.trim(), csrf),
-    onSuccess: () => { setMsg("Renamed. Only project.yaml changed."); onChanged(); },
-    onError: (e) => setMsg(explain(e)),
-  });
   const move = useMutation({
     mutationFn: () => moveProject(d.id, dest.trim(), csrf),
     onSuccess: (r) => {
-      setSure(false);
+      setSure(false); setOpen(false); setDest("");
       // null = the repair after the move failed: the machine-local files still name the old folder (not "nothing to regenerate")
       const repaired = r.repaired_files === null
-        ? "The machine-local files could not be regenerated for the new location - run Repair above."
+        ? "The machine-local files could not be regenerated for the new location - run Repair in Maintenance."
         : `${r.repaired_files} machine-local file(s) regenerated for the new location.`;
       const warn = (r.warnings ?? []).filter(Boolean);
       setMsg(`Moved. ${repaired}${warn.length ? ` Note: ${warn.join(" ")}` : ""}`);
@@ -71,29 +112,32 @@ export function RenameMoveSection({ d, csrf, onChanged }: { d: ProjectDetail; cs
     onError: (e) => { setSure(false); setMsg(explain(e)); onChanged(); },   // the move may have happened (a timeout): show what the server says now
   });
   return (
-    <div className="space-y-6" data-testid="manage-section">
-      <div className="space-y-2">
-        <h2 className="font-medium">Rename</h2>
-        <p className="text-sm text-muted-foreground">Changes the title only. The id, the folder and the knowledge scope stay.</p>
-        <div className="flex gap-2">
-          <input className="w-full max-w-sm rounded border bg-background px-2 py-1 text-sm" value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} aria-label="Project title" data-testid="rename-input" />
-          <Button size="sm" variant="outline" onClick={() => rename.mutate()} disabled={rename.isPending || !title.trim() || title.trim() === d.title} data-testid="rename-submit">Rename</Button>
+    <div className="space-y-2" data-testid="move-flow">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-muted-foreground">Move the folder to another place. Same disk only; your files are not changed, machine-local files are regenerated.</p>
+        {!open && <Button size="sm" variant="outline" className="self-start sm:self-auto" onClick={() => { setOpen(true); setMsg(null); }} data-testid="move-open">Move…</Button>}
+      </div>
+      {open && (
+        <div className="space-y-2 rounded border p-2">
+          <label className="block text-sm">New folder (absolute path)
+            <input className="mt-1 w-full rounded border bg-background px-2 py-1 font-mono text-xs" value={dest} autoFocus
+              onChange={(e) => { setDest(e.target.value); setSure(false); }} placeholder={d.path ? `e.g. ${d.path}-new` : "absolute path of the new folder"}
+              data-testid="move-input" />
+          </label>
+          {!sure ? (
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setSure(true)} disabled={!dest.trim()} data-testid="move-start">Move here</Button>
+              <Button size="sm" variant="ghost" onClick={() => { setOpen(false); setDest(""); }}>Cancel</Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="destructive" onClick={() => move.mutate()} disabled={move.isPending} data-testid="move-confirm">Yes, move the folder</Button>
+              <Button size="sm" variant="ghost" onClick={() => setSure(false)}>Cancel</Button>
+            </div>
+          )}
         </div>
-      </div>
-      <div className="space-y-2">
-        <h2 className="font-medium">Move</h2>
-        <p className="text-sm text-muted-foreground">Moves the folder to a new place inside the projects root (same disk, never over an existing folder). Your files are not changed; machine-local files are regenerated.</p>
-        <input className="w-full max-w-xl rounded border bg-background px-2 py-1 font-mono text-xs" value={dest} onChange={(e) => { setDest(e.target.value); setSure(false); }} placeholder={d.path ? `e.g. ${d.path}-new` : "absolute path of the new folder"} aria-label="New location" data-testid="move-input" />
-        {!sure ? (
-          <Button size="sm" variant="outline" onClick={() => setSure(true)} disabled={!dest.trim()} data-testid="move-start">Move…</Button>
-        ) : (
-          <div className="flex gap-2">
-            <Button size="sm" variant="destructive" onClick={() => move.mutate()} disabled={move.isPending} data-testid="move-confirm">Yes, move the folder</Button>
-            <Button size="sm" variant="ghost" onClick={() => setSure(false)}>Cancel</Button>
-          </div>
-        )}
-      </div>
-      {msg && <p role="status" className="text-sm" data-testid="manage-note">{msg}</p>}
+      )}
+      {msg && <p role="status" className="text-sm" data-testid="move-note">{msg}</p>}
     </div>
   );
 }
@@ -123,7 +167,6 @@ export function AttachSection({ d, csrf }: { d: ProjectDetail; csrf: string }) {
   const attachedHere = current.data?.project_id === d.id;
   return (
     <div className="space-y-2" data-testid="attach-section">
-      <h2 className="font-medium">Use in a chat</h2>
       <p className="text-sm text-muted-foreground">Attach this project to one console chat: the chat can follow the project's rules and use its tools. The assistant can read the project but not change its files. The chat keeps its own folder and history.</p>
       {chats.error ? (
         <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="attach-chats-error">The chats could not be loaded. Reload the page to try again.</p>
@@ -182,7 +225,6 @@ export function ProtectionSection({ d, csrf, onChanged }: { d: ProjectDetail; cs
   });
   return (
     <div className="space-y-2" data-testid="protection-section">
-      <h2 className="font-medium">Protection</h2>
       <p className="text-sm text-muted-foreground">How sensitive this project's data is, and what the assistant may do with its files. The data class decides which engines may read it.</p>
       <div className="grid gap-1 sm:grid-cols-2" role="radiogroup" aria-label="Data class">
         {CLASS_ORDER.map((c) => (
@@ -219,41 +261,76 @@ export function ProtectionSection({ d, csrf, onChanged }: { d: ProjectDetail; cs
   );
 }
 
-/** Where new projects are created (release review F1): shown on the Projects page, changeable in place. */
-export function RootEditor({ current }: { current: string }) {
+/** "Default place for new projects" (CONCEPT-0131 § C4): the Corvin workspace or a folder of my own. Saving moves nothing. */
+export function DefaultPlaceDialog({ open, onOpenChange, list }: { open: boolean; onOpenChange: (o: boolean) => void; list: ProjectList }) {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const [value, setValue] = useState(current);
-  const [msg, setMsg] = useState<string | null>(null);
+  const current: DefaultStorage = list.default_storage === "root" ? "root" : "managed";
+  const [kind, setKind] = useState<DefaultStorage>(current);
+  const [folder, setFolder] = useState(list.projects_root_set ? list.projects_root : "");
+  const [error, setError] = useState<string | null>(null);
+  // every opening starts from what is saved, not from what was typed and cancelled
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) { setKind(current); setFolder(list.projects_root_set ? list.projects_root : ""); setError(null); }
+  }
   const mut = useMutation({
-    mutationFn: () => setProjectsRoot(value.trim(), csrf),
-    onSuccess: (r) => {
-      setOpen(false);
-      setMsg(r.outside.length ? `New projects go to ${r.projects_root}. Already outside it and still working: ${r.outside.join(", ")}.` : `New projects go to ${r.projects_root}.`);
-      void qc.invalidateQueries({ queryKey: ["projects"] });
-    },
-    onError: (e) => setMsg(explain(e)),
+    mutationFn: () => setDefaultStorage(kind === "root" ? { default_storage: "root", projects_root: folder.trim() } : { default_storage: "managed" }, csrf),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["projects"] }); onOpenChange(false); },
+    onError: (e) => setError(explain(e)),
   });
+  const unchanged = kind === current && (kind === "managed" || folder.trim() === (list.projects_root_set ? list.projects_root : ""));
   return (
-    <span className="inline" data-testid="root-editor">
-      {!open ? (
-        <button type="button" className="ml-2 text-xs underline" onClick={() => { setValue(current); setOpen(true); setMsg(null); }} data-testid="root-change">Change folder</button>
-      ) : (
-        <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); mut.mutate(); }} data-testid="root-form"
-          onKeyDown={(e) => {
-            if (e.key === "Escape" && !mut.isPending) {
-              e.preventDefault(); setOpen(false);
-              requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-testid=root-change]")?.focus());
-            }
-          }}>
-          <input className="min-w-0 flex-1 rounded border bg-background px-2 py-1 font-mono text-xs" value={value} onChange={(e) => setValue(e.target.value)} aria-label="Projects folder" data-testid="root-input" />
-          <Button size="sm" type="submit" disabled={mut.isPending || !value.trim() || value.trim() === current} data-testid="root-save">Save</Button>
-          <Button size="sm" type="button" variant="ghost" disabled={mut.isPending} onClick={() => setOpen(false)}>Cancel</Button>
+    <Dialog open={open} onOpenChange={(o) => { if (!mut.isPending) onOpenChange(o); }}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg" data-testid="default-place-dialog">
+        <DialogHeader>
+          <DialogTitle>Default place for new projects</DialogTitle>
+          <DialogDescription>Where the New project wizard puts a project when you do not name a folder.</DialogDescription>
+        </DialogHeader>
+        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (!unchanged) mut.mutate(); }}>
+          <div role="radiogroup" aria-label="Default place" className="space-y-2">
+            <label className="flex items-start gap-2 rounded border p-2 text-sm">
+              <input type="radio" name="default-place" className="mt-1" checked={kind === "managed"} onChange={() => { setKind("managed"); setError(null); }}
+                data-testid="place-managed" disabled={mut.isPending} />
+              <span className="min-w-0">
+                <span className="block font-medium">Corvin workspace (recommended)</span>
+                {list.managed_root && (
+                  <span className="block text-xs text-muted-foreground">
+                    <span className="break-all font-mono">{list.managed_root}</span> — managed by Corvin for this workspace
+                  </span>
+                )}
+                {list.workspace === "foreign" && (
+                  <span className="block text-xs text-amber-800 dark:text-amber-300" data-testid="place-foreign">
+                    This workspace belongs to another Corvin installation. Start a new one in a project's Settings, under Location.
+                  </span>
+                )}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 rounded border p-2 text-sm">
+              <input type="radio" name="default-place" className="mt-1" checked={kind === "root"} onChange={() => { setKind("root"); setError(null); }}
+                data-testid="place-root" disabled={mut.isPending} />
+              <span className="min-w-0 flex-1 space-y-1">
+                <span className="block font-medium">A folder of my own</span>
+                {kind === "root" && (
+                  <input className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" value={folder} autoFocus aria-label="Folder for new projects"
+                    placeholder="absolute path, e.g. /home/you/work" onChange={(e) => { setFolder(e.target.value); setError(null); }}
+                    data-testid="place-root-input" disabled={mut.isPending} />
+                )}
+              </span>
+            </label>
+          </div>
+          <p className="text-xs text-muted-foreground">Projects already somewhere else keep working; nothing is moved.</p>
+          {error && <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="place-error">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <Button type="button" size="sm" variant="ghost" disabled={mut.isPending} onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" size="sm" disabled={mut.isPending || unchanged || (kind === "root" && !folder.trim())} data-testid="place-save">
+              {mut.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
         </form>
-      )}
-      {msg && <span className="mt-1 block break-all text-xs" role="status" data-testid="root-note">{msg}</span>}
-    </span>
+      </DialogContent>
+    </Dialog>
   );
 }

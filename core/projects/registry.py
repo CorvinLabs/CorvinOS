@@ -408,12 +408,19 @@ def storage_of(tenant_id: str, path: "Path | str", *, managed: Optional[Path] = 
     return "managed" if r.parent == _resolve_forgiving(mr) else "own"
 
 
-def default_location(tenant_id: str, project_id: str, explicit: Optional[str] = None, *, audit=None) -> tuple[Path, str]:
+def default_location(tenant_id: str, project_id: str, explicit: Optional[str] = None, *, audit=None,
+                     storage: Optional[str] = None) -> tuple[Path, str]:
     """ADR-2321 Decision 3, first match wins: (a) an explicit folder from the client; (b) ``default_storage: root`` ->
-    ``<projects_root>/<id>``; (c) ``managed`` (the shipped default) -> ``<managed_root>/<id>``. Returns ``(path, storage)``."""
+    ``<projects_root>/<id>``; (c) ``managed`` (the shipped default) -> ``<managed_root>/<id>``. Returns ``(path, storage)``.
+    ``storage`` is the wizard's choice of place (step 2) and replaces the tenant default for this one create; ``root`` without
+    a stored projects folder is ``RegistryError("root_required")``."""
     if explicit:
         return Path(explicit), "own"
-    if settings(tenant_id)["default_storage"] == "root":
+    if storage is not None and storage not in STORAGE_KINDS:
+        raise RegistryError("storage must be managed or root")
+    if storage == "root" and not _stored_root(_read_settings_raw(tenant_id)):
+        raise RegistryError("root_required")
+    if (storage or settings(tenant_id)["default_storage"]) == "root":
         return projects_root(tenant_id) / project_id, "own"
     root, _o = ensure_managed_root(tenant_id, audit=audit)
     return root / project_id, "managed"

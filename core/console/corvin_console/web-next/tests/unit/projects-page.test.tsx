@@ -48,7 +48,7 @@ describe("Projects page", () => {
     expect(within(good).getByTestId("project-features")).not.toHaveTextContent(/core|Project$/);
     expect(within(good).getByTestId("project-off")).toHaveTextContent("Off: Agentic compute");
     expect(within(good).getByTestId("project-path")).toHaveTextContent("/home/u/projects/plumbline");
-    expect(screen.getByTestId("projects-root")).toHaveTextContent("/home/u/projects");
+    expect(screen.getByTestId("default-place")).toHaveTextContent("New projects go to /home/u/projects.");
     expect(screen.queryByTestId("projects-empty")).toBeNull();
   });
 

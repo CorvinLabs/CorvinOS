@@ -2,16 +2,22 @@
  * The new-project wizard's decisions, kept pure so they are unit-tested: which features a template starts
  * with, what a step may advance past, and how the server's error becomes a sentence the user can act on.
  */
-import type { Access, DataClass, PlanRequest, ProjectPlan, TemplateCatalogue, TemplateInfo } from "@/lib/api/projects";
+import type { Access, DataClass, DefaultStorage, PlanRequest, ProjectPlan, TemplateCatalogue, TemplateInfo } from "@/lib/api/projects";
 import { ApiError } from "@/lib/api/client";
 import { featureLabel } from "./encodings";
 
 export type Step = 1 | 2 | 3 | 4;
+export type Place = "managed" | "root" | "custom";
 
 export interface WizardState {
   step: Step;
   templateId: string | null;
   title: string;
+  /** Optional id; empty = the server derives it from the title. */
+  projectId: string;
+  /** Where the folder goes: the Corvin workspace, the projects folder (only when one is set), or a folder the user names. */
+  place: Place;
+  /** Only read when `place` is "custom". */
   location: string;
   features: string[];
   docsMode: "nested" | "plain";
@@ -20,8 +26,13 @@ export interface WizardState {
   access: Access;
 }
 
-export const INITIAL: WizardState = { step: 1, templateId: null, title: "", location: "", features: [], docsMode: "nested",
-  classification: "internal", access: "read" };
+export const INITIAL: WizardState = { step: 1, templateId: null, title: "", projectId: "", place: "managed", location: "", features: [],
+  docsMode: "nested", classification: "internal", access: "read" };
+
+/** The wizard starts at the tenant's default place; the projects folder only while one is set. */
+export function initialPlace(defaultStorage: DefaultStorage | undefined, rootSet: boolean): Place {
+  return defaultStorage === "root" && rootSet ? "root" : "managed";
+}
 
 export function templateById(cat: TemplateCatalogue | undefined, id: string | null): TemplateInfo | undefined {
   return cat?.templates.find((t) => t.id === id);
@@ -65,7 +76,7 @@ export function choosable(t: TemplateInfo): string[] {
 export function canAdvance(s: WizardState, plan: ProjectPlan | undefined): boolean {
   switch (s.step) {
     case 1: return s.templateId !== null;
-    case 2: return s.title.trim().length > 0 && s.title.trim().length <= 120;
+    case 2: return s.title.trim().length > 0 && s.title.trim().length <= 120 && (s.place !== "custom" || s.location.trim().length > 0);
     case 3: return s.features.length > 0;
     case 4: return !!plan && plan.ready;
   }
@@ -75,7 +86,8 @@ export function planRequest(s: WizardState): PlanRequest {
   return {
     template: s.templateId ?? "",
     title: s.title.trim(),
-    ...(s.location.trim() ? { location: s.location.trim() } : {}),
+    ...(s.projectId.trim() ? { project_id: s.projectId.trim() } : {}),
+    ...(s.place === "custom" ? (s.location.trim() ? { location: s.location.trim() } : {}) : { storage: s.place }),
     features: s.features,
     docs_mode: s.docsMode,
     classification: s.classification,
@@ -102,7 +114,7 @@ export function explain(err: unknown, context: "wizard" | "action" = "action"): 
     if (err.status === 403) return "Your session expired. Sign in again.";
     if (context === "wizard") {
       if (err.status === 404) return "That template or plan no longer exists. Start again.";
-      if (err.status === 422) return "The location was refused. Choose a folder inside your projects folder.";
+      if (err.status === 422) return "The location was refused. Choose another folder.";
       if (err.status === 409) return "Something changed while you were planning. Review the plan again.";
       return "The project could not be created. Nothing was written.";
     }
@@ -114,6 +126,16 @@ export function explain(err: unknown, context: "wizard" | "action" = "action"): 
   return context === "wizard"
     ? "No answer from the console. Reload the page to see whether the project was created."
     : "No answer from the console. The change may or may not have been applied - reload the page to see the current state.";
+}
+
+/** A refusal that is about the id (a hint word in a managed id, an id already taken): its sentence goes under the id field. */
+export function idProblem(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  const body = err.detail as { detail?: { reason_class?: unknown; message?: unknown } } | undefined;
+  const d = body?.detail;
+  if (!d || typeof d !== "object") return null;
+  if (d.reason_class !== "hint_word" && d.reason_class !== "id_taken") return null;
+  return typeof d.message === "string" && d.message ? d.message : null;
 }
 
 /** Human names for the review list. */

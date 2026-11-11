@@ -48,7 +48,7 @@ test("the sidebar entry reaches the Projects page and the list shows every proje
   }
   await expect(cards.nth(1).getByTestId("project-off")).toContainText("Off: Agentic compute, Experiments");
   await expect(cards.nth(1).getByTestId("project-path")).toHaveText("/home/u/projects/plumbline");
-  await expect(page.getByTestId("projects-root")).toContainText("/home/u/projects");
+  await expect(page.getByTestId("default-place")).toContainText("New projects go to /home/u/projects.");
   await noIds(page);
 });
 
@@ -94,4 +94,110 @@ for (const theme of ["light", "dark"] as const) {
     expect(overflow).toBeLessThanOrEqual(0);
     await page.screenshot({ path: `test-results/projects-${theme}-375.png`, fullPage: true });
   });
+}
+
+// ── where projects live (T-0388, CONCEPT-0131 § C3/C4) ──────────────────────────────────────────────
+
+const MR = "/home/u/.local/share/corvin/projects/w-0123456789";
+const W = (id: string, storage: string, p: string, display: string) => ({ id, path: p, template: "research@1", state: "ok", title: id.toUpperCase(),
+  active: ["core"], features: { core: true }, storage, display_path: display, classification: "internal", assistant_access: "read" });
+const CORVIN = { id: "corvin", path: "/home/u/.corvin/kb", template: "builtin@1", state: "ok", title: "Corvin", builtin: true, storage: "builtin",
+  display_path: "/home/u/.corvin/kb", active: [], features: {} };
+const WHERE_LIST = { projects_root: "/home/u/projects", projects_root_set: false, default_storage: "managed", managed_root: MR, workspace: "ok",
+  projects: [CORVIN, W("alpha", "managed", `${MR}/alpha`, "Corvin workspace › alpha"), W("beta", "own", "/home/u/code/beta", "~/code/beta")] };
+
+test("the header names the default place; the dialog saves a folder of my own through the storage route", async ({ page }) => {
+  let list: Record<string, unknown> = { ...WHERE_LIST };
+  const puts: unknown[] = [];
+  await page.route(/\/v1\/console\/projects\/templates/, (r) => r.fulfill({ json: { available: true, templates: [], features: [] } }));
+  await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: list }));
+  await page.route(/\/v1\/console\/projects\/settings\/storage$/, (r) => {
+    const b = r.request().postDataJSON() as { default_storage: string; projects_root?: string };
+    puts.push(b);
+    list = { ...list, default_storage: b.default_storage, projects_root: b.projects_root ?? list.projects_root, projects_root_set: true };
+    return r.fulfill({ json: { default_storage: b.default_storage, projects_root: b.projects_root ?? null, managed_root: MR, outside: ["alpha"] } });
+  });
+  await page.goto("/console/app/projects");
+  await expect(page.getByTestId("default-place")).toContainText("New projects go to the Corvin workspace.");
+  await page.getByTestId("default-place-change").click();
+  const dlg = page.getByTestId("default-place-dialog");
+  await expect(dlg.getByRole("heading")).toHaveText("Default place for new projects");
+  await expect(dlg.getByTestId("place-managed")).toBeChecked();
+  await expect(dlg).toContainText(MR);
+  await expect(dlg).toContainText("Projects already somewhere else keep working; nothing is moved.");
+  await dlg.getByTestId("place-root").check();
+  await expect(dlg.getByTestId("place-save")).toBeDisabled();                      // a folder of my own needs a folder
+  await dlg.getByTestId("place-root-input").fill("/home/u/work");
+  await dlg.getByTestId("place-save").click();
+  await expect.poll(() => puts).toEqual([{ default_storage: "root", projects_root: "/home/u/work" }]);
+  await expect(page.getByTestId("default-place-dialog")).toHaveCount(0);
+  await expect(page.getByTestId("default-place")).toContainText("New projects go to /home/u/work.");
+});
+
+test("a refused folder keeps the dialog open with the server's sentence", async ({ page }) => {
+  await page.route(/\/v1\/console\/projects\/templates/, (r) => r.fulfill({ json: { available: true, templates: [], features: [] } }));
+  await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: WHERE_LIST }));
+  await page.route(/\/v1\/console\/projects\/settings\/storage$/, (r) => r.fulfill({ status: 422,
+    json: { detail: { message: "This is a system folder; projects cannot live here.", reason_class: "system_prefix" } } }));
+  await page.goto("/console/app/projects");
+  await page.getByTestId("default-place-change").click();
+  const dlg = page.getByTestId("default-place-dialog");
+  await dlg.getByTestId("place-root").check();
+  await dlg.getByTestId("place-root-input").fill("/etc/x");
+  await dlg.getByTestId("place-save").click();
+  await expect(dlg.getByTestId("place-error")).toHaveText("This is a system folder; projects cannot live here.");
+  await dlg.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("default-place-dialog")).toHaveCount(0);
+});
+
+test("every card has a Where row; the Where filter appears with two kinds and filters", async ({ page }) => {
+  await stub(page, { projects: WHERE_LIST });
+  await page.goto("/console/app/projects");
+  const card = (id: string) => page.locator(`[data-testid="project-card"][data-project-id="${id}"]`);
+  await expect(card("alpha").getByTestId("project-where")).toHaveText("Corvin workspace › alpha");
+  await expect(card("alpha").getByTestId("project-where")).toHaveAttribute("data-storage", "managed");
+  await expect(card("alpha").getByTestId("project-path")).toHaveAttribute("title", `${MR}/alpha`);
+  await expect(card("beta").getByTestId("project-where")).toHaveText("Own folder ~/code/beta");
+  await expect(card("corvin").getByTestId("project-where")).toHaveText("Corvin's knowledge base");
+  const f = page.getByTestId("filter-where");
+  await expect(f).toBeVisible();
+  await f.selectOption("managed");
+  await expect(page.getByTestId("project-card")).toHaveCount(1);
+  await expect(page.getByTestId("project-card")).toHaveAttribute("data-project-id", "alpha");
+  await f.selectOption("own");
+  await expect(page.getByTestId("project-card")).toHaveAttribute("data-project-id", "beta");
+  await f.selectOption("all");
+  await expect(page.getByTestId("project-card")).toHaveCount(3);
+  await noIds(page);
+});
+
+test("with one kind of place there is no Where filter", async ({ page }) => {
+  await stub(page, { projects: { ...WHERE_LIST, projects: [CORVIN, W("alpha", "managed", `${MR}/alpha`, "Corvin workspace › alpha"),
+    W("gamma", "managed", `${MR}/gamma`, "Corvin workspace › gamma")] } });
+  await page.goto("/console/app/projects");
+  await expect(page.getByTestId("project-card")).toHaveCount(3);
+  await expect(page.getByTestId("filter-where")).toHaveCount(0);
+});
+
+for (const theme of ["light", "dark"] as const) {
+  for (const s of [{ name: "1280", width: 1280, height: 900 }, { name: "375", width: 375, height: 812 }]) {
+    test(`the list with Where rows and the default-place dialog at ${s.name} px (${theme})`, async ({ page }) => {
+      const out = process.env.SHOTS_DIR ?? "/tmp/phase1-shots";
+      await page.setViewportSize({ width: s.width, height: s.height });
+      await page.addInitScript((t) => { try { localStorage.setItem("corvin-theme", t); localStorage.setItem("corvin-dark-default-v2", "1"); } catch { /* ignore */ } }, theme);
+      await stub(page, { projects: { ...WHERE_LIST, projects: [...WHERE_LIST.projects,
+        { id: "old-study", path: "/home/u/old/old-study", template: "research@1", state: "missing", reason: "project.yaml is missing or unreadable",
+          storage: "own", display_path: "~/old/old-study" }] } });
+      await page.goto("/console/app/projects");
+      await expect(page.getByTestId("project-card")).toHaveCount(4);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: `${out}/list-${theme}-${s.name}.png`, fullPage: true });
+      await page.getByTestId("default-place-change").click();
+      await page.getByTestId("place-root").check();
+      await expect(page.getByTestId("default-place-dialog")).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: `${out}/default-place-dialog-${theme}-${s.name}.png`, fullPage: false });
+    });
+  }
 }

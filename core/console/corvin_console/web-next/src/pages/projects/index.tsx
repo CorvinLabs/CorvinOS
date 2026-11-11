@@ -10,23 +10,25 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Blocks, FolderKanban, Plus, RefreshCw } from "lucide-react";
 import { NewProjectDialog } from "./wizard-dialog";
-import { AdoptSection, RootEditor } from "./manage";
+import { AdoptSection, DefaultPlaceDialog } from "./manage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
-import { listProjects, listTemplates, type ProjectSummary } from "@/lib/api/projects";
+import { listProjects, listTemplates, type ProjectList, type ProjectSummary } from "@/lib/api/projects";
 import { cn } from "@/lib/utils";
-import { emptyState, featureChips, offFeatures, sortProjects, stateOf, templateLabel } from "./encodings";
-import { AccessBadge, ClassBadge } from "./badges";
+import { WHERE_LABEL, defaultPlaceSentence, emptyState, featureChips, offFeatures, presentWhere, sortProjects, stateOf, templateLabel,
+  whereFilter, whereLabel, type WhereContext, type WhereKind } from "./encodings";
+import { AccessBadge, ClassBadge, StorageBadge } from "./badges";
 import { CLASS_META, NO_FILTER, ROLE_LABEL, accessOf, classOf, filterProjects, presentValues, roleLabel, type Filter } from "./roles";
 
 const PROJECTS_KEY = ["projects", "list"] as const;
 const TEMPLATES_KEY = ["projects", "templates"] as const;
 
-function ProjectCard({ p }: { p: ProjectSummary }) {
+function ProjectCard({ p, where }: { p: ProjectSummary; where: WhereContext }) {
   const st = stateOf(p);
+  const w = whereLabel(p, where);
   const chips = featureChips(p);
   const off = offFeatures(p);
   return (
@@ -54,6 +56,11 @@ function ProjectCard({ p }: { p: ProjectSummary }) {
           <p className="flex items-start gap-2 text-sm text-red-700 dark:text-red-300" data-testid="project-reason">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             <span>{st.detail}</span>
+            {p.state === "missing" && !p.builtin && (
+              <Link to={`/app/projects/${encodeURIComponent(p.id)}?tab=settings`} className="ml-auto shrink-0 text-xs underline" data-testid="project-locate">
+                Locate folder…
+              </Link>
+            )}
           </p>
         )}
         {p.state === "ok" && (
@@ -76,7 +83,11 @@ function ProjectCard({ p }: { p: ProjectSummary }) {
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <dt>Template</dt><dd>{templateLabel(p.template)}</dd>
           {p.docs_mode && (<><dt>Docs</dt><dd>{p.docs_mode === "nested" ? "own repository" : "inside the project repository"}</dd></>)}
-          <dt>Folder</dt><dd className="truncate font-mono" title={p.path} data-testid="project-path">{p.path}</dd>
+          <dt>Where</dt>
+          <dd className="flex min-w-0 items-center gap-1.5" data-testid="project-where" data-storage={w.kind}>
+            {w.kind !== "builtin" && <StorageBadge kind={w.kind} title={w.title} />}{w.kind !== "builtin" && " "}
+            <span className={cn("min-w-0 truncate", w.kind !== "builtin" && "font-mono")} title={w.title} data-testid="project-path">{w.text}</span>
+          </dd>
         </dl>
       </CardContent>
     </Card>
@@ -89,10 +100,15 @@ export default function ProjectsPage() {
   const templates = useQuery({ queryKey: TEMPLATES_KEY, queryFn: ({ signal }) => listTemplates(signal), staleTime: 30_000 });
 
   const [filter, setFilter] = useState<Filter>(NO_FILTER);
+  const [whereSel, setWhereSel] = useState<WhereKind | "all">("all");
+  const [placeOpen, setPlaceOpen] = useState(false);
   const all = projects.data ? sortProjects(projects.data.projects) : [];
   const mine = all.filter((p) => !p.builtin);                      // Corvin itself is always there; "empty" is about the user's own projects
+  const where: WhereContext = { projects_root: projects.data?.projects_root, projects_root_set: projects.data?.projects_root_set };
   const present = presentValues(all);
-  const list = filterProjects(all, filter);
+  const kinds = presentWhere(mine, where);
+  const whereOn = kinds.length > 1 ? whereSel : "all";               // the filter is gone once only one kind is left
+  const list = whereFilter(filterProjects(all, filter), whereOn, where);
   const empty = emptyState(templates.data);
   const loadError = projects.error instanceof ApiError ? projects.error.message : projects.error ? "Could not load projects." : null;
 
@@ -104,9 +120,9 @@ export default function ProjectsPage() {
             <FolderKanban className="h-5 w-5" aria-hidden /> Projects
           </h1>
           {projects.data && (
-            <p className="text-sm text-muted-foreground" data-testid="projects-root">
-              Projects live under <span className="break-all font-mono">{projects.data.projects_root}</span>
-              <RootEditor current={projects.data.projects_root} />
+            <p className="text-sm text-muted-foreground" data-testid="default-place">
+              <span className="break-words [overflow-wrap:anywhere]">{defaultPlaceSentence(projects.data)}</span>{" "}
+              <button type="button" className="text-xs underline" onClick={() => setPlaceOpen(true)} data-testid="default-place-change">Change…</button>
             </p>
           )}
         </div>
@@ -123,6 +139,7 @@ export default function ProjectsPage() {
         </div>
       </header>
       <NewProjectDialog open={wizardOpen} onOpenChange={setWizardOpen} />
+      {projects.data && <DefaultPlaceDialog open={placeOpen} onOpenChange={setPlaceOpen} list={projects.data as ProjectList} />}
 
       {loadError && (
         <div role="alert" className="rounded-lg border border-red-500/40 p-3 text-sm text-red-700 dark:text-red-300" data-testid="projects-error">
@@ -132,7 +149,7 @@ export default function ProjectsPage() {
 
       {projects.isLoading && <Skeleton className="h-32 w-full" data-testid="projects-loading" />}
 
-      {mine.length > 1 && (present.roles.length > 1 || present.classes.length > 1) && (
+      {mine.length > 1 && (present.roles.length > 1 || present.classes.length > 1 || kinds.length > 1) && (
         <div className="flex flex-wrap items-center gap-3 text-sm" role="group" aria-label="Filter projects" data-testid="projects-filter">
           {present.roles.length > 1 && (
             <label className="flex items-center gap-2">Role
@@ -152,19 +169,28 @@ export default function ProjectsPage() {
               </select>
             </label>
           )}
+          {kinds.length > 1 && (
+            <label className="flex items-center gap-2">Where
+              <select className="rounded border bg-background px-2 py-1 text-sm" value={whereOn} data-testid="filter-where"
+                onChange={(e) => setWhereSel(e.target.value as WhereKind | "all")}>
+                <option value="all">All places</option>
+                {kinds.map((k) => <option key={k} value={k}>{WHERE_LABEL[k]}</option>)}
+              </select>
+            </label>
+          )}
           <span className="text-xs text-muted-foreground" data-testid="filter-count">{list.length} of {all.length}</span>
         </div>
       )}
 
       {all.length > 0 && list.length === 0 && (
         <p className="text-sm text-muted-foreground" data-testid="filter-empty">
-          No project matches this filter. <button type="button" className="underline" onClick={() => setFilter(NO_FILTER)}>Show all</button>
+          No project matches this filter. <button type="button" className="underline" onClick={() => { setFilter(NO_FILTER); setWhereSel("all"); }}>Show all</button>
         </p>
       )}
 
       {list.length > 0 && (
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2" aria-label="Projects" data-testid="projects-list">
-          {list.map((p) => <ProjectCard key={p.id} p={p} />)}
+          {list.map((p) => <ProjectCard key={p.id} p={p} where={where} />)}
         </section>
       )}
 

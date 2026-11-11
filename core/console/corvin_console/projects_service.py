@@ -375,7 +375,9 @@ def list_templates(tenant_id: str) -> dict[str, Any]:
 def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optional[str] = None,
                  location: Optional[str] = None, features: Optional[list[str]] = None,
                  docs_mode: Optional[str] = None, classification: Optional[str] = None,
-                 assistant_access: Optional[str] = None) -> dict[str, Any]:
+                 assistant_access: Optional[str] = None, storage: Optional[str] = None) -> dict[str, Any]:
+    if storage is not None and storage not in registry.STORAGE_KINDS:
+        raise ProjectsError("storage must be managed or root")
     cat = catalogue(tenant_id)
     tpl = cat.templates.get(template)
     if tpl is None:
@@ -405,7 +407,13 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
     if acc not in manifest.ACCESS:
         raise ProjectsError(f"assistant_access must be one of {manifest.ACCESS}")
     try:
-        raw_loc, _kind = registry.default_location(tenant_id, pid, location, audit=_bind_audit(tenant_id))
+        try:
+            raw_loc, _kind = registry.default_location(tenant_id, pid, location, audit=_bind_audit(tenant_id), storage=storage)
+        except registry.RegistryError as exc:
+            if str(exc) != "root_required":
+                raise
+            _audit_refusal(tenant_id, "root_required", pid)
+            raise Conflict(ROOT_REQUIRED, "root_required") from None
         loc = registry.validate_location(tenant_id, str(raw_loc), purpose="create")
         _refuse_foreign_kb(tenant_id, loc)
     except registry.ProjectPathError as exc:
@@ -932,6 +940,8 @@ def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
         return out
     if e.get("builtin"):
         return {**out, "directory_peers": [], "catalogue": {"available": False, "reason": "Corvin is built in; its features are fixed"}}
+    # the Location section's hint-word warning (ADR-2321 Decision 15): only an own folder can carry one, a managed path is hint-free
+    out["location_warnings"] = registry.location_warnings(Path(str(e["path"]))) if out.get("storage") == "own" else []
     try:
         man = manifest.load(Path(str(e["path"])))
         out["directory_peers"] = [str(x) for x in ((man.get("directory") or {}).get("peers") or [])]

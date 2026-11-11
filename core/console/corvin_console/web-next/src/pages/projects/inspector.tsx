@@ -3,7 +3,7 @@
  * (repair, open, remove from the list). Every change goes through the server, which judges it. A file is
  * never deleted from here.
  *
- * Tabs built here: Overview, Features, Settings; Structure, Docs, Knowledge, Tasks, Videos, Directory and Compute live in
+ * Tabs built here: Overview, Features; the Settings tab's sections are settings-sections.tsx; Structure, Docs, Knowledge, Tasks, Videos, Directory and Compute live in
  * inspector-tabs.tsx.
  */
 import { useState } from "react";
@@ -14,14 +14,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
-import { createVideo, getHealth, getProject, openProject, removeProjectFromList, repairProject, setFeatures, type FeatureRow, type OpenCommands, type ProjectDetail } from "@/lib/api/projects";
+import { createVideo, getHealth, getProject, setFeatures, type FeatureRow, type ProjectDetail } from "@/lib/api/projects";
 import { ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { explain } from "./wizard";
 import { TABS, conflictOf, healthHeadline, parseTab, rowState, tabGate, videoNameProblem, type Conflict, type Tab } from "./inspector-logic";
 import { ComputeTab, DirectoryTab, DocsTab, FeatureOff, KnowledgeTab, StructureTab, TasksTab, VideosTab } from "./inspector-tabs";
 import { stateOf } from "./encodings";
-import { AttachSection, ProtectionSection, RenameMoveSection } from "./manage";
+import { SettingsSections } from "./settings-sections";
 import { AccessBadge, ClassBadge } from "./badges";
 import { accessOf, classOf, roleLabel } from "./roles";
 
@@ -114,10 +114,13 @@ export default function ProjectInspectorPage() {
       </header>
 
       {!ready && (
-        <Card><CardContent className="space-y-3 p-4">
-          <p className="text-sm" data-testid="inspector-not-ready">{st.detail || "This project cannot be opened right now."}</p>
-          {!d.builtin && <RemoveSection projectId={d.id} csrf={csrf} onDone={onRemoved} />}
-        </CardContent></Card>
+        <>
+          <Card><CardContent className="space-y-3 p-4">
+            <p className="text-sm" data-testid="inspector-not-ready">{st.detail || "This project cannot be opened right now."}</p>
+          </CardContent></Card>
+          {/* a missing or unusable project keeps the settings that do not need its folder: Locate folder, Remove from the list */}
+          {!d.builtin && <SettingsSections d={d} onRemoved={onRemoved} />}
+        </>
       )}
 
       {ready && (
@@ -161,7 +164,7 @@ export default function ProjectInspectorPage() {
               case "directory": return <DirectoryTab d={d} />;
               case "compute": return <ComputeTab id={d.id} />;
               case "features": return <FeaturesTab d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />;
-              case "settings": return <SettingsTab d={d} csrf={csrf} onRemoved={onRemoved} />;
+              case "settings": return <SettingsSections d={d} onRemoved={onRemoved} />;
             }
           })()}
           </div>
@@ -357,114 +360,3 @@ function ConflictBox({ c, onAccept, onCancel, pending }: {
 
 /** Corvin itself has no features to switch, no folder to move and nothing to remove: it can be looked at and attached to a chat. */
 const BUILTIN_TABS: Tab[] = ["overview", "structure", "docs", "knowledge", "tasks", "settings"];
-
-function SettingsTab({ d, csrf, onRemoved }: { d: ProjectDetail; csrf: string; onRemoved: (msg: string) => void }) {
-  const [preview, setPreview] = useState<{ pending: { path: string; status: string; diff: string }[] } | null>(null);
-  const [note, setNote] = useState<string | null>(null);              // Repair: shown next to its buttons
-  const [openNote, setOpenNote] = useState<string | null>(null);      // Open: shown next to its button
-  const [opened, setOpened] = useState<string | null>(null);
-  const [openedAll, setOpenedAll] = useState<OpenCommands | null>(null);
-  const qc = useQueryClient();
-  const previewMut = useMutation({
-    mutationFn: () => repairProject(d.id, true, csrf),
-    onSuccess: (r) => { setPreview(r); setNote(null); },
-    onError: (e) => setNote(explain(e)),
-  });
-  const applyMut = useMutation({
-    mutationFn: () => repairProject(d.id, false, csrf),
-    onSuccess: () => { setPreview(null); setNote("Repaired. Only generated and machine-local files were rewritten."); void qc.invalidateQueries({ queryKey: KEY(d.id) }); void qc.invalidateQueries({ queryKey: HEALTH(d.id) }); },
-    onError: (e) => setNote(explain(e)),
-  });
-  const openMut = useMutation({
-    mutationFn: () => openProject(d.id, csrf),
-    onSuccess: (r) => { setOpenNote(null); setOpened(r.command); setOpenedAll(r.commands ?? null); },
-    onError: (e) => setOpenNote(explain(e)),
-  });
-  // a command shown for the OLD folder must not survive a move
-  const [shownFor, setShownFor] = useState(d.path);
-  if (shownFor !== d.path) { setShownFor(d.path); setOpened(null); setOpenedAll(null); }
-  if (d.builtin) {
-    return (
-      <section className="space-y-6" aria-label="Settings" data-testid="settings-tab">
-        <p className="text-sm text-muted-foreground" data-testid="builtin-note">
-          Corvin is built in. It is Corvin's own knowledge base, board and graph: it cannot be removed, renamed, moved or reconfigured, and
-          the assistant can only read it. You can attach it to a chat below.
-        </p>
-        <AttachSection d={d} csrf={csrf} />
-      </section>
-    );
-  }
-  return (
-    <section className="space-y-6" aria-label="Settings" data-testid="settings-tab">
-      <div className="space-y-2">
-        <h2 className="font-medium">Repair</h2>
-        <p className="text-sm text-muted-foreground">Restores the generated files (CLAUDE.md sections, machine-local MCP settings) to what the active features say. Your own text is kept.</p>
-        <Button size="sm" variant="outline" onClick={() => previewMut.mutate()} disabled={previewMut.isPending} data-testid="repair-preview">Preview changes</Button>
-        {preview && (
-          <div className="space-y-2" data-testid="repair-preview-result">
-            {preview.pending.length === 0 ? <p className="text-sm">Nothing to repair.</p> : (
-              <>
-                <ul className="space-y-2 text-sm">
-                  {preview.pending.map((p) => (
-                    <li key={p.path} data-testid="repair-pending" className="space-y-1">
-                      <div className="font-mono text-xs">{p.status}: {p.path}</div>
-                      {p.diff && <pre className="max-h-64 overflow-auto rounded bg-muted p-2 text-xs" data-testid="repair-diff">{p.diff}</pre>}
-                    </li>
-                  ))}
-                </ul>
-                <Button size="sm" onClick={() => applyMut.mutate()} disabled={applyMut.isPending} data-testid="repair-apply">Apply repair</Button>
-              </>
-            )}
-          </div>
-        )}
-        {note && <p role="status" className="text-sm" data-testid="settings-note">{note}</p>}
-      </div>
-      <div className="space-y-2">
-        <h2 className="font-medium">Open</h2>
-        <p className="text-sm text-muted-foreground">Shows the command to open this folder in your own editor. To use it in a console chat, attach it below.</p>
-        <Button size="sm" variant="outline" onClick={() => openMut.mutate()} disabled={openMut.isPending} data-testid="open-project">Show command</Button>
-        {openNote && <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="open-note">{openNote}</p>}
-        {opened && !openedAll && <code className="block break-all rounded bg-muted p-2 text-xs" data-testid="open-command">{opened}</code>}
-        {openedAll && (
-          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs" data-testid="open-commands">
-            <dt className="text-muted-foreground">PowerShell</dt><dd><code className="break-all">{openedAll.powershell}</code></dd>
-            <dt className="text-muted-foreground">cmd.exe</dt>
-            <dd>{openedAll.cmd ? <code className="break-all">{openedAll.cmd}</code>
-              : <span className="text-muted-foreground" data-testid="open-cmd-none">not offered: the folder name contains % or !, which cmd.exe would expand</span>}</dd>
-            <dt className="text-muted-foreground">bash / zsh</dt><dd><code className="break-all">{openedAll.posix}</code></dd>
-          </dl>
-        )}
-      </div>
-      <ProtectionSection d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />
-      <AttachSection d={d} csrf={csrf} />
-      <RenameMoveSection d={d} csrf={csrf} onChanged={() => { void qc.invalidateQueries({ queryKey: KEY(d.id) }); void qc.invalidateQueries({ queryKey: HEALTH(d.id) }); void qc.invalidateQueries({ queryKey: ["projects", "list"] }); }} />
-      <RemoveSection projectId={d.id} csrf={csrf} onDone={onRemoved} />
-    </section>
-  );
-}
-
-function RemoveSection({ projectId, csrf, onDone }: { projectId: string; csrf: string; onDone: (msg: string) => void }) {
-  const [sure, setSure] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const mut = useMutation({
-    mutationFn: () => removeProjectFromList(projectId, csrf),
-    onSuccess: () => onDone("Removed from the list. Its folder and every file stay where they are."),
-    onError: (e) => setMsg(explain(e)),
-  });
-  return (
-    <div className="space-y-2">
-      <h2 className="font-medium">Remove from the list</h2>
-      <p className="text-sm text-muted-foreground">The folder and every file in it stay. You can add the project back later.</p>
-      {!sure ? (
-        <Button size="sm" variant="outline" onClick={() => setSure(true)} data-testid="remove-start">Remove from the list…</Button>
-      ) : (
-        <div className="flex gap-2">
-          <Button size="sm" variant="destructive" onClick={() => mut.mutate()} disabled={mut.isPending} data-testid="remove-confirm">Yes, remove from the list</Button>
-          <Button size="sm" variant="ghost" onClick={() => setSure(false)}>Cancel</Button>
-        </div>
-      )}
-      {msg && <p role="status" className="text-sm" data-testid="remove-message">{msg}</p>}
-    </div>
-  );
-}
-

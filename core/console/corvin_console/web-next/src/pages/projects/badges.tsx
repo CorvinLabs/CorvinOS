@@ -1,6 +1,7 @@
 /** Class and access badges: always the same shape, place and words (Gestalt similarity); label + icon + tone, never colour alone. */
-import { Building2, Eye, Globe, Lock, Pencil, ShieldAlert } from "lucide-react";
+import { Building2, Eye, Folder, FolderCog, FolderTree, Globe, Lock, Pencil, ShieldAlert } from "lucide-react";
 import type { Access, DataClass } from "@/lib/api/projects";
+import { WHERE_LABEL, type WhereKind } from "./encodings";
 import { ACCESS_META, CLASS_META } from "./roles";
 
 const SHAPE = { globe: Globe, building: Building2, lock: Lock, shield: ShieldAlert } as const;
@@ -28,6 +29,19 @@ export function AccessBadge({ access }: { access: Access }) {
     <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground"
       title={`${m.label}. ${m.hint}`} data-testid="access-badge" data-access={access}>
       <Icon className="h-3 w-3 shrink-0" aria-hidden /> {m.short}
+    </span>
+  );
+}
+
+const PLACE_ICON = { managed: FolderCog, own: Folder, root: FolderTree } as const;
+
+/** Where a project's folder lives: same shape as the class badge, its own icon per kind, the plain tone (no new colour). */
+export function StorageBadge({ kind, title }: { kind: Exclude<WhereKind, "builtin">; title?: string }) {
+  const Icon = PLACE_ICON[kind];
+  return (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground"
+      title={title ?? WHERE_LABEL[kind]} data-testid="storage-badge" data-storage={kind}>
+      <Icon className="h-3 w-3 shrink-0" aria-hidden /> {WHERE_LABEL[kind]}
     </span>
   );
 }

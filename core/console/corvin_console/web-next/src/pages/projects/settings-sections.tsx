@@ -1,0 +1,337 @@
+/**
+ * The project Settings tab as sections (T-0387, CONCEPT-0131 § C1/C2): General · Location · Protection · Use in a chat ·
+ * Maintenance · Share · Danger zone. Which sections and actions are drawn is `settingsSections()` (inspector-logic.ts, unit-tested);
+ * this file only draws them. Every action goes through the server, which judges it again. Nothing here deletes a file.
+ */
+import { useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth";
+import { getHealth, listProjects, openProject, rekeyWorkspace, relocateProject, removeProjectFromList, repairProject, type OpenCommands, type ProjectDetail } from "@/lib/api/projects";
+import { cn } from "@/lib/utils";
+import { templateLabel, whereLabel } from "./encodings";
+import { doctorSummary, settingsSections, type ActionGate, type SectionId } from "./inspector-logic";
+import { AttachSection, MoveFlow, ProtectionSection, RenameField } from "./manage";
+import { StorageBadge } from "./badges";
+import { roleLabel } from "./roles";
+import { explain } from "./wizard";
+
+const KEY = (id: string) => ["projects", "detail", id] as const;
+const HEALTH = (id: string) => ["projects", "health", id] as const;
+const LIST = ["projects", "list"] as const;
+
+/** The typed confirmation for a new workspace; the words are the action, so they cannot be typed by accident. */
+export const REKEY_CONFIRM = "new workspace";
+
+export function SettingsSections({ d, onRemoved }: { d: ProjectDetail; onRemoved: (msg: string) => void }) {
+  const { session } = useAuth();
+  const csrf = session?.csrf_token ?? "";
+  const qc = useQueryClient();
+  const list = useQuery({ queryKey: LIST, queryFn: ({ signal }) => listProjects(signal), staleTime: 10_000 });
+  const sections = settingsSections(d, { workspace: list.data?.workspace });
+  const changed = () => {
+    void qc.invalidateQueries({ queryKey: KEY(d.id) });
+    void qc.invalidateQueries({ queryKey: HEALTH(d.id) });
+    void qc.invalidateQueries({ queryKey: LIST });
+  };
+  const body = (id: SectionId, actions: Partial<Record<string, ActionGate>>, notes: string[]): ReactNode => {
+    switch (id) {
+      case "general": return <General d={d} csrf={csrf} rename={actions.rename} onChanged={changed} />;
+      case "location": return <Location d={d} csrf={csrf} actions={actions} notes={notes} where={list.data} onChanged={changed} />;
+      case "protection": return <ProtectionSection d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />;
+      case "chat": return <AttachSection d={d} csrf={csrf} />;
+      case "maintenance": return <Maintenance d={d} csrf={csrf} repair={actions.repair} />;
+      case "share": return <Share actions={actions} />;
+      case "danger": return <Danger d={d} csrf={csrf} actions={actions} onRemoved={onRemoved} />;
+    }
+  };
+  return (
+    <section className="space-y-4" aria-label="Settings" data-testid="settings-tab">
+      {d.builtin && (
+        <p className="text-sm text-muted-foreground" data-testid="builtin-note">
+          Corvin is built in. It is Corvin's own knowledge base, board and graph: it cannot be removed, renamed, moved or reconfigured, and
+          the assistant can only read it. You can attach it to a chat below.
+        </p>
+      )}
+      {sections.map((s) => (
+        <div key={s.id} data-testid="settings-section" data-section={s.id}
+          className={cn("space-y-3 rounded-lg border p-4", s.id === "danger" && "border-red-500/40")}>
+          <h2 className={cn("font-medium", s.id === "danger" && "text-red-700 dark:text-red-300")}>{s.title}</h2>
+          <div data-testid={`${s.id}-section`}>{body(s.id, s.actions, s.notes)}</div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/** One label/value row: two columns from 640 px, stacked on a phone. */
+function Row({ label, children, testid }: { label: string; children: ReactNode; testid?: string }) {
+  return (
+    <div className="grid gap-1 sm:grid-cols-[8rem_minmax(0,1fr)] sm:items-center sm:gap-3" data-testid={testid}>
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [done, setDone] = useState<"copied" | "failed" | null>(null);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); setDone("copied"); } catch { setDone("failed"); }
+    setTimeout(() => setDone(null), 2000);
+  };
+  return (
+    <button type="button" className="shrink-0 text-xs underline" onClick={() => void copy()} aria-label={label}>
+      {done === "copied" ? "Copied" : done === "failed" ? "Copy failed - select the text" : "Copy"}
+    </button>
+  );
+}
+
+function General({ d, csrf, rename, onChanged }: { d: ProjectDetail; csrf: string; rename?: ActionGate; onChanged: () => void }) {
+  return (
+    <div className="space-y-2">
+      <Row label="Title">
+        <RenameField d={d} csrf={csrf} enabled={!!rename?.enabled} onChanged={onChanged} />
+        {rename && !rename.enabled && rename.note && <p className="mt-1 text-xs text-muted-foreground">{rename.note}</p>}
+      </Row>
+      <Row label="Id">
+        <span className="flex items-center gap-2"><span className="font-mono text-sm" data-testid="general-id">{d.id}</span><CopyButton text={d.id} label="Copy the id" /></span>
+      </Row>
+      <Row label="Template"><span className="text-sm">{templateLabel(d.template)}</span></Row>
+      {roleLabel(d.role) && <Row label="Role"><span className="text-sm">{roleLabel(d.role)}</span></Row>}
+      {d.added_at && <Row label="Added"><span className="text-sm">{d.added_at.slice(0, 10)}</span></Row>}
+    </div>
+  );
+}
+
+function Location({ d, csrf, actions, notes, where, onChanged }: {
+  d: ProjectDetail; csrf: string; actions: Partial<Record<string, ActionGate>>; notes: string[];
+  where?: { projects_root: string; projects_root_set?: boolean }; onChanged: () => void;
+}) {
+  const w = whereLabel(d, { projects_root: where?.projects_root, projects_root_set: where?.projects_root_set });
+  const [opened, setOpened] = useState<string | null>(null);
+  const [openedAll, setOpenedAll] = useState<OpenCommands | null>(null);
+  const [openNote, setOpenNote] = useState<string | null>(null);
+  // a command shown for the OLD folder must not survive a move or a relink
+  const [shownFor, setShownFor] = useState(d.path);
+  if (shownFor !== d.path) { setShownFor(d.path); setOpened(null); setOpenedAll(null); }
+  const openMut = useMutation({
+    mutationFn: () => openProject(d.id, csrf),
+    onSuccess: (r) => { setOpenNote(null); setOpened(r.command); setOpenedAll(r.commands ?? null); },
+    onError: (e) => setOpenNote(explain(e)),
+  });
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {w.kind !== "builtin" && <StorageBadge kind={w.kind} title={w.title} />}
+        <span className="min-w-0 break-all font-mono text-sm" title={d.path} data-testid="location-path">{d.display_path || d.path}</span>
+        <CopyButton text={d.path} label="Copy the full path" />
+        {d.state === "ok" && (
+          <button type="button" className="text-xs underline" onClick={() => openMut.mutate()} disabled={openMut.isPending} data-testid="open-project">Show open command</button>
+        )}
+      </div>
+      {openNote && <p role="alert" className="text-sm text-red-700 dark:text-red-300" data-testid="open-note">{openNote}</p>}
+      {opened && !openedAll && <code className="block break-all rounded bg-muted p-2 text-xs" data-testid="open-command">{opened}</code>}
+      {openedAll && (
+        <dl className="grid grid-cols-1 gap-x-3 gap-y-1 text-xs sm:grid-cols-[auto_minmax(0,1fr)]" data-testid="open-commands">
+          <dt className="text-muted-foreground">PowerShell</dt><dd><code className="break-all">{openedAll.powershell}</code></dd>
+          <dt className="text-muted-foreground">cmd.exe</dt>
+          <dd>{openedAll.cmd ? <code className="break-all">{openedAll.cmd}</code>
+            : <span className="text-muted-foreground" data-testid="open-cmd-none">not offered: the folder name contains % or !, which cmd.exe would expand</span>}</dd>
+          <dt className="text-muted-foreground">bash / zsh</dt><dd><code className="break-all">{openedAll.posix}</code></dd>
+        </dl>
+      )}
+      {notes.map((n) => (
+        <p key={n} className="rounded border border-amber-600/50 p-2 text-sm" data-testid="location-warning">{n}</p>
+      ))}
+      {actions.move && <MoveFlow d={d} csrf={csrf} onChanged={onChanged} />}
+      {actions.locate && <LocateBox d={d} csrf={csrf} onChanged={onChanged} />}
+      {actions.rekey && <RekeyBox csrf={csrf} onChanged={onChanged} />}
+    </div>
+  );
+}
+
+/** "Folder missing": point the list at the folder that now holds this project. Moves nothing. */
+function LocateBox({ d, csrf, onChanged }: { d: ProjectDetail; csrf: string; onChanged: () => void }) {
+  const [loc, setLoc] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const mut = useMutation({
+    mutationFn: () => relocateProject(d.id, loc.trim(), csrf),
+    onSuccess: (r) => {
+      const warn = (r.warnings ?? []).filter(Boolean);
+      setMsg(`Found. The list now points at the new folder.${warn.length ? ` Note: ${warn.join(" ")}` : ""}`);
+      onChanged();
+    },
+    onError: (e) => setMsg(explain(e)),
+  });
+  return (
+    <div className="space-y-2 rounded border border-red-500/40 p-3" data-testid="locate-box">
+      <p className="text-sm">Folder missing: {d.reason || "the folder is not where the list says."}</p>
+      <p className="text-sm text-muted-foreground">If you moved or renamed it, point the list at it. Nothing is moved or copied.</p>
+      <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(e) => { e.preventDefault(); if (loc.trim()) mut.mutate(); }}>
+        <input className="min-w-0 flex-1 rounded border bg-background px-2 py-1 font-mono text-xs" value={loc} onChange={(e) => { setLoc(e.target.value); setMsg(null); }}
+          aria-label="Where the folder is now" placeholder="e.g. /home/you/code/alpha" data-testid="locate-input" />
+        <Button size="sm" type="submit" disabled={mut.isPending || !loc.trim()} data-testid="locate-submit">Locate folder…</Button>
+      </form>
+      {msg && <p role="status" className="text-sm" data-testid="locate-note">{msg}</p>}
+    </div>
+  );
+}
+
+/** A workspace copied from another installation: start an empty one for this one, after typing the words. */
+function RekeyBox({ csrf, onChanged }: { csrf: string; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const mut = useMutation({
+    mutationFn: () => rekeyWorkspace(csrf),
+    onSuccess: () => { setOpen(false); setTyped(""); setMsg("Done. New projects go to a new workspace for this installation; the old folder was not touched."); onChanged(); },
+    onError: (e) => setMsg(explain(e)),
+  });
+  return (
+    <div className="space-y-2 rounded border border-amber-600/50 p-3" data-testid="rekey-box">
+      <p className="text-sm">This workspace belongs to another Corvin installation.</p>
+      <p className="text-sm text-muted-foreground">Projects in it stay where they are. A new workspace starts empty for this installation.</p>
+      {!open ? (
+        <Button size="sm" variant="outline" onClick={() => { setOpen(true); setMsg(null); }} data-testid="rekey-start">Start a new workspace for this installation</Button>
+      ) : (
+        <div className="space-y-2">
+          <label className="block text-sm">Type <span className="font-mono">{REKEY_CONFIRM}</span> to confirm
+            <input className="mt-1 w-full max-w-xs rounded border bg-background px-2 py-1 text-sm" value={typed} autoFocus
+              onChange={(e) => setTyped(e.target.value)} data-testid="rekey-input" />
+          </label>
+          <div className="flex gap-2">
+            <Button size="sm" variant="destructive" disabled={typed !== REKEY_CONFIRM || mut.isPending} onClick={() => mut.mutate()} data-testid="rekey-confirm">Start a new workspace</Button>
+            <Button size="sm" variant="ghost" onClick={() => { setOpen(false); setTyped(""); }}>Cancel</Button>
+          </div>
+        </div>
+      )}
+      {msg && <p role="status" className="text-sm" data-testid="rekey-note">{msg}</p>}
+    </div>
+  );
+}
+
+function Maintenance({ d, csrf, repair }: { d: ProjectDetail; csrf: string; repair?: ActionGate }) {
+  const qc = useQueryClient();
+  const health = useQuery({ queryKey: HEALTH(d.id), queryFn: ({ signal }) => getHealth(d.id, signal), refetchInterval: false });
+  const [preview, setPreview] = useState<{ pending: { path: string; status: string; diff: string }[] } | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const previewMut = useMutation({
+    mutationFn: () => repairProject(d.id, true, csrf),
+    onSuccess: (r) => { setPreview(r); setNote(null); },
+    onError: (e) => setNote(explain(e)),
+  });
+  const applyMut = useMutation({
+    mutationFn: () => repairProject(d.id, false, csrf),
+    onSuccess: () => {
+      setPreview(null); setNote("Repaired. Only generated and machine-local files were rewritten.");
+      void qc.invalidateQueries({ queryKey: KEY(d.id) }); void qc.invalidateQueries({ queryKey: HEALTH(d.id) });
+    },
+    onError: (e) => setNote(explain(e)),
+  });
+  const failed = (health.data?.checks ?? []).some((c) => !c.ok && !c.note);
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+        <p className={cn("text-sm", failed && "text-amber-800 dark:text-amber-300")} data-testid="doctor-summary">
+          {health.isLoading ? "Checking…" : health.error ? "The checks could not run." : doctorSummary(health.data?.checks ?? [])}
+        </p>
+        <Link to={`/app/projects/${encodeURIComponent(d.id)}?tab=overview`} className="shrink-0 text-xs underline" data-testid="doctor-open">Open Overview</Link>
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-muted-foreground">Repair restores generated and machine-local files (CLAUDE.md sections, MCP settings); your text is kept.</p>
+        <Button size="sm" variant="outline" className="self-start sm:self-auto" onClick={() => previewMut.mutate()}
+          disabled={!repair?.enabled || previewMut.isPending} title={repair?.note ?? undefined} data-testid="repair-preview">Preview changes</Button>
+      </div>
+      {repair && !repair.enabled && repair.note && <p className="text-xs text-muted-foreground">{repair.note}</p>}
+      {preview && (
+        <div className="space-y-2" data-testid="repair-preview-result">
+          {preview.pending.length === 0 ? <p className="text-sm">Nothing to repair.</p> : (
+            <>
+              <ul className="space-y-2 text-sm">
+                {preview.pending.map((p) => (
+                  <li key={p.path} data-testid="repair-pending" className="space-y-1">
+                    <div className="font-mono text-xs">{p.status}: {p.path}</div>
+                    {p.diff && <pre className="max-h-64 overflow-auto rounded bg-muted p-2 text-xs" data-testid="repair-diff">{p.diff}</pre>}
+                  </li>
+                ))}
+              </ul>
+              <Button size="sm" onClick={() => applyMut.mutate()} disabled={applyMut.isPending} data-testid="repair-apply">Apply repair</Button>
+            </>
+          )}
+        </div>
+      )}
+      {note && <p role="status" className="text-sm" data-testid="settings-note">{note}</p>}
+    </div>
+  );
+}
+
+function Share({ actions }: { actions: Partial<Record<string, ActionGate>> }) {
+  const rows: { id: "export" | "duplicate"; text: string; label: string }[] = [
+    { id: "export", text: "Export this project as a ZIP for another install or a colleague.", label: "Export…" },
+    { id: "duplicate", text: "Make a copy under a new id.", label: "Duplicate…" },
+  ];
+  return (
+    <div className="space-y-2">
+      {rows.map((r) => actions[r.id] && (
+        <div key={r.id} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-muted-foreground">{r.text}</p>
+          {/* a disabled button receives no hover: the wrapper carries the tooltip */}
+          <span title={actions[r.id]?.note ?? undefined} className="self-start sm:self-auto">
+            <Button size="sm" variant="outline" disabled={!actions[r.id]?.enabled} title={actions[r.id]?.note ?? undefined} data-testid={`share-${r.id}`}>{r.label}</Button>
+          </span>
+        </div>
+      ))}
+      <p className="text-xs text-muted-foreground">Export and Duplicate are available soon.</p>
+    </div>
+  );
+}
+
+function Danger({ d, csrf, actions, onRemoved }: { d: ProjectDetail; csrf: string; actions: Partial<Record<string, ActionGate>>; onRemoved: (msg: string) => void }) {
+  const managed = d.storage === "managed";
+  return (
+    <div className="space-y-3">
+      {actions.remove && <RemoveRow projectId={d.id} csrf={csrf} onDone={onRemoved} />}
+      {actions.delete && (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" data-testid="delete-row">
+          <p className="text-sm text-muted-foreground">Delete project files — only for projects in the Corvin workspace; goes to Trash for 30 days.</p>
+          {managed ? (
+            <span title={actions.delete.note ?? undefined} className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
+              <Button size="sm" variant="outline" disabled data-testid="delete-files">Delete project files…</Button>
+              <span className="text-xs text-muted-foreground">{actions.delete.note}</span>
+            </span>
+          ) : (
+            <span className="shrink-0 text-xs text-muted-foreground">{actions.delete.note}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RemoveRow({ projectId, csrf, onDone }: { projectId: string; csrf: string; onDone: (msg: string) => void }) {
+  const [sure, setSure] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const mut = useMutation({
+    mutationFn: () => removeProjectFromList(projectId, csrf),
+    onSuccess: () => onDone("Removed from the list. Its folder and every file stay where they are."),
+    onError: (e) => setMsg(explain(e)),
+  });
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm">Remove from the list — the folder and every file stay.</p>
+        {!sure ? (
+          <Button size="sm" variant="outline" className="self-start sm:self-auto" onClick={() => setSure(true)} data-testid="remove-start">Remove from the list…</Button>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="destructive" onClick={() => mut.mutate()} disabled={mut.isPending} data-testid="remove-confirm">Yes, remove from the list</Button>
+            <Button size="sm" variant="ghost" onClick={() => setSure(false)}>Cancel</Button>
+          </div>
+        )}
+      </div>
+      {msg && <p role="status" className="text-sm" data-testid="remove-message">{msg}</p>}
+    </div>
+  );
+}

@@ -8,11 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/lib/auth";
-import { createProject, listTemplates, planProject, type ProjectPlan, type TemplateInfo } from "@/lib/api/projects";
+import { createProject, listProjects, listTemplates, planProject, type ProjectPlan, type TemplateInfo } from "@/lib/api/projects";
 import { featureLabel } from "./encodings";
-import { AccessBadge, ClassBadge } from "./badges";
+import { AccessBadge, ClassBadge, StorageBadge } from "./badges";
 import { ACCESS_META, CLASS_META, CLASS_ORDER, badgeLine, groupTemplates } from "./roles";
-import { INITIAL, canAdvance, choosable, chooseTemplate, explain, featureNames, planRequest, templateById, toggleFeature,
+import { INITIAL, canAdvance, choosable, chooseTemplate, explain, featureNames, idProblem, initialPlace, planRequest, templateById, toggleFeature,
   type WizardState } from "./wizard";
 
 const TEMPLATES_KEY = ["projects", "templates"] as const;
@@ -25,27 +25,40 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
   const [s, setS] = useState<WizardState>(INITIAL);
   const [plan, setPlan] = useState<ProjectPlan | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  const [idError, setIdError] = useState<string | null>(null);
 
   const cat = useQuery({ queryKey: TEMPLATES_KEY, queryFn: ({ signal }) => listTemplates(signal), enabled: open });
+  const where = useQuery({ queryKey: PROJECTS_KEY, queryFn: ({ signal }) => listProjects(signal), enabled: open, staleTime: 10_000 });
+  const rootSet = !!where.data?.projects_root_set;
+  // the wizard starts at the tenant's default place, once the list has said what it is (and only before the user chose)
+  const [placeSeeded, setPlaceSeeded] = useState(false);
+  if (open && !placeSeeded && where.data) {
+    setPlaceSeeded(true);
+    setS((x) => ({ ...x, place: initialPlace(where.data?.default_storage, rootSet) }));
+  }
   const tpl: TemplateInfo | undefined = useMemo(() => templateById(cat.data, s.templateId), [cat.data, s.templateId]);
 
   const planMut = useMutation({
     mutationFn: (req: ReturnType<typeof planRequest>) => planProject(req, csrf),
-    onSuccess: (p) => { setPlan(p); setError(null); setS((x) => ({ ...x, step: 4 })); },
-    onError: (e) => setError(explain(e, "wizard")),
+    onSuccess: (p) => { setPlan(p); setError(null); setIdError(null); setS((x) => ({ ...x, step: 4 })); },
+    onError: (e) => {
+      const why = idProblem(e);
+      // a refused id goes back to the field it is about; the wizard stays open
+      if (why) { setIdError(why); setError(null); setS((x) => ({ ...x, step: 2 })); } else setError(explain(e, "wizard"));
+    },
   });
   // while a plan or a create is on its way the dialog stays open: its answer would otherwise land in a reset wizard
   const busy = () => planMut.isPending || createMut.isPending;
   const close = (o: boolean) => {
     if (!o && busy()) return;
-    if (!o) { setS(INITIAL); setPlan(undefined); setError(null); }
+    if (!o) { setS(INITIAL); setPlan(undefined); setError(null); setIdError(null); setPlaceSeeded(false); }
     onOpenChange(o);
   };
   const createMut = useMutation({
     mutationFn: () => createProject(plan!.plan_id, csrf),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: PROJECTS_KEY });
-      setS(INITIAL); setPlan(undefined); setError(null);
+      setS(INITIAL); setPlan(undefined); setError(null); setIdError(null); setPlaceSeeded(false);
       onOpenChange(false);
     },
     onError: (e) => setError(explain(e, "wizard")),
@@ -109,11 +122,44 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
                 onChange={(e) => set({ title: e.target.value })} placeholder="e.g. Plumbline explainer" />
             </label>
             <label className="block space-y-1 text-sm">
-              <span>Folder (optional)</span>
-              <Input data-testid="wizard-location" value={s.location} onChange={(e) => set({ location: e.target.value })}
-                placeholder={cat.data?.projects_root ? `${cat.data.projects_root}${cat.data.projects_root.includes("\\") ? "\\" : "/"}<name>` : "inside your projects folder"} />
-              <span className="block text-xs text-muted-foreground">Empty = a new folder named after the project, inside your projects folder.</span>
+              <span>Id (optional)</span>
+              <Input data-testid="wizard-id" value={s.projectId} maxLength={28} className="font-mono"
+                onChange={(e) => { setIdError(null); set({ projectId: e.target.value }); }} placeholder="made from the name" />
+              {idError ? <span role="alert" className="block text-xs text-red-700 dark:text-red-300" data-testid="wizard-id-error">{idError}</span>
+                : <span className="block text-xs text-muted-foreground">Lowercase letters, digits and dashes. It never changes later.</span>}
             </label>
+            <fieldset className="space-y-2" data-testid="wizard-place">
+              <legend className="text-sm">Where</legend>
+              <div role="radiogroup" aria-label="Where the project goes" className="space-y-1">
+                <label className="flex items-start gap-2 rounded border p-2 text-sm">
+                  <input type="radio" name="wizard-place" className="mt-1" data-testid="wizard-place-managed" checked={s.place === "managed"}
+                    onChange={() => set({ place: "managed" })} />
+                  <span className="min-w-0"><span className="block font-medium">Corvin workspace (recommended)</span>
+                    <span className="block text-xs text-muted-foreground">A new folder named after the project, managed by Corvin.</span></span>
+                </label>
+                {rootSet && (
+                  <label className="flex items-start gap-2 rounded border p-2 text-sm">
+                    <input type="radio" name="wizard-place" className="mt-1" data-testid="wizard-place-root" checked={s.place === "root"}
+                      onChange={() => set({ place: "root" })} />
+                    <span className="min-w-0" data-testid="wizard-place-root-label"><span className="block font-medium">Projects folder</span>
+                      <span className="block break-all font-mono text-xs text-muted-foreground">{where.data?.projects_root}</span></span>
+                  </label>
+                )}
+                <label className="flex items-start gap-2 rounded border p-2 text-sm">
+                  <input type="radio" name="wizard-place" className="mt-1" data-testid="wizard-place-custom" checked={s.place === "custom"}
+                    onChange={() => set({ place: "custom" })} />
+                  <span className="min-w-0 flex-1 space-y-1"><span className="block font-medium">Choose a folder…</span>
+                    {s.place === "custom" && (
+                      <>
+                        <Input data-testid="wizard-location" value={s.location} autoFocus aria-label="Folder (absolute path)"
+                          onChange={(e) => set({ location: e.target.value })} placeholder="e.g. /home/you/code/alpha" className="font-mono text-xs" />
+                        <span className="block text-xs text-muted-foreground">An empty or new folder of your own.</span>
+                      </>
+                    )}
+                  </span>
+                </label>
+              </div>
+            </fieldset>
           </section>
         )}
 
@@ -183,7 +229,13 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
             <p>Nothing is written until you press Create.</p>
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
               <dt className="text-muted-foreground">Project</dt><dd className="break-words [overflow-wrap:anywhere]" data-testid="review-title">{plan.title} <span className="font-mono text-xs">({plan.project_id})</span></dd>
-              <dt className="text-muted-foreground">Folder</dt><dd className="break-all font-mono text-xs" data-testid="review-location">{plan.location}</dd>
+              <dt className="text-muted-foreground">Folder</dt>
+              <dd className="min-w-0 space-y-1">
+                {plan.storage && plan.storage !== "builtin" && (
+                  <span className="block" data-testid="review-storage"><StorageBadge kind={plan.storage} /></span>
+                )}
+                <span className="block break-all font-mono text-xs" data-testid="review-location">{plan.location}</span>
+              </dd>
               <dt className="text-muted-foreground">Protection</dt><dd data-testid="review-protection">{badgeLine({ classification: plan.classification, assistant_access: plan.assistant_access })}</dd>
               <dt className="text-muted-foreground">Features</dt><dd data-testid="review-features">{featureNames(plan.features).join(", ") || "none"}</dd>
               <dt className="text-muted-foreground">Files</dt><dd data-testid="review-files">{plan.files.length} to write</dd>

@@ -10,8 +10,9 @@ import { Activity, AlertTriangle, ChevronDown, FileDiff, FolderKanban, FolderOpe
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
 import { attachProject, detachProject, getActivity, getChanges, getChatAttachment, listProjects, type ProjectSummary } from "@/lib/api/projects";
-import { AccessBadge, ClassBadge } from "./badges";
+import { AccessBadge, ClassBadge, StorageBadge } from "./badges";
 import { anyWorking } from "./activity-logic";
+import { whereLabel } from "./encodings";
 import { ChangesPanel, changesKey } from "./changes-panel";
 import { ExplorerPanel } from "./explorer-panel";
 import { accessOf, badgeLine, classOf, roleLabel } from "./roles";
@@ -140,7 +141,8 @@ export function ProjectMenu({ sid, streaming }: { sid: string; streaming: boolea
                 <span className="min-w-0 flex-1 space-y-1">
                   <span className="block truncate font-medium">{p.title ?? p.id}</span>
                   {(p.builtin || roleLabel(p.role)) && <span className="block text-xs text-muted-foreground">{p.builtin ? "Built in - Corvin's own knowledge" : roleLabel(p.role)}</span>}
-                  <span className="flex flex-wrap gap-1"><ClassBadge cls={classOf(p)} /><AccessBadge access={accessOf(p)} /></span>
+                  <span className="flex flex-wrap gap-1"><ClassBadge cls={classOf(p)} /><AccessBadge access={accessOf(p)} />
+                    {(() => { const w = whereLabel(p, list.data ?? {}); return w.kind === "builtin" ? null : <StorageBadge kind={w.kind} title={p.display_path || p.path} />; })()}</span>
                 </span>
               </label>
             ))}

@@ -43,6 +43,7 @@ class PlanBody(BaseModel):
     docs_mode: Optional[str] = Field(default=None, max_length=10)
     classification: Optional[str] = Field(default=None, max_length=16)
     assistant_access: Optional[str] = Field(default=None, max_length=8)
+    storage: Optional[str] = Field(default=None, max_length=8)
 
 
 class CreateBody(BaseModel):
@@ -150,7 +151,7 @@ def plan(body: PlanBody, rec: SessCsrf) -> dict:
     return _call(svc.plan_project, rec.tenant_id, template=body.template, title=body.title,
                  project_id=body.project_id, location=body.location, features=body.features,
                  docs_mode=body.docs_mode, classification=body.classification,
-                 assistant_access=body.assistant_access)
+                 assistant_access=body.assistant_access, storage=body.storage)
 
 
 @router.post("", status_code=201)

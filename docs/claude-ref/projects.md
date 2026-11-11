@@ -4,7 +4,7 @@ A **project** is a directory the user owns, with a `project.yaml`. CorvinOS keep
 Losing the index loses no project. Design: `Corvin-Knowledge` CONCEPT-0126; decisions ADR-2315
 (project object), ADR-2316 (several KBs, scope), ADR-2317 (chat context); plan PLAN-0970.
 Status 2026-11-08: registry, manifest, fragment engine and the API exist (T-0351, T-0352, T-0355); the
-template catalogue is the first-party plugin `project_templates` (T-0354, T-0356, in Corvin-Marketplace, published); the console's Projects panel exists as a list (T-0357); wizard, inspector, scope selector, videos action and doctor (T-0358 to T-0362) are next.
+template catalogue is the first-party plugin `project_templates` (T-0354, T-0356, in Corvin-Marketplace, published); the console's Projects panel, wizard, inspector, scope selector, videos action and doctor exist (T-0357 to T-0362). Status 2026-11-11 (PLAN-0972 phase 1, ADR-2321): the managed workspace is the default place, one location rule judges every path a client names, and the console shows it (Settings sections, Where row and filter, default-place dialog, wizard step 2) - verified on Linux; the Windows VM run of phase 1 (T-0389) has NOT been done.
 
 ## Where things live
 
@@ -18,7 +18,7 @@ template catalogue is the first-party plugin `project_templates` (T-0354, T-0356
 | HTTP routes `/v1/console/projects` | `core/console/corvin_console/routes/projects.py` (mounted in `app.py`) |
 | The catalogue (fragments, templates) | `Corvin-Marketplace/plugins/buildin/knowledge_management/project_templates/` (docs in the plugin: `docs/CATALOGUE.md`) |
 | Registry file | `<tenant_home>/projects/registry.json` (0o600, dir 0o700) |
-| Operator's projects root | `<tenant_home>/projects/settings.json` (`projects_root`, default `~/projects`) |
+| Where new projects go | `<tenant_home>/projects/settings.json` (schema 2: `default_storage` `managed`\|`root`, `projects_root` - unset = `~/projects` as the fallback folder rebuild looks in, `workspace_key`, `managed_root`); written only by `registry.write_settings` |
 | Proof | `tests/e2e/test_projects_registry_e2e.py`, `test_projects_fragments_e2e.py`, `test_projects_api_e2e.py`, `test_project_templates_catalogue_e2e.py` (the REAL catalogue) |
 | Platform data directory, managed workspace path, user places, drives, the lists the location rule judges against | `core/paths/user_dirs.py` (ADR-2321 Decision 7, stdlib only, Python 3.11-safe) |
 
@@ -56,6 +56,12 @@ anything that is not `w-<10 hex>`. The module also answers the lists the locatio
 below a prefix, and so is a path strictly below `/run/media/<own user>/<label>`), `home_roots()`,
 `app_data_dirs()`, `platform_links()`, `user_places()`, `drives()` (never raises; a mapped network drive is a
 `drive` with note `network`, never probed there) and `display_path()`.
+
+**Migration (existing installs).** Nothing moves. Every project registered before the managed workspace existed reads
+`storage: own` and stays where it is; a tenant whose `settings.json` already names a `projects_root` keeps creating there
+(`default_storage: root`), a fresh tenant creates in the workspace. The managed workspace is OUTSIDE the tenant home, so a
+backup of `CORVIN_HOME` does not contain it: back it up with "Export all projects" once E-058 ships; until then copy the
+folder whose path the Projects page names under Change… (the `managed_root`).
 
 **Tests never reach the real workspace.** The repo-root `conftest.py` puts `XDG_DATA_HOME` (on Windows also
 `LOCALAPPDATA`/`APPDATA`) into the session sandbox for every test process, and its tripwire lists the real
@@ -207,10 +213,10 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 |---|---|
 | `GET /` | the tenant's projects (state `ok`/`missing`/`invalid`, active features, `storage` `managed`/`own`/`builtin`, `display_path` `Corvin workspace › <id>` / `~/…` / OS form) + `default_storage`, `managed_root`, `projects_root`, `projects_root_set`, `workspace` (`ok`/`foreign`/`unavailable`); binds the managed workspace on read (ADR-2321) |
 | `GET /templates` | templates, features (requires/suggests), the tenant plugins each needs and their state; `available:false` + reason when the template plugin is not enabled for the tenant |
-| `POST /plan` | `{template, title, [project_id, location, features, docs_mode]}`: no project write; without `location` the place follows `default_storage` (`<managed_root>/<id>` or `<projects_root>/<id>`); returns `location`, `storage`, the file list with owners, `pulled` dependencies, warnings, conflicts, plugin states, `plan_id` (15 min, in memory); audit `project.plan_created`; 422 `workspace_foreign` when the workspace belongs to another installation |
+| `POST /plan` | `{template, title, [project_id, location, features, docs_mode, storage]}`: no project write; without `location` the place is `storage` when given (`managed`\|`root`, the wizard's step 2 - it replaces the tenant default for this one create; `root` without a stored projects folder is 409 `root_required`, another value 400), else `default_storage` (`<managed_root>/<id>` or `<projects_root>/<id>`); a `location` wins over `storage`; returns `location`, `storage`, the file list with owners, `pulled` dependencies, warnings, conflicts, plugin states, `plan_id` (15 min, in memory); audit `project.plan_created`; 422 `workspace_foreign` when the workspace belongs to another installation |
 | `POST /` | `{plan_id}`: re-validates location, catalogue version and plugins, then writes `project.yaml`, registers, applies, seeds the KB; 201 |
 | `POST /adopt` | `{location}`: registers an existing directory whose `project.yaml` names this tenant; writes nothing in it |
-| `GET /{id}`, `GET /{id}/health` | detail with the feature catalogue (dependants, plugin states, suggestions); a checklist of real checks (manifest, features closed, generated files in sync, tenant plugins, `kb check`) - never a score |
+| `GET /{id}`, `GET /{id}/health` | detail with the feature catalogue (dependants, plugin states, suggestions) and `location_warnings` (`[{class: "hint_word", message}]` for an `own` folder whose path the path gate's hint test matches, else `[]`; the Settings tab's Location section shows the message); a checklist of real checks (manifest, features closed, generated files in sync, tenant plugins, `kb check`) - never a score |
 | `PUT /{id}/features` | `{set: {feature: bool}, accept_dependencies, cascade}`: 409 `has_dependants` / `needs_dependencies` / `plugin_missing` carry the lists the UI shows; switching off never deletes a file |
 | `POST /{id}/repair` | `{dry_run}`: pending changes with diffs; repair rewrites generated and machine-local files only |
 | `POST /{id}/open` | audit `project.opened`; returns the context and a terminal command (`chat_attachment: false` until ADR-2317's spike) |
@@ -277,10 +283,10 @@ it silently (`tests/unit/page-dir-shadow.test.ts`).
 
 Behaviour: a project whose folder is gone is SHOWN as "Directory missing" with the server's reason and sorted
 first - never dropped; the cards show readable feature names (`core` is not a chip), what the template offers but
-the project switched off, the template and the folder. With no project the empty state explains the folder model
-("removing it from this list never deletes a file") and, when the template plugin is not enabled for the tenant,
-names that and links to the Marketplace. There is deliberately NO "New project" / "Adopt" button yet: a button
-that does nothing is a stub on a production surface; the wizard (T-0358) adds it. UI text is English and carries
+the project switched off, the template and where the folder lives (the "Where" row, T-0388). With no project the empty
+state explains the folder model ("removing it from this list never deletes a file") and, when the template plugin is
+not enabled for the tenant, names that and links to the Marketplace. "New project" (the wizard) and "Add existing
+folder" (adopt; any folder the location rule accepts, no longer only inside the projects root) sit in the header. UI text is English and carries
 no ADR id and no plugin index id (asserted).
 
 To run the browser test against the live console (it only stubs and reads): `CORVIN_E2E_ALLOW_LIVE=1
@@ -310,8 +316,8 @@ review, a pulled requirement, a refused plan, a conflict). The real create path 
 Built tabs: **Overview** (the server's health checks, headline never "all good" over a red check), **Features**
 (switch on/off; a switch-off that would take dependants away asks first and then sends `cascade`; a switch-on that
 needs more asks first and then sends `accept_dependencies`; a feature whose tenant plugin is not enabled cannot be
-switched on and says why), **Settings** (repair: preview, then apply; show the open command; remove from the list
-with a confirmation that the files stay). Pure decisions in `pages/projects/inspector-logic.ts` (unit-tested).
+switched on and says why), **Settings** (seven sections since T-0387, see "Settings sections, Where and the default
+place" below). Pure decisions in `pages/projects/inspector-logic.ts` (unit-tested).
 
 **Also built** (T-0359): Structure (`GET /projects/{id}/structure`, read-only, two levels, .git left out, symlinks listed
 never followed), Docs (knowledge-base counts from the same read), Knowledge (opens the project's graph with
@@ -327,6 +333,54 @@ the feature-off switch), `tests/unit/projects-inspector.test.ts` (13).
 **Not built yet** (T-0359 stays open until this is verified on the other tabs' data): nothing in the list above is
 missing; the open part is a Playwright run of every tab against a real created project (the stubs answer the shape). Proof so far: `tests/unit/projects-inspector.test.ts` (9, incl. a mutation
 probe on the dependants confirmation), `tests/e2e/projects-inspector.spec.ts` (6, served bundle, network stubbed).
+
+## Settings sections, Where and the default place (T-0387, T-0388, ADR-2321 Decision 18, CONCEPT-0131 § C)
+
+**Settings tab** (`web-next/src/pages/projects/settings-sections.tsx`; which sections and actions are drawn is the pure
+`settingsSections(detail, {workspace})` in `inspector-logic.ts`, unit-tested over the matrix state `ok`/`missing`/`invalid` x
+storage `managed`/`own`/builtin). Order and what each action touches:
+
+| Section | Contents | Drawn when |
+|---|---|---|
+| General | title, renamed in place (`PUT /{id}/title`, only `project.yaml`); for 10 s an **Undo** re-sends the old title; id (read-only, copy), template, role, added | always (rename only for `ok`) |
+| Location | storage badge (`Corvin workspace` / `Own folder` / `Projects folder`, `badges.tsx::StorageBadge`, palette tokens only), `display_path` (full path on hover, copy), "Show open command"; **Move…** opens the validated path field (`MoveFlow` in `manage.tsx`, `data-testid=move-input`) -> "Move here" -> "Yes, move the folder" (`POST /{id}/move`; another disk is the server's `cross_device` sentence); `missing`: a box "Folder missing: <reason>" with **Locate folder…** (`POST /{id}/relocate`; the badge and path update without a reload); a `foreign` workspace (`GET /projects` -> `workspace`): "This workspace belongs to another Corvin installation." + "Start a new workspace for this installation" after typing `new workspace` (`PUT /settings/storage {rekey: true}`); an own folder's `location_warnings` sentence | always (Move only `ok`, Locate only `missing`) |
+| Protection | `ProtectionSection` (unchanged) | `ok` |
+| Use in a chat | `AttachSection` (unchanged) | `ok`; the only section of Corvin itself |
+| Maintenance | "<n> checks, <m> failed — <first failed detail>" (`doctorSummary`; doctor notes are not counted) + "Open Overview"; Repair preview -> apply (`POST /{id}/repair`) | `ok`, `invalid` (repair off: needs a readable project.yaml) |
+| Share | "Export…" and "Duplicate…" disabled with the tooltip "Available soon" (E-058) | `ok` |
+| Danger zone | "Remove from the list — the folder and every file stay." two clicks (`DELETE /{id}`); "Delete project files…" disabled "Available in a later update" for `managed` (E-059), "(not available: own folder)" for `own` | always |
+
+A `missing` or `invalid` project shows these sections under its state card (General, Location, [Maintenance], Danger zone), so
+"Locate folder…" and "Remove from the list" are reachable without the tabs.
+
+**List** (`index.tsx`): the header sentence `defaultPlaceSentence()` - "New projects go to the Corvin workspace." or "New
+projects go to <projects_root>." - with **Change…**, which opens **Default place for new projects** (`DefaultPlaceDialog` in
+`manage.tsx`, replaces the old `RootEditor`): "Corvin workspace (recommended)" with the `managed_root` and "— managed by Corvin
+for this workspace", or "A folder of my own" with the validated path field; footer "Projects already somewhere else keep working;
+nothing is moved."; Save -> `PUT /settings/storage`; a refusal stays in the dialog as the server's sentence. Every card has a
+**Where** row (badge + shortened path, full path in `title`; Corvin itself: "Corvin's knowledge base"); a missing card links
+"Locate folder…" to its Settings. The **Where** filter (All places / Corvin workspace / Own folder / Projects folder) appears
+only when the user's own projects have more than one kind. `Projects folder` is derived in the client: the server reports
+`managed`/`own`/`builtin` per entry, and an `own` entry strictly below a set `projects_root` reads `root`
+(`encodings.ts::whereKind`, separator-aware, case-insensitive for Windows paths).
+
+**Wizard step 2** (`wizard-dialog.tsx`, `wizard.ts`): an optional **Id** field and **Where**: "Corvin workspace (recommended)",
+"Projects folder" (only while one is set) and "Choose a folder…" (reveals the validated path field; the folder picker replaces it
+with E-057). The start is the tenant's default place (`initialPlace`). The first two send `storage`, the third only `location`.
+The review shows the storage badge and the target path. A refusal about the id (`hint_word`, `id_taken`) brings the wizard back to
+step 2 with the sentence under the id field (`idProblem`).
+
+**Chat menu** (`chat-menu.tsx`): each project carries its storage badge next to class and access; no behaviour change.
+
+Proof: unit `tests/unit/projects-encodings.test.ts` (whereLabel/whereKind/whereFilter/presentWhere/defaultPlaceSentence),
+`projects-inspector.test.ts` (settingsSections matrix, doctorSummary), `projects-wizard.test.ts` (place, storage, id);
+browser on the served bundle with the network stubbed: `tests/e2e/projects-settings.spec.ts` (sections, rename Undo with a fake
+clock, Locate folder, two-click remove, typed rekey, 1280/375 x light/dark screenshots without sideways scroll),
+`projects-panel.spec.ts`, `projects-wizard.spec.ts`, `projects-chat-menu.spec.ts`, `projects-manage.spec.ts`; server:
+`tests/e2e/test_projects_location_e2e.py::WizardStorageChoice`; the running console, nothing stubbed (keep-live, opt-in):
+`tests/e2e/projects-settings-live.spec.ts` - creates `p1-live-check` through the wizard in the managed workspace, checks the
+sections, rename Undo through the API, remove + re-adopt (the folder stayed), then removes the entry and deletes exactly that one
+folder.
 
 ## Scope of the Tasks board and the Knowledge Graph (T-0360, switcher 2026-11-09)
 

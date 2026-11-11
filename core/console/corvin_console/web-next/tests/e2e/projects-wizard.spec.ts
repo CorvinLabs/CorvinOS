@@ -106,3 +106,104 @@ test("a plan with a conflict offers no Create", async ({ page }) => {
   await expect(wiz.getByTestId("review-conflict")).toContainText("already exists");
   await expect(wiz.getByTestId("wizard-create")).toBeDisabled();
 });
+
+// ── step 2: where the project goes (T-0388, CONCEPT-0131 § C3) ──────────────────────────────────────
+
+const MR = "/home/u/.local/share/corvin/projects/w-0123456789";
+
+async function stubPlace(page: Page, opts: { rootSet?: boolean; refuse?: { status: number; reason: string; message: string } } = {}) {
+  const st = { plans: [] as Record<string, unknown>[], created: false };
+  await page.route(/\/v1\/console\/projects\/templates/, (r) => r.fulfill({ json: CATALOGUE }));
+  await page.route(/\/v1\/console\/projects$/, (r) => {
+    if (r.request().method() !== "GET") { st.created = true; return r.fulfill({ status: 201, json: { project: { id: "plumbline" }, written: [], actions: [] } }); }
+    return r.fulfill({ json: { projects_root: "/home/u/work", projects_root_set: !!opts.rootSet, default_storage: "managed", managed_root: MR, workspace: "ok",
+      projects: st.created ? [{ id: "plumbline", path: `${MR}/plumbline`, template: "knowledge-only@1", state: "ok", title: "Plumbline",
+        active: ["core", "kb"], features: { core: true, kb: true }, storage: "managed", display_path: "Corvin workspace › plumbline" }] : [] } });
+  });
+  await page.route(/\/v1\/console\/projects\/plan$/, (r) => {
+    const b = r.request().postDataJSON() as Record<string, unknown>;
+    st.plans.push(b);
+    if (opts.refuse && st.plans.length === 1) {
+      return r.fulfill({ status: opts.refuse.status, json: { detail: { message: opts.refuse.message, reason_class: opts.refuse.reason } } });
+    }
+    const managed = !b.location && b.storage !== "root";
+    const loc = typeof b.location === "string" ? b.location : managed ? `${MR}/plumbline` : "/home/u/work/plumbline";
+    return r.fulfill({ json: { ...PLAN, location: loc, storage: managed ? "managed" : "own" } });
+  });
+  return st;
+}
+
+async function toStep2(page: Page) {
+  await page.goto("/console/app/projects");
+  await page.getByTestId("new-project-button").click();
+  const wiz = page.getByTestId("new-project-wizard");
+  await wiz.getByTestId("template-option").filter({ hasText: "Knowledge only" }).click();
+  await wiz.getByTestId("wizard-next").click();
+  await wiz.getByTestId("wizard-title").fill("Plumbline");
+  return wiz;
+}
+
+test("step 2 defaults to the Corvin workspace; a create with no path lands there and the card says so", async ({ page }) => {
+  const st = await stubPlace(page);
+  const wiz = await toStep2(page);
+  await expect(wiz.getByTestId("wizard-place-managed")).toBeChecked();
+  await expect(wiz.getByTestId("wizard-place-root")).toHaveCount(0);                   // no projects folder chosen: not offered
+  await expect(wiz.getByTestId("wizard-location")).toHaveCount(0);
+  await wiz.getByTestId("wizard-next").click();
+  await wiz.getByTestId("wizard-next").click();
+  await expect(wiz.getByTestId("review-storage")).toHaveText("Corvin workspace");
+  await expect(wiz.getByTestId("review-location")).toHaveText(`${MR}/plumbline`);
+  expect(st.plans[0]).toMatchObject({ storage: "managed" });
+  expect(st.plans[0]).not.toHaveProperty("location");
+  await wiz.getByTestId("wizard-create").click();
+  await expect(page.getByTestId("new-project-wizard")).toHaveCount(0);
+  await expect(page.locator('[data-testid="project-card"][data-project-id="plumbline"]').getByTestId("project-where"))
+    .toHaveText("Corvin workspace › plumbline");
+});
+
+test("the projects folder is offered once one is set; Choose a folder reveals the path field and sends only the path", async ({ page }) => {
+  const st = await stubPlace(page, { rootSet: true });
+  const wiz = await toStep2(page);
+  await expect(wiz.getByTestId("wizard-place-root")).toBeVisible();
+  await expect(wiz.getByTestId("wizard-place-root-label")).toContainText("/home/u/work");
+  await wiz.getByTestId("wizard-place-custom").check();
+  await expect(wiz.getByTestId("wizard-next")).toBeDisabled();                         // a folder of my own needs the folder
+  await wiz.getByTestId("wizard-location").fill("/home/u/code/plumbline");
+  await wiz.getByTestId("wizard-next").click();
+  await wiz.getByTestId("wizard-next").click();
+  await expect(wiz.getByTestId("review-storage")).toHaveText("Own folder");
+  expect(st.plans[0]).toMatchObject({ location: "/home/u/code/plumbline" });
+  expect(st.plans[0]).not.toHaveProperty("storage");
+});
+
+test("a managed id the safety check would refuse brings the wizard back to the id field with the sentence", async ({ page }) => {
+  const message = "Commands that name this folder would be refused by the assistant's safety check; choose another id.";
+  const st = await stubPlace(page, { refuse: { status: 422, reason: "hint_word", message } });
+  const wiz = await toStep2(page);
+  await wiz.getByTestId("wizard-id").fill("forge-lab");
+  await wiz.getByTestId("wizard-next").click();
+  await wiz.getByTestId("wizard-next").click();
+  await expect(wiz.getByTestId("wizard-step")).toHaveText("Step 2 of 4");
+  await expect(wiz.getByTestId("wizard-id-error")).toHaveText(message);
+  expect(st.plans[0]).toMatchObject({ project_id: "forge-lab", storage: "managed" });
+  await wiz.getByTestId("wizard-id").fill("lab-one");
+  await expect(wiz.getByTestId("wizard-id-error")).toHaveCount(0);
+  await wiz.getByTestId("wizard-next").click();
+  await wiz.getByTestId("wizard-next").click();
+  await expect(wiz.getByTestId("wizard-step")).toHaveText("Step 4 of 4");
+});
+
+for (const theme of ["light", "dark"] as const) {
+  test(`the wizard's place step at 375 px (${theme})`, async ({ page }) => {
+    const out = process.env.SHOTS_DIR ?? "/tmp/phase1-shots";
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.addInitScript((t) => { try { localStorage.setItem("corvin-theme", t); localStorage.setItem("corvin-dark-default-v2", "1"); } catch { /* ignore */ } }, theme);
+    await stubPlace(page, { rootSet: true });
+    const wiz = await toStep2(page);
+    await wiz.getByTestId("wizard-place-custom").check();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    await page.screenshot({ path: `${out}/wizard-place-${theme}-375.png` });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.screenshot({ path: `${out}/wizard-place-${theme}-1280.png` });
+  });
+}

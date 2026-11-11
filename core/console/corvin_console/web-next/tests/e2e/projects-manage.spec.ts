@@ -58,12 +58,14 @@ test("Rename sends only the title; Move needs a second confirming click and then
   await expect.poll(() => renamed?.title).toBe("A better name");
   await expect(page.getByTestId("manage-note")).toContainText("Only project.yaml changed");
 
+  await expect(page.getByTestId("move-input")).toHaveCount(0);                 // the field opens with "Move…" (Location section, T-0387)
+  await page.getByTestId("move-open").click();
   await page.getByTestId("move-input").fill("/home/u/projects/new");
   await page.getByTestId("move-start").click();
   expect(moved).toBeNull();                                                    // not sent before the confirmation
   await page.getByTestId("move-confirm").click();
   await expect.poll(() => moved?.location).toBe("/home/u/projects/new");
-  await expect(page.getByTestId("manage-note")).toContainText("2 machine-local file(s) regenerated");
+  await expect(page.getByTestId("move-note")).toContainText("2 machine-local file(s) regenerated");
 });
 
 test("Use in a chat: attach sends the chosen chat, detach appears once the chat is attached to this project", async ({ page }) => {

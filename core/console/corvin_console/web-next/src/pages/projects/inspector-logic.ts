@@ -3,7 +3,7 @@
  * 409 means for the user, and which tabs exist. The page only draws these.
  */
 import { ApiError } from "@/lib/api/client";
-import type { FeatureRow } from "@/lib/api/projects";
+import type { FeatureRow, HealthCheck, ProjectDetail, WorkspaceState } from "@/lib/api/projects";
 import { featureLabel } from "./encodings";
 
 export type Tab = "overview" | "structure" | "docs" | "knowledge" | "tasks" | "videos" | "directory" | "compute" | "features" | "settings";
@@ -97,4 +97,61 @@ export function videoNameProblem(name: string): string | null {
   if (n.length > 60) return "The name is at most 60 characters.";
   if (!/^[a-z0-9][a-z0-9-]*$/.test(n)) return "Use lowercase letters, digits and dashes, starting with a letter or digit.";
   return null;
+}
+
+// ── the Settings tab (T-0387, CONCEPT-0131 § C1) ──────────────────────────────────────────────────────
+
+export type SectionId = "general" | "location" | "protection" | "chat" | "maintenance" | "share" | "danger";
+export type ActionId = "rename" | "move" | "locate" | "rekey" | "repair" | "export" | "duplicate" | "remove" | "delete";
+/** An action that is listed. `note` says why it is off (or, for an own folder's delete row, why it does not exist). */
+export interface ActionGate { enabled: boolean; note: string | null }
+export interface SettingsSection {
+  id: SectionId;
+  title: string;
+  /** Present = drawn; absent = not offered in this state. */
+  actions: Partial<Record<ActionId, ActionGate>>;
+  /** Sentences the section shows as they are (the hint-word warning of an own folder). */
+  notes: string[];
+}
+
+export const SECTION_TITLE: Record<SectionId, string> = {
+  general: "General", location: "Location", protection: "Protection", chat: "Use in a chat",
+  maintenance: "Maintenance", share: "Share", danger: "Danger zone",
+};
+
+const ON: ActionGate = { enabled: true, note: null };
+const off = (note: string): ActionGate => ({ enabled: false, note });
+
+/** Which sections and actions the Settings tab offers for a project in its state (ok, missing, invalid) and place (managed, own,
+ *  built in). The server judges every action again; this only decides what is drawn. */
+export function settingsSections(d: ProjectDetail, ctx: { workspace?: WorkspaceState }): SettingsSection[] {
+  const sec = (id: SectionId, actions: SettingsSection["actions"] = {}, notes: string[] = []): SettingsSection =>
+    ({ id, title: SECTION_TITLE[id], actions, notes });
+  if (d.builtin || d.storage === "builtin") return [sec("chat")];
+  const ok = d.state === "ok";
+  const missing = d.state === "missing";
+  const managed = d.storage === "managed";
+  const location: SettingsSection["actions"] = {};
+  if (ok) location.move = ON;
+  if (missing) location.locate = ON;
+  if (ctx.workspace === "foreign") location.rekey = ON;
+  const hints = d.storage === "own" ? (d.location_warnings ?? []).filter((w) => w.class === "hint_word").map((w) => w.message) : [];
+  const out: SettingsSection[] = [
+    sec("general", { rename: ok ? ON : off("The title can be changed once the project's folder is usable again.") }),
+    sec("location", location, hints),
+  ];
+  if (ok) out.push(sec("protection"), sec("chat"));
+  if (ok || d.state === "invalid") out.push(sec("maintenance", { repair: ok ? ON : off("Repair needs a readable project.yaml.") }));
+  if (ok) out.push(sec("share", { export: off("Available soon"), duplicate: off("Available soon") }));
+  out.push(sec("danger", { remove: ON, delete: managed ? off("Available in a later update") : off("(not available: own folder)") }));
+  return out;
+}
+
+/** The Maintenance line: "<n> checks, <m> failed — <first failed detail>". Notes are observations, not checks. */
+export function doctorSummary(checks: HealthCheck[]): string {
+  const real = checks.filter((c) => !c.note);
+  if (real.length === 0) return "No checks have run.";
+  const failed = real.filter((c) => !c.ok);
+  if (failed.length === 0) return `${real.length} checks, none failed`;
+  return `${real.length} checks, ${failed.length} failed — ${failed[0].detail}`;
 }

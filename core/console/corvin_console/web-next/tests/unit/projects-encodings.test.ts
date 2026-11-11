@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ProjectSummary, TemplateCatalogue } from "@/lib/api/projects";
-import { emptyState, featureChips, featureLabel, offFeatures, sortProjects, stateOf, templateLabel } from "@/pages/projects/encodings";
+import { defaultPlaceSentence, emptyState, featureChips, featureLabel, offFeatures, presentWhere, sortProjects, stateOf, templateLabel, whereFilter, whereKind, whereLabel } from "@/pages/projects/encodings";
 
 const ok: ProjectSummary = {
   id: "plumbline", path: "/p/plumbline", template: "video-engineering@1", state: "ok", title: "Plumbline",
@@ -92,5 +92,48 @@ describe("the built-in Corvin project (CONCEPT-0129)", () => {
   it("is not a second scope entry: the 'bound' scope is Corvin", () => {
     const list = [mk("corvin", { builtin: true }), mk("alpha")];
     expect(selectableProjects(list).map((p) => p.id)).toEqual(["alpha"]);
+  });
+});
+
+describe("where a project lives (T-0388)", () => {
+  const ctx = { projects_root: "/home/u/work", projects_root_set: true };
+  const managed: ProjectSummary = { ...ok, id: "alpha", path: "/home/u/.local/share/corvin/projects/w-0123456789/alpha", storage: "managed",
+    display_path: "Corvin workspace \u203a alpha" };
+  const own: ProjectSummary = { ...ok, id: "beta", path: "/home/u/code/beta", storage: "own", display_path: "~/code/beta" };
+  const rooted: ProjectSummary = { ...ok, id: "gamma", path: "/home/u/work/gamma", storage: "own", display_path: "~/work/gamma" };
+  const corvin: ProjectSummary = { ...ok, id: "corvin", path: "/x/kb", builtin: true, storage: "builtin", display_path: "/x/kb" };
+
+  it("labels the three kinds and the built-in project; the full path is the title", () => {
+    expect(whereLabel(managed, ctx)).toEqual({ kind: "managed", badge: "Corvin workspace", text: "\u203a alpha", title: managed.path });
+    expect(whereLabel(own, ctx)).toEqual({ kind: "own", badge: "Own folder", text: "~/code/beta", title: own.path });
+    expect(whereLabel(rooted, ctx)).toEqual({ kind: "root", badge: "Projects folder", text: "~/work/gamma", title: rooted.path });
+    expect(whereLabel(corvin, ctx)).toEqual({ kind: "builtin", badge: "", text: "Corvin's knowledge base", title: "/x/kb" });
+  });
+  it("an own folder is a projects-folder project only while a projects folder is set, and only strictly below it", () => {
+    expect(whereKind(rooted, { ...ctx, projects_root_set: false })).toBe("own");
+    expect(whereKind({ ...rooted, path: "/home/u/work" }, ctx)).toBe("own");
+    expect(whereKind({ ...rooted, path: "/home/u/workshop/x" }, ctx)).toBe("own");
+    expect(whereKind({ ...rooted, path: "D:\\Work\\gamma" }, { projects_root: "d:\\work", projects_root_set: true })).toBe("root");
+    expect(whereKind({ ...rooted, path: "/home/u/work/gamma" }, { projects_root: "/home/u/work/", projects_root_set: true })).toBe("root");
+  });
+  it("an entry from an older server (no storage, no display_path) reads own with its path", () => {
+    const old: ProjectSummary = { ...ok, path: "/p/plumbline" };
+    expect(whereLabel(old)).toEqual({ kind: "own", badge: "Own folder", text: "/p/plumbline", title: "/p/plumbline" });
+  });
+  it("the filter keeps one kind, 'all' keeps everything, and Corvin itself only under 'all'", () => {
+    const list = [corvin, managed, own, rooted];
+    expect(whereFilter(list, "all", ctx).map((p) => p.id)).toEqual(["corvin", "alpha", "beta", "gamma"]);
+    expect(whereFilter(list, "managed", ctx).map((p) => p.id)).toEqual(["alpha"]);
+    expect(whereFilter(list, "own", ctx).map((p) => p.id)).toEqual(["beta"]);
+    expect(whereFilter(list, "root", ctx).map((p) => p.id)).toEqual(["gamma"]);
+  });
+  it("the kinds present ignore Corvin itself, so the filter appears only with two kinds of the user's own projects", () => {
+    expect(presentWhere([corvin, managed], ctx)).toEqual(["managed"]);
+    expect(presentWhere([corvin, managed, own, rooted], ctx)).toEqual(["managed", "own", "root"]);
+  });
+  it("the header sentence names the default place", () => {
+    expect(defaultPlaceSentence({ default_storage: "managed", projects_root: "/home/u/work" })).toBe("New projects go to the Corvin workspace.");
+    expect(defaultPlaceSentence({ default_storage: "root", projects_root: "/home/u/work" })).toBe("New projects go to /home/u/work.");
+    expect(defaultPlaceSentence({ projects_root: "/home/u/projects" })).toBe("New projects go to /home/u/projects.");
   });
 });

@@ -136,3 +136,16 @@ test("an attachment the data-flow gate withholds is shown as withheld, in words 
   await expect(page.getByTestId("project-menu-withheld")).toContainText("not sent to the assistant right now");
   await expect(page.getByTestId("project-menu-withheld")).toContainText("SECRET");
 });
+
+test("each project in the menu carries its place badge next to class and access (T-0388)", async ({ page }) => {
+  const sid = await aSid(page);
+  await stub(page, sid);
+  await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: { ...LIST, projects: [
+    { ...P("alpha", "software", "internal", "write"), storage: "managed", display_path: "Corvin workspace › alpha" },
+    { ...P("beta", "legal", "confidential", "read"), storage: "own", display_path: "~/code/beta" }] } }));
+  await page.goto(`/console/app/chat/${sid}`);
+  await page.getByTestId("project-menu-button").click();
+  const panel = page.getByTestId("project-menu-panel");
+  await expect(panel.getByTestId("storage-badge")).toHaveText(["Corvin workspace", "Own folder"]);
+  await expect(panel.getByTestId("storage-badge").first()).toHaveAttribute("title", "Corvin workspace › alpha");
+});

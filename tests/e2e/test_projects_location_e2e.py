@@ -764,6 +764,44 @@ class MoveNamespaceHints(LocationBase):
                 hints.reset()
 
 
+class WizardStorageChoice(LocationBase):
+    """T-0388: the wizard's step 2 names the place (``storage`` on POST /plan), whatever the tenant's default is; the inspector's
+    Location section reads the hint-word warning of an own folder from the detail (``location_warnings``)."""
+
+    def test_plan_storage_managed_wins_over_a_root_default(self):
+        with self._ctx() as c:
+            mr = Path(c.own.get(_URL).json()["managed_root"])
+            root = self.tmp / "work" / "projects"
+            r = c.own.put(f"{_URL}/settings/storage", json={"default_storage": "root", "projects_root": str(root)}, headers=c.h)
+            self.assertEqual(r.status_code, 200, r.text)
+            p = self._plan(c, "Chosen managed", storage="managed")
+            self.assertEqual(p.status_code, 200, p.text)
+            self.assertEqual((Path(p.json()["location"]).parent, p.json()["storage"]), (mr, "managed"))
+            p = self._plan(c, "Chosen root", storage="root")
+            self.assertEqual((Path(p.json()["location"]).parent, p.json()["storage"]), (root, "own"))
+            p = self._plan(c, "Default root")
+            self.assertEqual(Path(p.json()["location"]).parent, root, "no storage: the tenant default as before")
+
+    def test_plan_storage_root_without_a_projects_folder_is_root_required(self):
+        with self._ctx() as c:
+            p = self._plan(c, "No root", storage="root")
+            self.assertEqual(p.status_code, 409, p.text)
+            self.assertEqual(p.json()["detail"]["reason_class"], "root_required")
+            bad = self._plan(c, "Bad kind", storage="other")
+            self.assertEqual(bad.status_code, 400, bad.text)
+
+    def test_the_detail_carries_the_hint_warning_of_an_own_folder(self):
+        with self._ctx() as c:
+            _plan, made = self._create(c, "Forge lab", project_id="forge-lab", location=str(self.tmp / "code" / "forge-lab"))
+            self.assertEqual(made.status_code, 201, made.text)
+            d = c.own.get(f"{_URL}/forge-lab").json()
+            self.assertEqual(d["location_warnings"], [{"class": "hint_word", "message":
+                             "The assistant may refuse some shell commands in a folder whose path contains 'forge'."}])
+            _plan, made = self._create(c, "Quiet one")
+            self.assertEqual(made.status_code, 201, made.text)
+            self.assertEqual(c.own.get(f"{_URL}/quiet-one").json()["location_warnings"], [])
+
+
 class PlatformFixtures(LocationBase):
     """AC7: the managed_root string of GET /projects per platform (macOS on a POSIX host through the real filesystem)."""
 

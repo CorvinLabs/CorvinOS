@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api/client";
 import type { ProjectPlan, TemplateCatalogue } from "@/lib/api/projects";
-import { INITIAL, canAdvance, choosable, chooseTemplate, explain, planRequest, requiredClosure, toggleFeature, type WizardState } from "@/pages/projects/wizard";
+import { INITIAL, canAdvance, choosable, chooseTemplate, explain, idProblem, initialPlace, planRequest, requiredClosure, toggleFeature, type WizardState } from "@/pages/projects/wizard";
 
 const feat = (id: string, requires: string[] = [], plugins: { plugin: string; state: "absent" | "installed" | "enabled" }[] = []) =>
   ({ id, title: id, description: "", requires, suggests: [], plugins });
@@ -76,14 +76,14 @@ describe("advancing", () => {
 });
 
 describe("the request", () => {
-  it("sends the trimmed name, an empty folder means the server default, never an empty string", () => {
+  it("sends the trimmed name, an empty folder means the chosen place, never an empty string", () => {
     const req = planRequest({ ...INITIAL, templateId: "knowledge-only", title: "  Plumbline  ", location: "  ", features: ["core", "kb"], docsMode: "plain" });
     expect(req).toEqual({ template: "knowledge-only", title: "Plumbline", features: ["core", "kb"], docs_mode: "plain",
-      classification: "internal", assistant_access: "read" });
+      classification: "internal", assistant_access: "read", storage: "managed" });
     expect(req).not.toHaveProperty("location");
   });
   it("a typed folder is sent trimmed", () => {
-    expect(planRequest({ ...INITIAL, templateId: "t", title: "x", location: " /p/x " }).location).toBe("/p/x");
+    expect(planRequest({ ...INITIAL, templateId: "t", title: "x", place: "custom", location: " /p/x " }).location).toBe("/p/x");
   });
 });
 
@@ -126,5 +126,39 @@ describe("refusals become sentences", () => {
     expect(explain(new ApiError(403, undefined))).toMatch(/Sign in again/);
     expect(explain(new Error("network"), "wizard")).toMatch(/whether the project was created/);
     expect(explain(new Error("network"))).toMatch(/may or may not have been applied/);
+  });
+});
+
+describe("the place of a new project (T-0388)", () => {
+  const named: WizardState = { ...INITIAL, step: 2, templateId: "knowledge-only", title: "Alpha", features: ["core", "kb"] };
+  it("defaults to the tenant's default place, the Corvin workspace on a fresh tenant", () => {
+    expect(INITIAL.place).toBe("managed");
+    expect(initialPlace("managed", true)).toBe("managed");
+    expect(initialPlace("root", true)).toBe("root");
+    expect(initialPlace("root", false)).toBe("managed");
+    expect(initialPlace(undefined, false)).toBe("managed");
+  });
+  it("the workspace and the projects folder are sent as storage without a path; a folder of my own sends only the path", () => {
+    expect(planRequest({ ...named, place: "managed", location: "/ignored" })).toMatchObject({ storage: "managed" });
+    expect(planRequest({ ...named, place: "managed", location: "/ignored" }).location).toBeUndefined();
+    expect(planRequest({ ...named, place: "root" })).toMatchObject({ storage: "root" });
+    const own = planRequest({ ...named, place: "custom", location: " /home/u/code/alpha " });
+    expect(own.location).toBe("/home/u/code/alpha");
+    expect(own.storage).toBeUndefined();
+  });
+  it("an own folder needs a path before step 2 can advance; an id is optional but sent when given", () => {
+    expect(canAdvance({ ...named, place: "custom", location: "" }, undefined)).toBe(false);
+    expect(canAdvance({ ...named, place: "custom", location: "/x" }, undefined)).toBe(true);
+    expect(canAdvance({ ...named, place: "managed" }, undefined)).toBe(true);
+    expect(planRequest({ ...named, projectId: " alpha-2 " }).project_id).toBe("alpha-2");
+    expect(planRequest({ ...named, projectId: "" }).project_id).toBeUndefined();
+  });
+  it("a refused id comes back to the id field with the server's sentence; other refusals do not", () => {
+    const hint = new ApiError(422, { detail: { message: "Commands that name this folder would be refused by the assistant's safety check; choose another id.", reason_class: "hint_word" } });
+    expect(idProblem(hint)).toBe("Commands that name this folder would be refused by the assistant's safety check; choose another id.");
+    expect(idProblem(new ApiError(409, { detail: { message: "a project with this id already exists", reason_class: "id_taken" } })))
+      .toBe("a project with this id already exists");
+    expect(idProblem(new ApiError(422, { detail: { message: "This is a system folder; projects cannot live here.", reason_class: "system_prefix" } }))).toBeNull();
+    expect(idProblem(new Error("x"))).toBeNull();
   });
 });
