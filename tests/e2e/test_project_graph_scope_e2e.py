@@ -273,6 +273,14 @@ class ProjectGraphScopeE2E(unittest.TestCase):
                 self.assertEqual(x.status_code, 409, (kind, x.text))
             manual = own.post(f"{_TT}/items", json={"kind": "initiative", "title": "plain", "priority": "low"}, headers=h)
             self.assertEqual(manual.status_code, 201, manual.text)
+            # moving a manual card under a project's KB card afterwards is refused by the same rule (REVIEW-0086 N38)
+            issue = own.post(f"{_TT}/items", json={"kind": "issue", "title": "loose issue"}, headers=h).json()
+            mtask = own.post(f"{_TT}/items", json={"kind": "task", "title": "loose task"}, headers=h).json()
+            for item, parent in ((issue, r.json()["id"]), (mtask, epic.json()["id"])):
+                x = own.patch(f"{_TT}/items/{item['id']}", json={"version": item["version"], "parent_id": parent}, headers=h)
+                self.assertEqual(x.status_code, 409, (item["kind"], x.text))
+            kids = own.get(f"{_TT}/items/{r.json()['id']}").json()
+            self.assertNotIn("loose issue", str(kids))
 
 
 if __name__ == "__main__":

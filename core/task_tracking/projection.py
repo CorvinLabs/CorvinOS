@@ -81,20 +81,8 @@ def scope_of_ref(external_ref: Any) -> Optional[str]:
 
 
 def project_of_card(item: dict[str, Any]) -> Optional[str]:
-    """The project a board card belongs to. Only a KB card (``external_ref`` ``kb:...``, written by the projector alone) has one:
-    its reference names it, and a card projected before references carried the project (``kb:<uid>`` + a ``prj-<id>`` label,
-    before a38a1745f; the projector re-keys it on the project's next change) is read from that label. A manual card never
-    belongs to a project, whatever labels a person typed (REVIEW-0082 N30)."""
-    ref = str(item.get("external_ref") or "")
-    if not ref.startswith("kb:"):
-        return None
-    scope = scope_of_ref(ref)
-    if scope:
-        return scope
-    for x in item.get("labels") or []:
-        if isinstance(x, str) and x.startswith(SCOPE_PREFIX):
-            return x[len(SCOPE_PREFIX):] or None
-    return None
+    """The project a board card belongs to - :func:`service.project_of_card`, the one rule (REVIEW-0082 N30)."""
+    return service.project_of_card(item)
 
 
 def _payload_ref(external_ref: str) -> str:

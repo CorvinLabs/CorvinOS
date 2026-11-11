@@ -1290,7 +1290,9 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   create are written onto the projected card right after `kb new` (`_keep_local_fields`, both boards). Without a scope
   nothing changes (REVIEW-0083 N32, REVIEW-0084 N33-N35). The parent decides, not the board: a KB card takes only the
   knowledge base's hierarchy as children, and a PROJECT's KB card takes nothing else - the dialog (`parentFits`, the
-  no-children notice) and `POST /items` (409) apply it from every view, the All view included (REVIEW-0085 N36, N37). A chain failure between two opening records of `_audited` closes the ones already
+  no-children notice) and the store's one parent rule (`service._check_parent` -> `ProjectParentRefused`, 409) apply it on
+  create, update (PATCH `parent_id`) and restore, from every view (REVIEW-0085 N36, N37, REVIEW-0086 N38).
+  `service.project_of_card` is the one reader of a card's project; `projection.project_of_card` delegates to it. A chain failure between two opening records of `_audited` closes the ones already
   open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
   feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,

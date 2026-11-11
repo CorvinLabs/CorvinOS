@@ -228,19 +228,56 @@ def _check_adr_uniqueness(conn: sqlite3.Connection, tenant_id: str, external_ref
         )
 
 
+class ProjectParentRefused(TaskTrackingError):
+    """A manual card placed under a card of a project's knowledge base (HTTP 409, like every other KB refusal)."""
+
+
+def project_of_card(item: Any) -> Optional[str]:
+    """The project a board card belongs to. Only a KB card (``external_ref`` ``kb:...``, written by the projector alone) has one:
+    its reference names it (``kb:<uid>@<project>``), and a card projected before references carried the project (``kb:<uid>`` +
+    a ``prj-<id>`` label, before a38a1745f) is read from that label. A manual card never belongs to a project, whatever labels
+    a person typed (REVIEW-0082 N30). ``item``: a dict or a store row."""
+    def _get(k: str) -> Any:
+        try:
+            return item[k]
+        except (KeyError, IndexError):
+            return None
+    ref = str(_get("external_ref") or "")
+    if not ref.startswith(KB_REF_PREFIX):
+        return None
+    if "@" in ref:
+        return ref.split("@", 1)[1] or None
+    labels = _get("labels")
+    if isinstance(labels, str):
+        try:
+            labels = json.loads(labels)
+        except ValueError:
+            labels = []
+    for x in labels or []:
+        if isinstance(x, str) and x.startswith("prj-"):
+            return x[4:] or None
+    return None
+
+
 def _check_parent(conn: sqlite3.Connection, tenant_id: str, kind: str,
-                  parent_id: Optional[str], item_id: Optional[str]) -> None:
+                  parent_id: Optional[str], item_id: Optional[str], *, child_ref: Optional[str] = None) -> None:
     allowed = PARENT_RULES[kind]
     if parent_id is None:
         if None not in allowed:
             raise TaskTrackingError(f"a {kind} needs a parent ({', '.join(a for a in allowed if a)})")
         return
-    parent = conn.execute("SELECT id, kind, parent_id, deleted_at FROM items WHERE tenant_id=? AND id=?",
+    parent = conn.execute("SELECT id, kind, parent_id, deleted_at, external_ref, labels FROM items WHERE tenant_id=? AND id=?",
                           (tenant_id, parent_id)).fetchone()
     if parent is None or parent["deleted_at"]:
         raise TaskTrackingError(f"parent {parent_id!r} not found")
     if parent["kind"] not in allowed:
         raise TaskTrackingError(f"a {kind} cannot sit under a {parent['kind']}")
+    # a card of a PROJECT's knowledge base holds only that knowledge base's children (the projector's own cards): a manual card
+    # under it was missing from the project's board and dangled on the tenant's - one rule for create, update and restore
+    # (REVIEW-0085 N37, REVIEW-0086 N38)
+    if project_of_card(parent) is not None and not str(child_ref or "").startswith(KB_REF_PREFIX):
+        raise ProjectParentRefused("a card of a project's knowledge base holds only that knowledge base's children: an epic "
+                                   "under an initiative, a task under an epic")
     # Cycle: walk up from the new parent; meeting the item itself closes a loop.
     seen = set()
     cur = parent_id
@@ -557,7 +594,7 @@ def _insert(conn: sqlite3.Connection, tenant_id: str, fields: dict[str, Any], *,
         "created_by": actor, "updated_at": now, "version": 1,
     })
     row.update({k: v for k, v in fields.items() if k in _COLUMNS and v is not None})
-    _check_parent(conn, tenant_id, row["kind"], row["parent_id"], None)
+    _check_parent(conn, tenant_id, row["kind"], row["parent_id"], None, child_ref=row.get("external_ref"))
     # Stamp "now" only when the caller said nothing about completion; an import
     # that does not know when an item was done passes completed_at=None
     # explicitly and it stays unknown — a guessed date would inflate "done in
@@ -630,7 +667,8 @@ def update(tenant_id: str, item_id: str, patch: ItemPatch, *, actor: str,
             _check_adr_uniqueness(conn, tenant_id, changed.get("external_ref"))
 
         if "kind" in changed or "parent_id" in changed:
-            _check_parent(conn, tenant_id, kind, changed.get("parent_id", cur["parent_id"]), item_id)
+            _check_parent(conn, tenant_id, kind, changed.get("parent_id", cur["parent_id"]), item_id,
+                          child_ref=cur["external_ref"])
         if "kind" in changed:
             _check_children_fit(conn, tenant_id, item_id, kind)
         now = now_iso()
@@ -755,7 +793,7 @@ def restore(tenant_id: str, item_id: str, *, actor: str, sid_fingerprint: Option
             if parent is not None and parent["deleted_at"]:
                 raise TaskTrackingError("its parent is deleted — restore the parent first")
         # The parent may have changed kind while this item was deleted.
-        _check_parent(conn, tenant_id, cur["kind"], cur["parent_id"], item_id)
+        _check_parent(conn, tenant_id, cur["kind"], cur["parent_id"], item_id, child_ref=cur["external_ref"])
         now = now_iso()
         sql = ("UPDATE items SET deleted_at=NULL, deleted_by=NULL, restored_at=?, updated_at=?, version=version+1,"
                " cascading_delete_id=NULL WHERE tenant_id=? AND ")
