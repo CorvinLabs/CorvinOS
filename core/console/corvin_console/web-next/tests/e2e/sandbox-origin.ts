@@ -55,6 +55,7 @@ export const LIVE_ONLY_SPEC_GLOBS: string[] = [
   '**/peer-live-status-symbols.spec.ts',
   '**/projects-explorer-live.spec.ts',
   '**/projects-scope-live.spec.ts',
+  '**/projects-settings-live.spec.ts',
   '**/projects-screens-live.spec.ts',
   '**/skill-forge-live.spec.ts',
   '**/skill-forge.spec.ts',
