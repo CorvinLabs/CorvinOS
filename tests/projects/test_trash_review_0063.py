@@ -148,5 +148,61 @@ class SidecarBinding(TrashBase):
         self.assertEqual(out["id"], pid)
 
 
+class BrokenSidecars(TrashBase):
+    """REVIEW-0065 (REVIEW-0063 m6 residual): entries whose old NAME is past the TTL but whose sidecar is unreadable, names
+    another id or disagrees with the name's time cost one read once - they are moved to ``.trash/.quarantine`` with one
+    audit record per tick - and never hold the read budget of later ticks."""
+
+    def _broken(self, k: int) -> list[str]:
+        out = []
+        for i in range(k):
+            name = self.entry(f"b{i:03d}", 90)
+            kind = i % 3
+            if kind == 0:
+                (self.trash / name / "trash.json").write_text("{not json")
+            elif kind == 1:
+                (self.trash / name / "trash.json").write_text(json.dumps({"id": "someone-else", "deleted_ts": 1}))
+            else:                                                   # valid, but young by the sidecar while old by the name
+                data = json.loads((self.trash / name / "trash.json").read_text())
+                (self.trash / name / "trash.json").write_text(json.dumps({**data, "deleted_ts": self.now}))
+            out.append(name)
+        return out
+
+    def test_two_hundred_broken_old_entries_do_not_block_real_expired_ones(self):
+        broken = self._broken(200)
+        real = [self.entry(f"r{i}", 45) for i in range(3)]           # newer names than the broken ones: behind them
+        audits: list[tuple[str, dict]] = []
+        orig = self.svc._audit
+
+        def spy(tenant_id, event, **fields):
+            audits.append((event, fields))
+            return orig(tenant_id, event, **fields)
+        with mock.patch.object(self.svc, "_audit", spy):
+            first = self.svc.sweep_trash("_default", now=self.now)
+            second = self.svc.sweep_trash("_default", now=self.now)
+        self.assertEqual(first["quarantined"], 200)
+        self.assertEqual(second["purged"], 3, second)
+        self.assertFalse(any((self.trash / r).exists() for r in real))
+        q = self.trash / ".quarantine"
+        self.assertEqual(sorted(p.name for p in q.iterdir()), sorted(broken))   # moved, never deleted
+        self.assertEqual(self.svc.trash_count("_default"), 0)
+        recs = [f for e, f in audits if e == "project.trash_quarantined"]
+        self.assertEqual(recs, [{"entries": 200, "outcome": "requested"}, {"entries": 200, "outcome": "applied"}])
+
+    def test_a_quarantine_tick_is_bounded_by_the_read_budget(self):
+        self._broken(self.svc.TRASH_SCAN_LIMIT + 50)
+        first = self.svc.sweep_trash("_default", now=self.now)
+        self.assertEqual(first["quarantined"], self.svc.TRASH_SCAN_LIMIT)
+        second = self.svc.sweep_trash("_default", now=self.now)
+        self.assertEqual(second["quarantined"], 50)
+
+    def test_a_young_entry_with_a_broken_sidecar_is_left_alone(self):
+        name = self.entry("fresh", 1)
+        (self.trash / name / "trash.json").write_text("{not json")
+        out = self.svc.sweep_trash("_default", now=self.now)
+        self.assertEqual(out.get("quarantined", 0), 0)
+        self.assertTrue((self.trash / name).is_dir())
+
+
 if __name__ == "__main__":
     unittest.main()

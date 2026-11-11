@@ -528,8 +528,12 @@ entries whose `deleted_ts` is older than 30 days, oldest first, at most 10 per t
 come from the WHOLE trash (REVIEW-0063 m6): every name that matches the entry pattern (up to `TRASH_NAME_CAP` = 100 000
 names looked at, foreign names never counted), sorted by the deletion time the name carries; only names past the TTL are
 candidates, and only the sidecar reads are capped (200 per tick, `TRASH_SCAN_LIMIT`) - so the 30-day bound holds however
-many young entries or junk names lie in `.trash/` (a hostile same-user writer can still keep 200 old-named entries with
-broken sidecars in the way); skipped while `loop_health.host_saturated()`; an expired `pending` entry is settled first
+many young entries or junk names lie in `.trash/`. A candidate (past the TTL by its NAME) whose sidecar is unreadable, names
+another id than the name, or whose `deleted_ts` is more than `TRASH_NAME_SKEW_S` = 300 s from the name's time is moved to
+`.trash/.quarantine/` (0o700; under its project lock when the sidecar names a valid id; never deleted - the operator
+decides), audited once per tick as `project.trash_quarantined` WARNING {`entries`, `outcome` requested/applied,
+`tenant_id`} - a count, never a name - so such an entry costs one read once and 200 of them no longer hold the read budget
+of every tick (REVIEW-0065, REVIEW-0063 m6 residual; the tick's result carries `quarantined: n`); skipped while `loop_health.host_saturated()`; an expired `pending` entry is settled first
 under its project lock (waited for at most `TRASH_SWEEP_LOCK_S` = 1 s, else left to the next tick - a running delete is
 never swept); each removal is audited like a permanent delete. The clock is `projects_service._now()` (tests pass `now=`).
 

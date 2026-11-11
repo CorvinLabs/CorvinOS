@@ -12,6 +12,7 @@ A project's files are the user's: nothing here deletes one, except a MANAGED pro
 """
 from __future__ import annotations
 
+import calendar
 import contextlib
 import contextvars
 import errno
@@ -1683,12 +1684,15 @@ def _purge_locked(tenant_id: str, project_id: str, entry: str) -> dict[str, Any]
 def sweep_trash(tenant_id: str, *, busy: bool = False, now: Optional[float] = None) -> dict[str, Any]:
     """The projector tick's trash sweep: entries older than 30 days, at most ``TRASH_SWEEP_LIMIT`` per tick, skipped while the
     host is saturated. A pending entry is settled first under the project lock (:func:`_settle_pending`; a delete that is
-    running holds that lock, so it is never touched)."""
+    running holds that lock, so it is never touched). An entry past the TTL by its NAME whose sidecar is unreadable, names
+    another id or disagrees with the name's time is moved to ``.trash/.quarantine`` (:func:`_quarantine_entries`), so it
+    costs one read once and never holds the read budget of later ticks (REVIEW-0065, REVIEW-0063 m6 residual)."""
     if busy:
         return {"purged": 0, "skipped": "busy"}
     now = _now() if now is None else now
     purged = 0
     reads = 0
+    broken: list[tuple[Path, Optional[str]]] = []
     # REVIEW-0063 m6: candidates are the names whose deletion time is past the TTL, oldest first, from the WHOLE trash; only the
     # sidecar reads are capped per tick (TRASH_SCAN_LIMIT), so the 30-day bound holds however many entries the trash holds
     cutoff = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now - TRASH_TTL_S))
@@ -1698,9 +1702,13 @@ def sweep_trash(tenant_id: str, *, busy: bool = False, now: Optional[float] = No
         reads += 1
         side = _entry_sidecar(d)
         if side is None:
+            broken.append((d, None))
             continue
         ts = side.get("deleted_ts")
-        if not isinstance(ts, (int, float)) or now - float(ts) <= TRASH_TTL_S:
+        if not isinstance(ts, (int, float)) or abs(float(ts) - calendar.timegm(time.strptime(name_ts, "%Y%m%dT%H%M%SZ"))) > TRASH_NAME_SKEW_S:
+            broken.append((d, side["id"]))                       # young by the sidecar, old by the name: read every tick otherwise
+            continue
+        if now - float(ts) <= TRASH_TTL_S:
             continue
         try:
             with _project_lock_of(tenant_id, side["id"], timeout=TRASH_SWEEP_LOCK_S):
@@ -1714,7 +1722,54 @@ def sweep_trash(tenant_id: str, *, busy: bool = False, now: Optional[float] = No
         except Exception as exc:  # noqa: BLE001 - one entry never stops the sweep; the next tick tries again
             import logging  # noqa: PLC0415
             logging.getLogger("corvin.projects").warning("trash sweep: an entry could not be removed (%s)", type(exc).__name__)
-    return {"purged": purged}
+    out: dict[str, Any] = {"purged": purged}
+    if broken:
+        out["quarantined"] = _quarantine_entries(tenant_id, broken)
+    return out
+
+
+#: a trash entry's name carries the second its sidecar's ``deleted_ts`` was taken; more apart than this = not the same deletion
+TRASH_NAME_SKEW_S = 300.0
+TRASH_QUARANTINE = ".quarantine"
+
+
+def _quarantine_entries(tenant_id: str, broken: list[tuple[Path, Optional[str]]]) -> int:
+    """Move entries the sweep cannot bind to a deletion into ``<trash>/.quarantine/`` (0o700; a name that is no trash entry
+    name, so list, count and sweep never read them again). Nothing is deleted: the operator decides. Audit-first: ONE
+    ``project.trash_quarantined`` record per tick {entries, outcome requested/applied} - a count, never a name or a path. An
+    entry whose sidecar still names a valid id is moved under that project's lock (a restore of it cannot run meanwhile)."""
+    import logging  # noqa: PLC0415
+    from core.projects.fsutil import ensure_inside  # noqa: PLC0415
+    t = _trash_root(tenant_id)
+    if t is None:
+        return 0
+    _audit(tenant_id, "project.trash_quarantined", entries=len(broken), outcome="requested")
+    q = t / TRASH_QUARANTINE
+    moved = 0
+    try:
+        q.mkdir(mode=0o700, exist_ok=True)
+        if is_link(q) or not q.is_dir():
+            raise UnsafePath("the quarantine directory is a link")
+        for d, pid in broken:
+            try:
+                d = ensure_inside(t, d)
+                if d.parent != Path(os.path.abspath(t)) or is_link(d):
+                    continue
+                dst = q / d.name
+                for n in range(2, 100):
+                    if not os.path.lexists(dst):
+                        break
+                    dst = q / f"{d.name}-q{n}"
+                lock = _project_lock_of(tenant_id, pid, timeout=TRASH_SWEEP_LOCK_S) if pid else contextlib.nullcontext()
+                with lock:
+                    os.rename(d, dst)
+                moved += 1
+            except Exception as exc:  # noqa: BLE001 - one entry never stops the tick; it is read again next time
+                logging.getLogger("corvin.projects").warning("trash sweep: an entry could not be quarantined (%s)", type(exc).__name__)
+    except (OSError, UnsafePath) as exc:
+        logging.getLogger("corvin.projects").warning("trash sweep: the quarantine is not usable (%s)", type(exc).__name__)
+    _audit(tenant_id, "project.trash_quarantined", entries=moved, outcome="applied")
+    return moved
 
 
 #: how long the sweep waits for a project's lock before it leaves that entry to the next tick (it runs on the projector thread)

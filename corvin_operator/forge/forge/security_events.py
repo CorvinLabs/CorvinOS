@@ -826,6 +826,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "project.storage_changed":      "WARNING",
     "project.relocated":            "WARNING",
     "project.deleted":              "WARNING",
+    # REVIEW-0065: trash entries the sweep could not bind to a deletion, moved to .trash/.quarantine (a count, never a name)
+    "project.trash_quarantined":    "WARNING",
     "project.restored":             "WARNING",
     # ADR-2322 Decision 11: a refused folder-browser request (reason_class only - never a path or a name)
     "project.browse_refused":       "WARNING",
@@ -3840,6 +3842,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "project.storage_changed": frozenset({"to", "outcome", "tenant_id"}),
     "project.relocated": frozenset({"project_id", "outcome", "tenant_id"}),
     "project.deleted": frozenset({"project_id", "outcome", "tenant_id"}),
+    "project.trash_quarantined": frozenset({"entries", "outcome", "tenant_id"}),
     "project.restored": frozenset({"project_id", "outcome", "tenant_id"}),
     # ADR-2322 Decision 11: never a path, never a name
     "project.browse_refused": frozenset({"reason_class", "tenant_id"}),
