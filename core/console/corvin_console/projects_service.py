@@ -2690,7 +2690,9 @@ def _conflicts(tenant_id: str, card: dict[str, Any], *, location: Optional[str] 
         out.append({"kind": "id_taken", "message": CONFLICT_MESSAGES["id_taken"].format(id=pid),
                     "fix": {"suggested_id": _unique_id(tenant_id, pid)}})
     uid = card.get("source_project_uid")
-    if uid and any(e.get("uid") == uid for e in registry.entries(tenant_id)):
+    # "import as a copy": a new id resolves same_source (every import gets a new random uid), so the verdict for a new id no
+    # longer lists it - the console's Import button follows the verdict (T-0402)
+    if uid and pid == card["id"] and any(e.get("uid") == uid for e in registry.entries(tenant_id)):
         out.append({"kind": "same_source", "message": CONFLICT_MESSAGES["same_source"],
                     "fix": {"suggested_id": _unique_id(tenant_id, pid)}})
     if location:

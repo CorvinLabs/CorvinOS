@@ -18,6 +18,7 @@ import { roleLabel } from "./roles";
 import { explain } from "./wizard";
 import { FolderPicker } from "@/components/folder-picker";
 import { parentOf } from "./picker-logic";
+import { DuplicateDialog, ExportDialog } from "./share-dialogs";
 
 const KEY = (id: string) => ["projects", "detail", id] as const;
 const HEALTH = (id: string) => ["projects", "health", id] as const;
@@ -44,7 +45,7 @@ export function SettingsSections({ d, onRemoved }: { d: ProjectDetail; onRemoved
       case "protection": return <ProtectionSection d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />;
       case "chat": return <AttachSection d={d} csrf={csrf} />;
       case "maintenance": return <Maintenance d={d} csrf={csrf} repair={actions.repair} />;
-      case "share": return <Share actions={actions} />;
+      case "share": return <Share d={d} actions={actions} />;
       case "danger": return <Danger d={d} csrf={csrf} actions={actions} onRemoved={onRemoved} />;
     }
   };
@@ -269,23 +270,28 @@ function Maintenance({ d, csrf, repair }: { d: ProjectDetail; csrf: string; repa
   );
 }
 
-function Share({ actions }: { actions: Partial<Record<string, ActionGate>> }) {
+function Share({ d, actions }: { d: ProjectDetail; actions: Partial<Record<string, ActionGate>> }) {
+  const [open, setOpen] = useState<"export" | "duplicate" | null>(null);
   const rows: { id: "export" | "duplicate"; text: string; label: string }[] = [
-    { id: "export", text: "Export this project as a ZIP for another install or a colleague.", label: "Export…" },
-    { id: "duplicate", text: "Make a copy under a new id.", label: "Duplicate…" },
+    { id: "export", text: "Export this project as a ZIP for another installation or a colleague.", label: "Export…" },
+    { id: "duplicate", text: "Make a copy under a new id, with its own folder.", label: "Duplicate…" },
   ];
   return (
     <div className="space-y-2">
       {rows.map((r) => actions[r.id] && (
         <div key={r.id} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-muted-foreground">{r.text}</p>
-          {/* a disabled button receives no hover: the wrapper carries the tooltip */}
-          <span title={actions[r.id]?.note ?? undefined} className="self-start sm:self-auto">
-            <Button size="sm" variant="outline" disabled={!actions[r.id]?.enabled} title={actions[r.id]?.note ?? undefined} data-testid={`share-${r.id}`}>{r.label}</Button>
+          {/* a disabled button receives no hover: the wrapper carries the tooltip, the note is also written out */}
+          <span title={actions[r.id]?.note ?? undefined} className="flex shrink-0 flex-col items-start gap-1 self-start sm:items-end sm:self-auto">
+            <Button size="sm" variant="outline" disabled={!actions[r.id]?.enabled} title={actions[r.id]?.note ?? undefined}
+              onClick={() => setOpen(r.id)} data-testid={`share-${r.id}`}>{r.label}</Button>
+            {!actions[r.id]?.enabled && actions[r.id]?.note && <span className="text-xs text-muted-foreground" data-testid={`share-${r.id}-note`}>{actions[r.id]?.note}</span>}
           </span>
         </div>
       ))}
-      <p className="text-xs text-muted-foreground">Export and Duplicate are available soon.</p>
+      <p className="text-xs text-muted-foreground">Import a project from the Projects list ("Import project…").</p>
+      <ExportDialog open={open === "export"} onOpenChange={(o) => setOpen(o ? "export" : null)} ids={[d.id]} label={d.title || d.id} />
+      <DuplicateDialog open={open === "duplicate"} onOpenChange={(o) => setOpen(o ? "duplicate" : null)} d={d} />
     </div>
   );
 }

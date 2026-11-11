@@ -8,9 +8,11 @@
 import { Link } from "react-router-dom";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Blocks, FolderKanban, Plus, RefreshCw } from "lucide-react";
+import { AlertTriangle, Blocks, Download, FolderKanban, Plus, RefreshCw, Upload } from "lucide-react";
 import { NewProjectDialog } from "./wizard-dialog";
 import { AdoptSection, DefaultPlaceDialog } from "./manage";
+import { ExportDialog, ImportDialog } from "./share-dialogs";
+import { exportSelectedLabel, pruneSelected, selectable, toggleSelected } from "./share-logic";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,7 +28,7 @@ import { CLASS_META, NO_FILTER, ROLE_LABEL, accessOf, classOf, filterProjects, p
 const PROJECTS_KEY = ["projects", "list"] as const;
 const TEMPLATES_KEY = ["projects", "templates"] as const;
 
-function ProjectCard({ p, where }: { p: ProjectSummary; where: WhereContext }) {
+function ProjectCard({ p, where, selected, onSelect }: { p: ProjectSummary; where: WhereContext; selected: boolean; onSelect: (() => void) | null }) {
   const st = stateOf(p);
   const w = whereLabel(p, where);
   const chips = featureChips(p);
@@ -37,6 +39,10 @@ function ProjectCard({ p, where }: { p: ProjectSummary; where: WhereContext }) {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold" data-testid="project-title">
+              {onSelect && (
+                <input type="checkbox" className="h-4 w-4 shrink-0" checked={selected} onChange={onSelect}
+                  aria-label={`Select ${p.title ?? p.id} for export`} data-testid="project-select" />
+              )}
               <Link to={`/app/projects/${encodeURIComponent(p.id)}`} className="min-w-0 truncate hover:underline" title={p.title ?? p.id}
                 data-testid="project-open">{p.title ?? p.id}</Link>
               {p.builtin && <Badge variant="secondary" data-testid="project-builtin">Built in</Badge>}
@@ -102,6 +108,9 @@ export default function ProjectsPage() {
   const [filter, setFilter] = useState<Filter>(NO_FILTER);
   const [whereSel, setWhereSel] = useState<WhereKind | "all">("all");
   const [placeOpen, setPlaceOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
   const all = projects.data ? sortProjects(projects.data.projects) : [];
   const mine = all.filter((p) => !p.builtin);                      // Corvin itself is always there; "empty" is about the user's own projects
   const where: WhereContext = { projects_root: projects.data?.projects_root, projects_root_set: projects.data?.projects_root_set };
@@ -110,6 +119,7 @@ export default function ProjectsPage() {
   const whereOn = kinds.length > 1 ? whereSel : "all";               // the filter is gone once only one kind is left
   const list = whereFilter(filterProjects(all, filter), whereOn, where);
   const empty = emptyState(templates.data);
+  const selected = pruneSelected(picked, all);                      // a project that vanished or broke on refresh is no longer selected
   const loadError = projects.error instanceof ApiError ? projects.error.message : projects.error ? "Could not load projects." : null;
 
   return (
@@ -132,6 +142,9 @@ export default function ProjectsPage() {
             <Plus className="mr-2 h-4 w-4" aria-hidden /> New project
           </Button>
           <AdoptSection />
+          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} data-testid="import-start">
+            <Upload className="mr-2 h-4 w-4" aria-hidden /> Import project…
+          </Button>
           <Button variant="outline" size="sm" onClick={() => { void projects.refetch(); void templates.refetch(); }}
           disabled={projects.isFetching} aria-label="Refresh projects">
           <RefreshCw className={cn("mr-2 h-4 w-4", projects.isFetching && "animate-spin")} aria-hidden /> Refresh
@@ -139,6 +152,17 @@ export default function ProjectsPage() {
         </div>
       </header>
       <NewProjectDialog open={wizardOpen} onOpenChange={setWizardOpen} />
+      <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
+      <ExportDialog open={exportOpen} onOpenChange={setExportOpen} ids={selected} label={all.find((p) => p.id === selected[0])?.title ?? selected[0] ?? ""} />
+      {selected.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border p-2 text-sm" role="region" aria-label="Selected projects" data-testid="selection-bar">
+          <span data-testid="selection-count">{selected.length} selected</span>
+          <Button size="sm" onClick={() => setExportOpen(true)} data-testid="export-selected">
+            <Download className="mr-2 h-4 w-4" aria-hidden /> {exportSelectedLabel(selected.length)}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setPicked([])} data-testid="selection-clear">Clear selection</Button>
+        </div>
+      )}
       {projects.data && <DefaultPlaceDialog open={placeOpen} onOpenChange={setPlaceOpen} list={projects.data as ProjectList} />}
 
       {loadError && (
@@ -190,7 +214,10 @@ export default function ProjectsPage() {
 
       {list.length > 0 && (
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2" aria-label="Projects" data-testid="projects-list">
-          {list.map((p) => <ProjectCard key={p.id} p={p} where={where} />)}
+          {list.map((p) => (
+            <ProjectCard key={p.id} p={p} where={where} selected={selected.includes(p.id)}
+              onSelect={selectable(p) ? () => setPicked((cur) => toggleSelected(pruneSelected(cur, all), p.id)) : null} />
+          ))}
         </section>
       )}
 

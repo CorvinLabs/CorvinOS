@@ -4,7 +4,7 @@
  * The tenant is always the session's. A project's files belong to the user; the only
  * destructive call here removes a registry entry, never a file.
  */
-import { api } from "./client";
+import { ApiError, BASE, api, isCsrfError, notifyCsrfError } from "./client";
 
 export type ProjectState = "ok" | "missing" | "invalid" | "pending";
 export type Role = "software" | "data_science" | "marketing" | "product" | "sales" | "legal" | "video" | "research" | "knowledge";
@@ -473,4 +473,164 @@ export function setFavourites(paths: string[], csrf: string): Promise<{ places: 
 /** "Clear recent places"; answers the places. */
 export function clearRecent(csrf: string): Promise<{ places: BrowsePlace[] }> {
   return api("/projects/-/browse/recent", { method: "DELETE", csrf });
+}
+
+// ── share: export, import, duplicate (project bundles; routes under /projects/-/…) ─────────────────────────────────────────
+
+export type PartName = "files" | "kb" | "git_history" | "videos_index" | "generated";
+export interface PartRow { name: PartName; included: boolean; note?: string }
+/** A path the bundle leaves out and why (`secret_name`, `generated`, `link`, `machine_local`, …). */
+export interface LeftOut { path: string; reason: string }
+
+export interface ExportPreviewProject {
+  id: string;
+  title: string;
+  template: string;
+  role: string;
+  classification: DataClass;
+  docs_mode: "nested" | "plain";
+  features: Record<string, boolean>;
+  parts: PartRow[];
+  left_out: LeftOut[];
+  counts: { files: number; bytes: number };
+  commits: number | null;
+  kb_entries: number;
+  /** files in the git history that look like secrets (an export with history would be refused) */
+  history_findings: number;
+}
+export interface ExportPreview { projects: ExportPreviewProject[]; notes: string[]; warnings: string[]; gpg: boolean }
+export interface ExportParts { git_history: boolean; generated: boolean; kb: boolean }
+
+function partsQuery(parts: ExportParts): string {
+  return (Object.keys(parts) as (keyof ExportParts)[]).filter((k) => parts[k]).join(",");
+}
+
+/** What an export would contain; writes nothing. */
+export function exportPreview(ids: string[], parts: ExportParts, signal?: AbortSignal): Promise<ExportPreview> {
+  const q = new URLSearchParams({ ids: ids.join(","), parts: partsQuery(parts) });
+  return api<ExportPreview>(`/projects/-/export/preview?${q.toString()}`, { signal, timeoutMs: 120_000 });
+}
+
+export type ExportAnswer =
+  | { kind: "file"; blob: Blob; filename: string; warnings: string[] }
+  | { kind: "job"; job_id: string; warnings: string[] };
+
+async function failure(res: Response): Promise<ApiError> {
+  let payload: unknown = null;
+  try { payload = await res.json(); } catch { /* not JSON */ }
+  if (isCsrfError(res.status, payload)) notifyCsrfError();
+  return new ApiError(res.status, payload);
+}
+
+function dispositionName(h: string | null, fallback: string): string {
+  const m = h ? /filename="?([^";]+)"?/i.exec(h) : null;
+  return m ? m[1] : fallback;
+}
+
+/** Up to 100 MiB the server answers the file (200); a larger export runs as a job (202 `{job_id}`). */
+export async function exportProjects(
+  body: { project_ids: string[]; parts: ExportParts; confirm?: boolean; passphrase?: string }, csrf: string,
+): Promise<ExportAnswer> {
+  const res = await fetch(`${BASE}/projects/-/export`, {
+    method: "POST", credentials: "include",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf, Accept: "application/zip, application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await failure(res);
+  const warn = (res.headers.get("X-Corvin-Export-Warnings") ?? "").trim();
+  if (res.status === 202) {
+    const j = (await res.json()) as { job_id: string; warnings?: string[] };
+    return { kind: "job", job_id: j.job_id, warnings: j.warnings ?? [] };
+  }
+  const blob = await res.blob();
+  return { kind: "file", blob, filename: dispositionName(res.headers.get("Content-Disposition"), "corvin-project.zip"), warnings: warn ? [warn] : [] };
+}
+
+export interface ExportJob {
+  state: "running" | "done" | "error";
+  progress: { files: number; bytes: number };
+  download_url?: string;
+  warnings?: string[];
+  reason_class?: string;
+  message?: string;
+}
+
+export function exportJob(jobId: string, signal?: AbortSignal): Promise<ExportJob> {
+  return api<ExportJob>(`/projects/-/exports/${encodeURIComponent(jobId)}`, { signal });
+}
+
+/** The finished file of a job (kept 24 h). */
+export function exportJobFileUrl(jobId: string): string {
+  return `${BASE}/projects/-/exports/${encodeURIComponent(jobId)}/file`;
+}
+
+export interface ImportConflict { kind: string; message: string; fix: { suggested_id?: string; choose_location?: boolean } }
+
+export interface ImportCard {
+  id: string;
+  title: string;
+  role: string;
+  classification: DataClass;
+  docs_mode: "nested" | "plain";
+  template: string;
+  features: Record<string, boolean>;
+  counts: { files: number; bytes: number };
+  parts: PartRow[];
+  git: { head: string; docs_head?: string } | null;
+  left_out: LeftOut[];
+  warnings: string[];
+  source_project_uid?: string;
+  default_location: { storage: DefaultStorage | "own"; path: string };
+  conflicts: ImportConflict[];
+}
+
+export interface ImportReport {
+  staging_id: string;
+  origin: "unverified";
+  exporter: { app: string; version: string };
+  created_at: string;
+  projects: ImportCard[];
+}
+
+/** Uploads one bundle into this tenant's staging and validates it; nothing is written into the projects area. */
+export async function importValidate(file: File, csrf: string): Promise<ImportReport> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/projects/-/import/validate`, {
+    method: "POST", body: form, credentials: "include", headers: { "X-CSRF-Token": csrf },
+  });
+  if (!res.ok) throw await failure(res);
+  return (await res.json()) as ImportReport;
+}
+
+/** The conflicts recomputed for a chosen id and place. */
+export function importVerdict(
+  stagingId: string, p: { project: string; projectId?: string; location?: string | null }, signal?: AbortSignal,
+): Promise<{ conflicts: ImportConflict[]; location?: { storage: string; path: string } }> {
+  const q = new URLSearchParams({ project: p.project });
+  if (p.projectId) q.set("project_id", p.projectId);
+  if (p.location) q.set("location", p.location);
+  return api(`/projects/-/import/${encodeURIComponent(stagingId)}/verdict?${q.toString()}`, { signal });
+}
+
+export interface ImportApplied { project: ProjectDetail; warnings: string[]; notes: string[]; origin: "unverified" }
+
+export function importApply(
+  stagingId: string,
+  body: { project?: string; project_id?: string; location?: string; parts?: { git_history: boolean; kb: boolean }; title?: string },
+  csrf: string,
+): Promise<ImportApplied> {
+  return api<ImportApplied>(`/projects/-/import/${encodeURIComponent(stagingId)}/apply`, { method: "POST", body, csrf, timeoutMs: 300_000 });
+}
+
+/** Cancel: the uploaded file is removed from the staging. */
+export function importCancel(stagingId: string, csrf: string): Promise<void> {
+  return api<void>(`/projects/-/import/${encodeURIComponent(stagingId)}`, { method: "DELETE", csrf });
+}
+
+/** A copy under a new id, through the same bundle pipeline (no download). */
+export function duplicateProject(
+  id: string, body: { project_id: string; location?: string; parts?: { git_history: boolean; kb: boolean; generated: boolean } }, csrf: string,
+): Promise<ImportApplied> {
+  return api<ImportApplied>(`/projects/${encodeURIComponent(id)}/duplicate`, { method: "POST", body, csrf, timeoutMs: 300_000 });
 }

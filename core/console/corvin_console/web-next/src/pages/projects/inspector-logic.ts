@@ -142,7 +142,8 @@ export function settingsSections(d: ProjectDetail, ctx: { workspace?: WorkspaceS
   ];
   if (ok) out.push(sec("protection"), sec("chat"));
   if (ok || d.state === "invalid") out.push(sec("maintenance", { repair: ok ? ON : off("Repair needs a readable project.yaml.") }));
-  if (ok) out.push(sec("share", { export: off("Available soon"), duplicate: off("Available soon") }));
+  // Export always opens: its dialog says why a secret project cannot leave; a secret project is never duplicated either
+  if (ok) out.push(sec("share", { export: ON, duplicate: d.classification === "secret" ? off("Secret projects cannot be duplicated.") : ON }));
   out.push(sec("danger", { remove: ON, delete: managed ? off("Available in a later update") : off("(not available: own folder)") }));
   return out;
 }

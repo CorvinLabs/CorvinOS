@@ -65,7 +65,7 @@ async function noIds(page: Page) {
   expect(text).not.toMatch(/ADR-\d|CONCEPT-\d|REVIEW-\d|T-0\d{3}/);
 }
 
-test("a managed project shows the seven sections in order; delete is a later update, Share says it comes soon", async ({ page }) => {
+test("a managed project shows the seven sections in order; delete is a later update, Share offers Export and Duplicate", async ({ page }) => {
   await stub(page, OK);
   await page.goto(`/console/app/projects/${ID}?tab=settings`);
   const titles = page.getByTestId("settings-section").locator("h2");
@@ -74,9 +74,8 @@ test("a managed project shows the seven sections in order; delete is a later upd
   await expect(page.getByTestId("location-path")).toHaveText("Corvin workspace › alpha");
   await expect(page.getByTestId("location-path")).toHaveAttribute("title", OK.path);
   await expect(page.getByTestId("doctor-summary")).toHaveText("3 checks, 1 failed — out of sync (repair fixes): ['CLAUDE.md']");
-  await expect(page.getByTestId("share-export")).toBeDisabled();
-  await expect(page.getByTestId("share-export")).toHaveAttribute("title", "Available soon");
-  await expect(page.getByTestId("share-duplicate")).toBeDisabled();
+  await expect(page.getByTestId("share-export")).toBeEnabled();
+  await expect(page.getByTestId("share-duplicate")).toBeEnabled();
   await expect(page.getByTestId("delete-files")).toBeDisabled();
   await expect(page.getByTestId("delete-row")).toContainText("Available in a later update");
   await expect(page.getByTestId("locate-box")).toHaveCount(0);

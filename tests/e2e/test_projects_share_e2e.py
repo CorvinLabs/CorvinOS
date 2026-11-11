@@ -450,6 +450,11 @@ class ImportValidate(ShareBase):
             self.assertNotIn("id_taken", kinds)
             self.assertEqual([x for x in v.json()["conflicts"] if x["kind"] == "nested"][0]["message"],
                              f"It lies inside another project ({pid}).")
+            # a new id is "import as a copy": the verdict no longer lists same_source, so the Import button can enable (T-0402)
+            v = c.own.get(f"{_URL}/-/import/{sid}/verdict", params={"project": pid, "project_id": "fresh-id"})
+            self.assertEqual([x["kind"] for x in v.json()["conflicts"]], [], v.text)
+            v = c.own.get(f"{_URL}/-/import/{sid}/verdict", params={"project": pid, "project_id": pid})
+            self.assertEqual(sorted(x["kind"] for x in v.json()["conflicts"]), ["id_taken", "same_source"], v.text)
 
     # AC4
     def test_staging_cap_ttl_sweeps_and_the_host_budget(self):

@@ -101,14 +101,19 @@ describe("settings sections (T-0387)", () => {
     expect(settingsSections(base, {}).map((s) => s.title))
       .toEqual(["General", "Location", "Protection", "Use in a chat", "Maintenance", "Share", "Danger zone"]);
   });
-  it("ready: rename, move, repair and remove are on; locate is not offered; export and duplicate say they come later", () => {
+  it("ready: rename, move, repair, export, duplicate and remove are on; locate is not offered", () => {
     expect(act(base, "general", "rename")).toEqual({ enabled: true, note: null });
     expect(act(base, "location", "move")).toEqual({ enabled: true, note: null });
     expect(act(base, "location", "locate")).toBeUndefined();
     expect(act(base, "maintenance", "repair")).toEqual({ enabled: true, note: null });
-    expect(act(base, "share", "export")).toEqual({ enabled: false, note: "Available soon" });
-    expect(act(base, "share", "duplicate")).toEqual({ enabled: false, note: "Available soon" });
+    expect(act(base, "share", "export")).toEqual({ enabled: true, note: null });
+    expect(act(base, "share", "duplicate")).toEqual({ enabled: true, note: null });
     expect(act(base, "danger", "remove")).toEqual({ enabled: true, note: null });
+  });
+  it("a secret project: Export opens and says why it cannot run; Duplicate is off with the reason", () => {
+    const s = { ...base, classification: "secret" as const };
+    expect(act(s, "share", "export")).toEqual({ enabled: true, note: null });
+    expect(act(s, "share", "duplicate")).toEqual({ enabled: false, note: "Secret projects cannot be duplicated." });
   });
   it("delete is a row for a managed project (later update) and an explained absence for an own folder", () => {
     expect(act(base, "danger", "delete")).toEqual({ enabled: false, note: "Available in a later update" });

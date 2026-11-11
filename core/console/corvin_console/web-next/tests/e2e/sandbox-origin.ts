@@ -57,6 +57,7 @@ export const LIVE_ONLY_SPEC_GLOBS: string[] = [
   '**/projects-picker-live.spec.ts',
   '**/projects-scope-live.spec.ts',
   '**/projects-settings-live.spec.ts',
+  '**/projects-share-live.spec.ts',
   '**/projects-screens-live.spec.ts',
   '**/skill-forge-live.spec.ts',
   '**/skill-forge.spec.ts',

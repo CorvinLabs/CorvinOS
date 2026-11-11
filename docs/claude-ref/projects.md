@@ -535,7 +535,7 @@ slots (429 `busy` at once): a failing stage deletes the staging and answers 422 
 | Conflict | When | Fix |
 |---|---|---|
 | `id_taken` | the registry has the id - 'A project "<id>" already exists in this list.' | `{suggested_id: <id>-2}` |
-| `same_source` | a registered project carries the bundle's `source_project_uid` - "This was exported from a project in this list. It can only be imported as a copy." | `{suggested_id}` |
+| `same_source` | a registered project carries the bundle's `source_project_uid` and the id is the bundle's own - "This was exported from a project in this list. It can only be imported as a copy." A verdict for a NEW id does not list it (import as a copy; the console's Import button follows the verdict) | `{suggested_id}` |
 | `folder_not_empty` | the place exists and is not empty - "That folder already exists and is not empty." | `{choose_location: true}` |
 | `nested` | `validate_location(purpose="import")` says `nested` - "It lies inside another project (<id>)." | `{choose_location: true}` |
 
@@ -734,7 +734,7 @@ storage `managed`/`own`/builtin). Order and what each action touches:
 | Protection | `ProtectionSection` (unchanged) | `ok` |
 | Use in a chat | `AttachSection` (unchanged) | `ok`; the only section of Corvin itself |
 | Maintenance | "<n> checks, <m> failed — <first failed detail>" (`doctorSummary`; doctor notes are not counted) + "Open Overview"; Repair preview -> apply (`POST /{id}/repair`) | `ok`, `invalid` (repair off: needs a readable project.yaml) |
-| Share | "Export…" and "Duplicate…" disabled with the tooltip "Available soon" (E-058) | `ok` |
+| Share | "Export…" (the Export dialog, § Share in the console) and "Duplicate…" (the Duplicate dialog); a `secret` project's Duplicate is off with "Secret projects cannot be duplicated." | `ok` |
 | Danger zone | "Remove from the list — the folder and every file stay." two clicks (`DELETE /{id}`); "Delete project files…" disabled "Available in a later update" for `managed` (E-059), "(not available: own folder)" for `own` | always |
 
 A `missing` or `invalid` project shows these sections under its state card (General, Location, [Maintenance], Danger zone), so
@@ -768,6 +768,58 @@ clock, Locate folder, two-click remove, typed rekey, 1280/375 x light/dark scree
 `tests/e2e/projects-settings-live.spec.ts` - creates `p1-live-check` through the wizard in the managed workspace, checks the
 sections, rename Undo through the API, remove + re-adopt (the folder stayed), then removes the entry and deletes exactly that one
 folder.
+
+## Share in the console (T-0402, ADR-2323 Decision 18, CONCEPT-0131 § E2/E3)
+
+`web-next/src/pages/projects/share-dialogs.tsx` draws three dialogs; every decision is in the pure
+`pages/projects/share-logic.ts` (unit-tested in `tests/unit/projects-share.test.ts`); the client calls are in
+`lib/api/projects.ts` (`exportPreview`, `exportProjects`, `exportJob`, `importValidate`, `importVerdict`, `importApply`,
+`importCancel`, `duplicateProject`). The server judges every action again; the dialogs only decide what is drawn and when a
+button is on.
+
+| Entry | Where |
+|---|---|
+| Export one project | project Settings -> Share -> "Export…" |
+| Export a set | the list: a checkbox on every usable own card (not Corvin itself, not missing/invalid/being imported) -> the bar "<n> selected" with **Export selected (n)** and "Clear selection"; the selection drops a project that a refresh shows as unusable |
+| Import | the list header: **Import project…** (next to "Add existing folder") |
+| Duplicate | project Settings -> Share -> "Duplicate…" |
+
+**Export dialog.** The preview (`GET /-/export/preview`, re-read on every part toggle) as **Included** ("212 files · 5.1 MB ·
+knowledge base (41 entries) · git history (38 commits)") and **Left out** (`path (reason in words)`: secret name, link,
+machine-local, generated, …; at most 8 lines, then "and N more"); toggles Git history / Generated folders / Knowledge base; the
+preview's warnings and notes ("Archives inside the project are not checked for secrets."). Class gating (`exportGate`): `secret`
+-> "Secret projects cannot be exported." and Export ZIP stays off (a set names the secret ids); `confidential` -> "Type <id> to
+confirm" (a set with several: `export confidential`) and the request carries `confirm: true`; public/internal -> "can be shared".
+A passphrase field (8-128) only when the preview says `gpg: true`, else the sentence "A passphrase needs gpg, which is not
+installed on this machine." When the preview reports `history_findings` for an included history (or the server refuses
+`secret_in_history`), the dialog offers **Export without git history**. 200 -> the browser downloads the file
+(`Content-Disposition` name) and the dialog says "Downloaded <file>"; 202 -> the job is polled every second ("Building the ZIP:
+<n> files, <size> so far…"), then **Download** (`/-/exports/{job}/file`, kept 24 h) or the job's failure sentence. Any refusal
+is the server's sentence.
+
+**Import dialog.** "Choose a bundle file…" (native picker, `.zip`, at most 500 MB; a `.zip.gpg` has to be decrypted first) ->
+upload + V1-V6 (`POST /-/import/validate`; "Uploading and checking <file>…"; a refused bundle shows the stage's sentence and
+offers another file) -> the preview: title with the **Unverified origin** label and "Anyone can make a project bundle. Import it
+only if you know where it came from."; a card selector for a set; From ("From <file> · exported <day> by CorvinOS <version>"),
+Will create (follows the skip boxes), **Id here**, **Where** (storage badge + path, **Change…** opens the folder picker with
+purpose `import`; "Use the default place"), Protection (the floor rule: `max(internal, export class)` + "assistant: read only —
+change later in Settings"), **Conflicts** - one row per conflict with its single fix (`id_taken` -> "Use <suggested>",
+`same_source` -> "Import as a copy (<suggested>)", `folder_not_empty`/`nested`/any other place class -> "Choose another place"),
+"Skip git history" / "Skip knowledge base" only for parts the bundle carries. **Import** is enabled only when the verdict
+(`GET /-/import/{sid}/verdict`, asked 300 ms after typing stops) for exactly the current id and place lists no conflict
+(`importEnabled`); a verdict for an older id never enables it. Cancel or closing the dialog sends `DELETE /-/import/{sid}`.
+The result names the new id and place, the response's `warnings` (e.g. "Git history could not be imported") and `notes` (what
+`git status` will show and why), with "Open project".
+
+**Duplicate dialog.** New id (the server's next free id `<id>-2`, `-3`, … from the list), Where (the default place or the
+picker, purpose `import`), parts (history, knowledge base, generated), then "Copied to <id>" with "Open the copy".
+
+Proof: `tests/unit/projects-share.test.ts` (22; a mutation that drops the typed-id check or the verdict-key check fails it),
+`tests/unit/projects-inspector.test.ts` (Share actions), `tests/e2e/projects-share.spec.ts` (16, served bundle, network stubbed:
+every export state incl. the job's progress/done/failure, every import state incl. both conflict fixes, the picker, Cancel, a
+refused bundle, duplicate, multi-select, screenshots 1280/375 x light/dark in `SHOTS_DIR`), `tests/e2e/projects-share-live.spec.ts`
+(keep-live, nothing stubbed: exports a throwaway project with a planted link, imports the downloaded ZIP as a copy, duplicates it,
+then removes the three entries and deletes exactly their folders), server: `tests/e2e/test_projects_share_e2e.py`.
 
 ## Scope of the Tasks board and the Knowledge Graph (T-0360, switcher 2026-11-09)
 
