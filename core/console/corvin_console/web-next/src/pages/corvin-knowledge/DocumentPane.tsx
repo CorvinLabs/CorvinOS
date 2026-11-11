@@ -62,8 +62,8 @@ export function DocumentPane({ nodeKey, project = null, index, basePath, onOpen,
   });
   useEffect(() => { top.current?.scrollTo({ top: 0 }); }, [nodeKey]);
   const body = useMemo(
-    () => (q.data ? linkifyMarkdown(q.data.markdown, index, q.data.entity.id) : ""),
-    [q.data, index],
+    () => (q.data ? linkifyMarkdown(q.data.markdown, index, q.data.entity.id, project) : ""),
+    [q.data, index, project],
   );
   const internal = useMemo(
     () => ({ prefix: NODE_HREF_PREFIX, onNavigate: (rest: string) => { try { onOpen(decodeURIComponent(rest)); } catch { /* malformed href */ } } }),

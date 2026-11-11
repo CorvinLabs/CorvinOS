@@ -10,7 +10,14 @@
 /** Prefix of every internal href; the reader intercepts it and navigates in place. */
 export const NODE_HREF_PREFIX = "?node=";
 
-export interface LinkTarget { id: string; label?: string; file?: string }
+/**
+ * `scope`/`uid` are set on the nodes of a joined view of several knowledge bases (projects/scope.ts `mergeGraphs`): there a node id
+ * may be `<uid>@<project>` and a label `<project>/<id>`, because a duplicated project carries its original's uids and ids verbatim.
+ */
+export interface LinkTarget { id: string; label?: string; file?: string; scope?: string | null; uid?: string }
+
+/** The same three lookups, restricted to ONE knowledge base and keyed by that base's own (unqualified) ids, uids and files. */
+export interface ScopedLookups { byLabel: Map<string, string>; byKey: Map<string, string>; byFile: Map<string, string> }
 
 export interface LinkIndex {
   /** human id (ADR-2206, T-0035 ...) -> node key; absent when two nodes carry the same id */
@@ -19,6 +26,49 @@ export interface LinkIndex {
   byKey: Map<string, string>;
   /** file basename -> node key; absent when two nodes share a basename */
   byFile: Map<string, string>;
+  /**
+   * knowledge base (`""` = the bound one) -> its own lookups. A document is written against its own knowledge base, so in a joined
+   * view a reference inside a copy's document resolves to the copy's node, never to the original's (REVIEW-0071 follow-up).
+   */
+  scoped?: Map<string, ScopedLookups>;
+}
+
+function setUnique(map: Map<string, string>, ambiguous: Set<string>, k: string, v: string) {
+  if (map.has(k) && map.get(k) !== v) ambiguous.add(k);
+  map.set(k, v);
+}
+
+function buildScoped(entities: LinkTarget[]): Map<string, ScopedLookups> | undefined {
+  const out = new Map<string, ScopedLookups & { amb: { l: Set<string>; k: Set<string>; f: Set<string> } }>();
+  for (const e of entities) {
+    if (e.scope === undefined) continue;          // not a joined view
+    const sk = e.scope ?? "";
+    let s = out.get(sk);
+    if (!s) { s = { byLabel: new Map(), byKey: new Map(), byFile: new Map(), amb: { l: new Set(), k: new Set(), f: new Set() } }; out.set(sk, s); }
+    const label = e.label || e.id;
+    const raw = e.scope && label.startsWith(`${e.scope}/`) ? label.slice(e.scope.length + 1) : label;
+    setUnique(s.byLabel, s.amb.l, raw, e.id);
+    setUnique(s.byKey, s.amb.k, e.uid ?? e.id, e.id);
+    s.byKey.set(e.id, e.id);
+    if (e.file) setUnique(s.byFile, s.amb.f, e.file, e.id);
+  }
+  if (out.size === 0) return undefined;
+  const res = new Map<string, ScopedLookups>();
+  out.forEach((s, k) => {
+    s.amb.l.forEach((x) => s.byLabel.delete(x));
+    s.amb.k.forEach((x) => s.byKey.delete(x));
+    s.amb.f.forEach((x) => s.byFile.delete(x));
+    res.set(k, { byLabel: s.byLabel, byKey: s.byKey, byFile: s.byFile });
+  });
+  return res;
+}
+
+/** The lookups a document of `scope` resolves against: its own knowledge base first, then the whole view. */
+export function viewFor(index: LinkIndex, scope: string | null | undefined): LinkIndex {
+  const own = scope === undefined ? undefined : index.scoped?.get(scope ?? "");
+  if (!own) return index;
+  const layer = (own: Map<string, string>, all: Map<string, string>) => new Map([...all, ...own]);
+  return { byLabel: layer(own.byLabel, index.byLabel), byKey: layer(own.byKey, index.byKey), byFile: layer(own.byFile, index.byFile), scoped: index.scoped };
 }
 
 export function buildLinkIndex(entities: LinkTarget[]): LinkIndex {
@@ -39,7 +89,7 @@ export function buildLinkIndex(entities: LinkTarget[]): LinkIndex {
   }
   ambiguousLabel.forEach((l) => byLabel.delete(l));
   ambiguousFile.forEach((f) => byFile.delete(f));
-  return { byLabel, byKey, byFile };
+  return { byLabel, byKey, byFile, scoped: buildScoped(entities) };
 }
 
 export function nodeHref(key: string): string {
@@ -86,7 +136,13 @@ function rewriteMdLinks(line: string, index: LinkIndex): string {
   });
 }
 
-export function linkifyMarkdown(text: string, index: LinkIndex, selfKey: string | null = null): string {
+/**
+ * `scope` names the knowledge base the document belongs to (`null` = the bound one); leave it out outside a joined view. `selfKey`
+ * is the document's own key as its knowledge base names it (its uid); a reference to itself is not turned into a link.
+ */
+export function linkifyMarkdown(text: string, base: LinkIndex, selfKey: string | null = null, scope?: string | null): string {
+  const index = viewFor(base, scope);
+  if (selfKey !== null) selfKey = index.byKey.get(selfKey) ?? selfKey;
   let fence: string | null = null;
   return text
     .split("\n")

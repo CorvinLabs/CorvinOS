@@ -85,3 +85,30 @@ describe("graph model", () => {
     expect(searchNodes(nodes, "  ")).toEqual([]);
   });
 });
+
+describe("a joined view resolves a document's references inside its own knowledge base", () => {
+  // the shape mergeGraphs produces: a copy carries its original's uids and ids, so its nodes are `<uid>@<copy>` / `<copy>/<id>`
+  const joined = buildLinkIndex([
+    { id: "UID-X", uid: "UID-X", label: "orig/ADR-0001", file: "ADR-0001-a.md", scope: "orig" },
+    { id: "UID-Y", uid: "UID-Y", label: "orig/T-0001", file: "T-0001-b.md", scope: "orig" },
+    { id: "UID-X@copy", uid: "UID-X", label: "copy/ADR-0001", file: "ADR-0001-a.md", scope: "copy" },
+    { id: "UID-Y@copy", uid: "UID-Y", label: "copy/T-0001", file: "T-0001-b.md", scope: "copy" },
+    { id: "UID-B", uid: "UID-B", label: "ADR-0900", scope: null },
+  ]);
+  it("a bare id, a wikilink by uid and a relative .md link in the copy's document land on the copy", () => {
+    const out = linkifyMarkdown("see T-0001, [[UID-Y]] and [b](T-0001-b.md)", joined, "UID-X", "copy");
+    expect(out).toBe("see [T-0001](?node=UID-Y%40copy), [UID-Y](?node=UID-Y%40copy) and [b](?node=UID-Y%40copy)");
+  });
+  it("the same text in the original's document lands on the original", () => {
+    expect(linkifyMarkdown("see T-0001", joined, "UID-X", "orig")).toBe("see [T-0001](?node=UID-Y)");
+  });
+  it("a document does not link to itself, whichever copy it is", () => {
+    expect(linkifyMarkdown("this is ADR-0001", joined, "UID-X", "copy")).toBe("this is ADR-0001");
+  });
+  it("the bound knowledge base is a scope of its own", () => {
+    expect(linkifyMarkdown("per ADR-0900", joined, null, null)).toBe("per [ADR-0900](?node=UID-B)");
+  });
+  it("outside a joined view nothing changes", () => {
+    expect(lk("see ADR-2206")).toBe("see [ADR-2206](?node=UID-A)");
+  });
+});
