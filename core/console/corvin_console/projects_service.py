@@ -13,6 +13,7 @@ A project's files are the user's: nothing here deletes one, except a MANAGED pro
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import errno
 import json
 import os
@@ -22,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from collections import OrderedDict as _OrderedDict
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -170,11 +172,54 @@ def _audit(tenant_id: str, event: str, **details: Any) -> None:
     _tt._chain(tenant_id, event, {k: v for k, v in details.items() if v is not None})
 
 
+#: REVIEW-0063 m7: the session a projects request runs for (set by the routes' session dependency, copied into the worker thread
+#: by asyncio.to_thread); None outside a request (one shared key per tenant then)
+REFUSAL_SESSION: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("projects_refusal_session", default=None)
+REFUSAL_AUDIT_EVERY_S = 60.0
+REFUSAL_MAX_KEYS = 4096
+
+
+class RefusalGate:
+    """``project.blocked`` at most once per (installation home, tenant, session, reason class) per minute - the browser's rule (ADR-2322 D11)
+    applied to every refusal of the projects service. The FIRST refusal of a key is always recorded; the ones suppressed after
+    it are counted and the next record of that key carries ``coalesced: n``, so the trail says how many there were."""
+
+    def __init__(self, every_s: float = REFUSAL_AUDIT_EVERY_S, max_keys: int = REFUSAL_MAX_KEYS):
+        self._lock = threading.Lock()
+        self.every_s, self.max_keys = every_s, max_keys
+        self._keys: "_OrderedDict[tuple[str, ...], tuple[float, int]]" = _OrderedDict()
+
+    def admit(self, key: tuple[str, ...], now: Optional[float] = None) -> Optional[int]:
+        """None: suppress (counted). An int: record now, carrying that many suppressed refusals."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            hit = self._keys.pop(key, None)
+            if hit is not None and now - hit[0] < self.every_s:
+                self._keys[key] = (hit[0], hit[1] + 1)
+                return None
+            self._keys[key] = (now, 0)
+            while len(self._keys) > self.max_keys:
+                self._keys.popitem(last=False)
+            return hit[1] if hit is not None else 0
+
+    def reset(self) -> None:
+        with self._lock:
+            self._keys.clear()
+
+
+REFUSAL_GATE = RefusalGate()
+
+
 def _audit_refusal(tenant_id: str, reason_class: str, project_id: Optional[str] = None) -> None:
-    """A refusal has no effect to protect: record it best-effort."""
+    """A refusal has no effect to protect: record it best-effort, at most once per session, reason class and minute
+    (:class:`RefusalGate`, REVIEW-0063 m7)."""
+    coalesced = REFUSAL_GATE.admit((str(corvin_home()), tenant_id, REFUSAL_SESSION.get() or "-", reason_class))
+    if coalesced is None:
+        return
     try:
         _tt._chain(tenant_id, "project.blocked", {"reason_class": reason_class,
-                                                 **({"project_id": project_id} if project_id else {})})
+                                                 **({"project_id": project_id} if project_id else {}),
+                                                 **({"coalesced": coalesced} if coalesced else {})})
     except Exception:  # noqa: BLE001
         pass
 

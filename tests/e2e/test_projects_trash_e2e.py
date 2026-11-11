@@ -444,6 +444,37 @@ class Paging(TrashBase):
             self.assertEqual(c.own.get(_T, params={"limit": 0}).status_code, 422)
 
 
+class RefusalThrottle(TrashBase):
+    # REVIEW-0063 m7: refusals outside the browser are recorded once per session, reason class and minute; the first is kept
+    def test_many_refusals_of_one_session_write_one_record_and_another_session_its_own(self):
+        with self.ctx() as c:
+            pid, _ = self.create(c, "Thrown")
+            entry = self.delete(c, pid).json()["trash_entry"]
+            before = len(self.events(c, "project.blocked"))
+            for _ in range(100):
+                self.assertEqual(self.restore(c, "not-an-entry").status_code, 422)
+            for _ in range(100):
+                self.assertEqual(self.purge(c, entry, "wrong").status_code, 409)
+            rows = self.events(c, "project.blocked")[before:]
+            classes = [(e.get("details") or {}).get("reason_class") for e in rows]
+            self.assertEqual(sorted(classes), ["confirm_mismatch", "path_rule"], classes)
+            with mock.patch.dict(os.environ, ACME):
+                self.assertEqual(c.other.post(f"{_T}/not-an-entry/restore", headers=c.oh).status_code, 422)
+            self.assertEqual(len([e for e in self.events(c, "project.blocked", tenant="acme")
+                                  if (e.get("details") or {}).get("reason_class") == "path_rule"]), 1)
+
+    def test_the_gate_counts_what_it_suppressed_into_the_next_record(self):
+        from corvin_console import projects_service as svc
+        g = svc.RefusalGate(every_s=60.0)
+        k = ("h", "_default", "sid", "path_rule")
+        self.assertEqual(g.admit(k, now=0.0), 0)                  # the first is always recorded
+        self.assertIsNone(g.admit(k, now=1.0))
+        self.assertIsNone(g.admit(k, now=59.0))
+        self.assertEqual(g.admit(("h", "_default", "other", "path_rule"), now=2.0), 0)
+        self.assertEqual(g.admit(k, now=61.0), 2)                 # the next record says how many were not written
+        self.assertIsNone(g.admit(k, now=62.0))
+
+
 class Erasure(TrashBase):
     # ADR-2321 Decision 13: L-projects deletes nothing, trash included; the 30-day sweep bounds it
     def test_an_art17_run_leaves_the_trash_alone_and_reports_skipped(self):

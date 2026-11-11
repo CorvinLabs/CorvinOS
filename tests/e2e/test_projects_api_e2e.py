@@ -155,7 +155,8 @@ class ProjectsApiE2E(unittest.TestCase):
             self.assertFalse((self.tmp / "elsewhere").exists())
             self.assertEqual(list(c.root.iterdir()), [])
             recs = [e for e in _audit_events(c.home) if e.get("event_type") == "project.blocked"]
-            self.assertEqual(sorted((e.get("details") or {}).get("reason_class") for e in recs), sorted(cases.values()))
+            # REVIEW-0063 m7: one record per session, reason class and minute - the second path_rule refusal is coalesced
+            self.assertEqual(sorted((e.get("details") or {}).get("reason_class") for e in recs), sorted(set(cases.values())))
             ok = c.own.post(f"{_URL}/plan", json={"template": "demo", "title": "X", "location": str(outside)},
                             headers={"X-CSRF-Token": c.own_csrf})
             self.assertEqual(ok.status_code, 200, ok.text)

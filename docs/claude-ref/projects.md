@@ -430,7 +430,11 @@ whose health shows what is missing. A project can never enable a tenant plugin: 
 `requested` before, `applied`/`error` after), `project.adopted`, `project.opened`,
 `project.feature_toggled` (one per feature, `to` on/off), `project.repaired`,
 `project.registry_removed`, `project.blocked` (a refusal; best effort; its `reason_class` is the class of the
-refusal), `project.storage_changed` (WARNING; `to` managed|root, `outcome`
+refusal; REVIEW-0063 m7: at most ONE record per (installation, tenant, session, reason class) per minute, like the
+browser's `project.browse_refused` - `projects_service.REFUSAL_GATE`; the session comes from the routes' session
+dependency through the `REFUSAL_SESSION` context variable, a call outside a request shares one key per tenant; the first
+refusal of a key is always recorded, the ones after it in the minute are counted and the next record of the key carries
+`coalesced: n` - allowlisted for `project.blocked` only), `project.storage_changed` (WARNING; `to` managed|root, `outcome`
 requested|applied|rebound|recovered|rekeyed|error - never a path or a workspace key), `project.relocated` (WARNING;
 `project_id`, `outcome`), `project.deleted` (WARNING; `project_id`, `outcome` requested|applied|purged|error), `project.restored`
 (WARNING; `project_id`, `outcome` requested|applied|error) - § Trash. Allowlist: `project_id`,

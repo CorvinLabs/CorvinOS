@@ -3828,10 +3828,14 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
                         # ADR-2321: the storage kind of the project (managed|own) - never its path
                         "storage"})
         for _et in ("project.plan_created", "project.created", "project.adopted", "project.opened",
-                    "project.feature_toggled", "project.repaired", "project.registry_removed", "project.blocked",
+                    "project.feature_toggled", "project.repaired", "project.registry_removed",
                     "project.video_created", "project.renamed", "project.moved", "project.attached",
                     "project.detached", "project.settings_changed", "project.root_changed")
     },
+    # REVIEW-0063 m7: a refusal is recorded once per session, reason class and minute; coalesced = how many identical refusals
+    # of that session were not recorded since its previous record (a count, never a path)
+    "project.blocked": frozenset({"project_id", "feature", "to", "template", "files", "reason_class", "outcome", "tenant_id",
+                                  "role", "classification", "access", "storage", "coalesced"}),
     # ADR-2321 Decision 14: never a path, never a workspace key
     "project.storage_changed": frozenset({"to", "outcome", "tenant_id"}),
     "project.relocated": frozenset({"project_id", "outcome", "tenant_id"}),

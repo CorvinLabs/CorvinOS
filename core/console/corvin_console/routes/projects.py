@@ -29,8 +29,21 @@ from ..deps import require_csrf, require_session
 
 router = APIRouter(prefix="/projects")
 
-Sess = Annotated[session_auth.SessionRecord, Depends(require_session)]
-SessCsrf = Annotated[session_auth.SessionRecord, Depends(require_csrf)]
+async def _session(rec: Annotated[session_auth.SessionRecord, Depends(require_session)]) -> session_auth.SessionRecord:
+    """The session, also named to the projects service for this request (REVIEW-0063 m7: refusals are recorded once per
+    session per minute). An async dependency runs in the request's task, so the value reaches the handler and is copied into
+    the worker thread by ``asyncio.to_thread``."""
+    svc.REFUSAL_SESSION.set(rec.sid)
+    return rec
+
+
+async def _session_csrf(rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> session_auth.SessionRecord:
+    svc.REFUSAL_SESSION.set(rec.sid)
+    return rec
+
+
+Sess = Annotated[session_auth.SessionRecord, Depends(_session)]
+SessCsrf = Annotated[session_auth.SessionRecord, Depends(_session_csrf)]
 
 
 class PlanBody(BaseModel):
