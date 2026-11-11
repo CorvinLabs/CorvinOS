@@ -1115,6 +1115,11 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
                            "storage": e.get("storage") or "own", "display_path": _display(tenant_id, root)}
     if e.get("pending"):
         # an import that is not applied yet (ADR-2323 Decision 13 step 2): listed, never opened, attached or projected
+        if e["pending"] == "import" and _pending_import_unlocked(tenant_id, e["id"]):
+            # no apply is running: an unfinished import a crash left behind, which Repair removes - said on the list, in the
+            # scope switchers and on the detail page alike (REVIEW-0079 N22, REVIEW-0080 N25)
+            return {**out, "state": "pending", "pending": e["pending"], "title": e["id"], "stale": True,
+                    "reason": STALE_IMPORT_REASON}
         return {**out, "state": "pending", "pending": e["pending"], "title": e["id"],
                 "reason": PENDING_REASON.get(str(e["pending"]), "pending")}
     try:
@@ -1190,10 +1195,6 @@ def list_projects(tenant_id: str) -> dict[str, Any]:
 def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
     e = _entry(tenant_id, project_id)
     out = _summary(tenant_id, e)
-    if out["state"] == "pending" and e.get("pending") == "import" and not e.get("builtin") and _pending_import_unlocked(tenant_id, project_id):
-        # no apply is running: the entry is an unfinished import a crash left behind, and Repair removes it (REVIEW-0079 N22)
-        return {**out, "stale": True, "reason": "The import did not finish and is not running any more. Repair in Settings removes "
-                                                "the unfinished import."}
     if out["state"] != "ok":
         return out
     if e.get("builtin"):
@@ -1349,8 +1350,11 @@ def repair(tenant_id: str, project_id: str, *, dry_run: bool = False) -> dict[st
     plan = F.build_plan(cat, root, manifest.active_features(man), ctx, docs_mode=man.get("docs_mode", "nested"),
                         mode="repair")
     pending = plan.pending()
-    summary = {**plan.summary(), "pending": [{"path": o.path or o.action, "status": o.status, "diff": o.diff}
-                                             for o in pending], "dry_run": dry_run, "marker": marker_written}
+    listed = [{"path": o.path or o.action, "status": o.status, "diff": o.diff} for o in pending]
+    if marker_written == "pending":
+        # the workspace marker is written by repair too: the preview lists it, so its Apply is offered (REVIEW-0080 N26)
+        listed.append({"path": f"{registry.MARKER} (workspace marker)", "status": "new", "diff": ""})
+    summary = {**plan.summary(), "pending": listed, "dry_run": dry_run, "marker": marker_written}
     if dry_run or not pending:
         return summary
     _require_plugins(tenant_id, plan, project_id)
@@ -3740,6 +3744,7 @@ APPLY_MESSAGES = {
     "removed": "The unfinished import was removed.",
 }
 PENDING_REASON = {"import": "Being imported"}
+STALE_IMPORT_REASON = "The import did not finish and is not running any more. Repair in Settings removes the unfinished import."
 
 
 def _class_floor(envelope_class: str) -> str:

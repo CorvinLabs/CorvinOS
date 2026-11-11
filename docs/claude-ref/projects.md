@@ -1269,7 +1269,10 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   Settings to repair" only for such a row; every other row says in its own words what to do (REVIEW-0079 N23). The
   `protection` row is left out while project.yaml names another project, because saving the protection needs it (N24). An
   import nobody applies any more is `stale: true` in the detail (badge "Import unfinished"); Maintenance then offers Repair,
-  which removes the entry and its leftover folders and shows the same confirmation page as Remove (N22). A chain failure between two opening records of `_audited` closes the ones already
+  which removes the entry and its leftover folders and shows the same confirmation page as Remove (N22). `stale` and its reason come from the
+  shared summary, so the list card ("Import unfinished") and the scope switchers ("import unfinished - Repair is on the
+  project's page") say the same (REVIEW-0080 N25). The repair preview lists a missing `workspace.json (workspace marker)`
+  like any other pending write, so its Apply is offered (N26). A chain failure between two opening records of `_audited` closes the ones already
   open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
   feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,

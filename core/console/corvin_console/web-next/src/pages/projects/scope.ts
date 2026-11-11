@@ -15,7 +15,8 @@ export type Scope = { kind: "all" } | { kind: "bound" } | { kind: "project"; id:
 export function projectUnavailableReason(p: ProjectSummary): string | null {
   if (p.state === "missing") return p.reason ? `folder missing: ${p.reason}` : "folder missing";
   if (p.state === "invalid") return p.reason ? `invalid: ${p.reason}` : "invalid project.yaml";
-  if (p.state === "pending") return p.pending === "import" ? "Being imported" : "still being created";
+  // an import nobody applies any more is not "being imported": its repair is on the project's page (REVIEW-0080 N25)
+  if (p.state === "pending") return p.pending === "import" ? (p.stale ? "import unfinished - Repair is on the project's page" : "Being imported") : "still being created";
   if (p.state === "trashed") return "In Trash";
   if (p.state !== "ok") return p.reason ?? p.state;
   // the knowledge-base switch is in the project's Features tab (the Settings tab has none: REVIEW-0067 M2)

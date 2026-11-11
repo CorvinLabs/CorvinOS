@@ -331,6 +331,33 @@ class AdoptRenameMove(_Base):
             self.assertIsNone(registry.get("_default", pid))
             self.assertTrue(root.exists())                                       # the folder at the project's place is kept
 
+    def test_the_list_says_an_import_is_unfinished_like_the_detail_does(self):
+        # REVIEW-0080 N25: only the detail knew `stale`; the list and the scope switchers still read "Being imported"
+        from core.projects import registry
+        with self._ctx() as c:
+            pid, _root = self._new(c)
+            registry.set_pending("_default", pid, "import")
+            row = next(p for p in c.own.get(_URL).json()["projects"] if p["id"] == pid)
+            d = c.own.get(f"{_URL}/{pid}").json()
+            self.assertTrue(row.get("stale"))
+            self.assertEqual(row["reason"], d["reason"])
+            self.assertIn("did not finish", row["reason"])
+
+    def test_the_repair_preview_lists_a_missing_workspace_marker(self):
+        # REVIEW-0080 N26: the marker row said "Repair writes the workspace marker" but the preview read "Nothing to repair"
+        with self._ctx() as c:
+            mr = Path(c.own.get(_URL).json()["managed_root"])
+            plan, r = self._create(c, "Managed marker", features=["core", "claude"], location=str(mr / "managed-marker"))
+            self.assertEqual(r.status_code, 201, r.text)
+            pid = plan["project_id"]
+            (mr / "workspace.json").unlink()
+            dry = c.own.post(f"{_URL}/{pid}/repair", json={"dry_run": True}, headers=self._h(c)).json()
+            self.assertIn("workspace.json (workspace marker)", [p["path"] for p in dry["pending"]])
+            self.assertFalse((mr / "workspace.json").exists())                    # a preview writes nothing
+            r = c.own.post(f"{_URL}/{pid}/repair", json={}, headers=self._h(c))
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertTrue((mr / "workspace.json").exists())
+
     def test_a_successful_adopt_closes_its_request(self):
         with self._ctx() as c:
             dst = c.root / "plain-two"

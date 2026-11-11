@@ -165,3 +165,11 @@ describe("the switcher lists every project, and says why one cannot be chosen", 
     expect(resolveScope("bound", undefined, "tasks").pending).toBe(false);
   });
 });
+
+describe("an unfinished import is named as such in the switcher (REVIEW-0080 N25)", () => {
+  const p = { id: "x", path: "/x", template: "t@1", state: "pending", pending: "import" } as const;
+  it("running: being imported; stale: unfinished, with where the repair is", () => {
+    expect(projectUnavailableReason({ ...p } as never)).toBe("Being imported");
+    expect(projectUnavailableReason({ ...p, stale: true } as never)).toBe("import unfinished - Repair is on the project's page");
+  });
+});

@@ -215,3 +215,30 @@ test("an unfinished import says so, and Repair in Settings removes it and says s
   // the same confirmation page as Remove from the list, with the server's sentence and the way back to the list
   await expect(page.getByTestId("inspector-removed")).toContainText("The unfinished import was removed.");
 });
+
+test("the list card of an unfinished import says so, like its page (REVIEW-0080 N25)", async ({ page }) => {
+  const P = { ...LIST_ITEM, state: "pending", pending: "import", title: ID, stale: true,
+    reason: "The import did not finish and is not running any more. Repair in Settings removes the unfinished import." };
+  await stub(page, { list: [P] });
+  await page.goto("/console/app/projects");
+  const card = page.locator(`[data-testid="project-card"][data-project-id="${ID}"]`);
+  await expect(card).toContainText("Import unfinished");
+  await expect(card).not.toContainText("Being imported");
+});
+
+test("a missing workspace marker is listed in the repair preview and can be applied (REVIEW-0080 N26)", async ({ page }) => {
+  await stub(page);
+  await page.route(new RegExp(`/v1/console/projects/${ID}/health$`), (r) => r.fulfill({ json: { project_id: ID, ok: false, checks: [
+    { id: "storage_marker", ok: false, detail: "the workspace marker workspace.json is missing - Repair writes the workspace marker", at: "x", repairable: true }] } }));
+  let applied = false;
+  await page.route(new RegExp(`/v1/console/projects/${ID}/repair$`), (r) => {
+    if (r.request().postDataJSON().dry_run) return r.fulfill({ json: { dry_run: true, marker: "pending", pending: [{ path: "workspace.json (workspace marker)", status: "new", diff: "" }] } });
+    applied = true;
+    return r.fulfill({ json: { dry_run: false, marker: "written", pending: [] } });
+  });
+  await page.goto(`/console/app/projects/${ID}?tab=settings`);
+  await page.getByTestId("repair-preview").click();
+  await expect(page.getByTestId("repair-pending")).toContainText("workspace.json (workspace marker)");
+  await page.getByTestId("repair-apply").click();
+  await expect.poll(() => applied).toBe(true);
+});
