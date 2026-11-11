@@ -47,8 +47,8 @@ for (const t of ["light", "dark"] as const) {
       await expect(page.getByTestId("scope-select")).toHaveValue("all");
       const noKb = page.getByTestId("scope-select").locator(`option[value="project:${NO_KB}"]`);
       await expect(noKb).toHaveAttribute("disabled", "");
-      await expect(noKb).toContainText("no knowledge base - switch it on in Settings");
-      await expect(page.getByTestId("scope-unavailable").locator(`a[href$="/app/projects/${NO_KB}?tab=settings"]`)).toHaveCount(1);
+      await expect(noKb).toContainText("no knowledge base - switch it on in Features");
+      await expect(page.getByTestId("scope-unavailable").locator(`a[href$="/app/projects/${NO_KB}?tab=features"]`)).toHaveCount(1);
       await shot(page, "tasks-all", t, s.name);
 
       // --- Tasks: the project; the counters are its own and match the list ---
@@ -79,10 +79,19 @@ for (const t of ["light", "dark"] as const) {
       await page.goto(`/console/app/initiatives?scope=project:${NO_KB}`, { waitUntil: "domcontentloaded" });
       await expect(page.getByTestId("scope-note")).toContainText(`cannot be shown: no knowledge base`, { timeout: 60_000 });
 
-      // --- Graph: Corvin (default) ---
+      // --- Graph: the default scope. It is "Corvin" when the graph reads Corvin's own knowledge base; when its Repository
+      // setting names another one, the default is named after that folder and Corvin is listed on its own (REVIEW-0067 M4).
+      // what is true on this install, read from the API: the graph setting's folder vs the built-in project's folder
+      const cfg = await (await page.request.get("/v1/console/plugins/corvin-knowledge/config")).json() as { repo_path: string };
+      const list = await (await page.request.get("/v1/console/projects")).json() as { projects: { builtin?: boolean; path: string }[] };
+      const builtinPath = list.projects.find((p) => p.builtin)?.path ?? "";
+      const separate = !!builtinPath && cfg.repo_path.replace(/\/+$/, "") !== builtinPath.replace(/\/+$/, "");
       await page.goto("/console/app/corvin-knowledge", { waitUntil: "domcontentloaded" });
       const repo = page.getByTestId("knowledge-repo");
-      await expect(repo).toContainText("Corvin · Repository:", { timeout: 60_000 });
+      await expect(page.getByTestId("scope-select").locator('option[value="project:corvin"]')).toHaveCount(separate ? 1 : 0, { timeout: 60_000 });
+      const boundName = ((await page.getByTestId("scope-select").locator('option[value="bound"]').textContent()) ?? "").trim();
+      expect(separate ? boundName !== "Corvin" && cfg.repo_path.endsWith(boundName) : boundName === "Corvin").toBe(true);
+      await expect(repo).toContainText(`${boundName} · Repository:`, { timeout: 60_000 });
       await expect(page.getByTestId("scope-select")).toHaveValue("bound");
       await expect.poll(() => graphTotal(page), { timeout: 60_000 }).toBeGreaterThan(0);
       const boundTotal = await graphTotal(page);
@@ -99,17 +108,27 @@ for (const t of ["light", "dark"] as const) {
       await page.reload({ waitUntil: "domcontentloaded" });
       await expect(repo).toContainText(`/projects/${PID}/docs`, { timeout: 90_000 });
 
+      // --- Graph: Corvin itself, when it is a scope of its own: the board's knowledge base, not the graph setting's ---
+      let corvinTotal = 0;
+      if (separate) {
+        await page.getByTestId("scope-select").selectOption("project:corvin");
+        await expect(repo).toContainText("Corvin · Repository:", { timeout: 90_000 });
+        await expect.poll(() => graphTotal(page), { timeout: 90_000 }).toBeGreaterThan(0);
+        corvinTotal = await graphTotal(page);
+        await shot(page, "graph-corvin-own", t, s.name);
+      }
+
       // --- Graph: All knowledge bases ---
       await page.getByTestId("scope-select").selectOption("all");
       await expect(repo).toContainText("knowledge bases", { timeout: 90_000 });
-      await expect.poll(() => graphTotal(page), { timeout: 90_000 }).toBe(boundTotal + projectTotal);
+      await expect.poll(() => graphTotal(page), { timeout: 90_000 }).toBe(boundTotal + projectTotal + corvinTotal);
       await shot(page, "graph-all", t, s.name);
 
       // --- Graph: an unavailable project falls back to Corvin, saying why ---
       await page.goto(`/console/app/corvin-knowledge?scope=project:${NO_KB}`, { waitUntil: "domcontentloaded" });
       await expect(page.getByTestId("scope-note")).toContainText("cannot be shown: no knowledge base", { timeout: 60_000 });
       await expect(page.getByTestId("scope-select")).toHaveValue("bound");
-      await expect(repo).toContainText("Corvin · Repository:", { timeout: 60_000 });
+      await expect(repo).toContainText(`${boundName} · Repository:`, { timeout: 60_000 });
       await shot(page, "graph-unavailable", t, s.name);
     });
   }

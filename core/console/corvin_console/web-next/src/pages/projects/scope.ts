@@ -18,9 +18,45 @@ export function projectUnavailableReason(p: ProjectSummary): string | null {
   if (p.state === "pending") return p.pending === "import" ? "Being imported" : "still being created";
   if (p.state === "trashed") return "In Trash";
   if (p.state !== "ok") return p.reason ?? p.state;
-  if (p.features && p.features.kb !== true) return "no knowledge base - switch it on in Settings";
-  if (p.kb !== true) return p.features?.kb === true ? "knowledge base not created yet" : "no knowledge base - switch it on in Settings";
+  // the knowledge-base switch is in the project's Features tab (the Settings tab has none: REVIEW-0067 M2)
+  if (p.features && p.features.kb !== true) return NO_KB_REASON;
+  if (p.kb !== true) return p.features?.kb === true ? "knowledge base not created yet" : NO_KB_REASON;
   return null;
+}
+
+export const NO_KB_REASON = "no knowledge base - switch it on in Features";
+
+/**
+ * How the "bound" scope is shown. Normally it IS the built-in Corvin project (the board's knowledge base) and is called "Corvin".
+ * The Knowledge Graph has its own Repository setting; when that points somewhere else, `boundLabel` names that repository and the
+ * built-in project is listed on its own, so one name never stands for two knowledge bases (REVIEW-0067 M4).
+ */
+export interface ScopeOpts {
+  boundLabel?: string | null;
+  /** The page does not know yet what the bound scope reads (the graph's setting is loading): it is shown as "…", never as "Corvin". */
+  pendingBound?: boolean;
+}
+
+/** The bound scope's display name under these options. */
+export function boundName(opts: ScopeOpts = {}): string {
+  return scopeLabel({ kind: "bound" }, {}, opts.boundLabel ?? (opts.pendingBound ? "…" : null));
+}
+
+const trimSlash = (x: string): string => x.replace(/[\\/]+$/, "");
+
+/**
+ * The name of the graph's repository when it is NOT the built-in project's folder, else null (same folder, or either unknown).
+ * The folder name is used; a generic last folder (docs, knowledge, kb) keeps its parent: "LLM_lie_detector/docs".
+ */
+export function boundRepoLabel(repoPath: string | null | undefined, builtinPath: string | null | undefined): string | null {
+  const repo = trimSlash((repoPath ?? "").trim());
+  const own = trimSlash((builtinPath ?? "").trim());
+  if (!repo || !own) return null;
+  if (repo === own) return null;
+  if (repo.startsWith("~") && own.endsWith(repo.slice(1))) return null;     // "~/x" is the same folder as "/home/u/x"
+  const parts = repo.split(/[\\/]+/).filter(Boolean);
+  const last = parts[parts.length - 1] ?? repo;
+  return ["docs", "knowledge", "kb"].includes(last.toLowerCase()) && parts.length > 1 ? `${parts[parts.length - 2]}/${last}` : last;
 }
 
 /** The list the switcher works on: every project plus the ones in the Trash (listed, never selectable: "In Trash"). */
@@ -29,14 +65,14 @@ export function scopeList(data: { projects?: ProjectSummary[]; trashed?: Project
   return [...(data.projects ?? []), ...(data.trashed ?? [])];
 }
 
-/** Every project the switcher lists (the built-in Corvin project IS the "bound" scope, labelled "Corvin"). */
-export function listedProjects(list: ProjectSummary[] | undefined): ProjectSummary[] {
-  return (list ?? []).filter((p) => !p.builtin);
+/** Every project the switcher lists. The built-in Corvin project IS the "bound" scope, unless the bound scope names another repository. */
+export function listedProjects(list: ProjectSummary[] | undefined, opts: ScopeOpts = {}): ProjectSummary[] {
+  return (list ?? []).filter((p) => !p.builtin || !!opts.boundLabel);
 }
 
 /** Projects the scope selector may offer: ok and with the knowledge base on. */
-export function selectableProjects(list: ProjectSummary[] | undefined): ProjectSummary[] {
-  return listedProjects(list).filter((p) => projectUnavailableReason(p) === null);
+export function selectableProjects(list: ProjectSummary[] | undefined, opts: ScopeOpts = {}): ProjectSummary[] {
+  return listedProjects(list, opts).filter((p) => projectUnavailableReason(p) === null);
 }
 
 /** The two pages that switch by scope. Tasks starts on every knowledge base, the graph on Corvin's own. */
@@ -45,22 +81,23 @@ export const DEFAULT_SCOPE: Record<ScopePage, Scope> = { tasks: { kind: "all" },
 
 export interface ScopeOption {
   value: string; label: string; title: string; disabled: boolean; reason: string | null; projectId: string | null;
-  /** Where an unavailable project is fixed: its Settings tab (knowledge base off), else its page. */
+  /** Where an unavailable project is fixed: its Features tab (knowledge base off), else its page. */
   fixHref: string | null;
 }
 
 /** The switcher's entries, identical on both pages: All knowledge bases, Corvin, then every project. */
-export function scopeOptions(list: ProjectSummary[] | undefined): ScopeOption[] {
+export function scopeOptions(list: ProjectSummary[] | undefined, opts: ScopeOpts = {}): ScopeOption[] {
+  const bound = boundName(opts);
   const fixed: ScopeOption[] = [
     { value: "all", label: scopeLabel({ kind: "all" }, {}), title: scopeLabel({ kind: "all" }, {}), disabled: false, reason: null, projectId: null, fixHref: null },
-    { value: "bound", label: scopeLabel({ kind: "bound" }, {}), title: scopeLabel({ kind: "bound" }, {}), disabled: false, reason: null, projectId: null, fixHref: null },
+    { value: "bound", label: bound, title: bound, disabled: false, reason: null, projectId: null, fixHref: null },
   ];
-  return [...fixed, ...listedProjects(list).map((p) => {
+  return [...fixed, ...listedProjects(list, opts).map((p) => {
     const reason = projectUnavailableReason(p);
     const title = p.title || p.id;
     const page = `/app/projects/${encodeURIComponent(p.id)}`;
     return { value: `project:${p.id}`, label: reason ? `${title} (${reason})` : title, title, disabled: reason !== null, reason,
-      projectId: p.id, fixHref: reason === null ? null : p.state === "ok" ? `${page}?tab=settings` : p.state === "trashed" ? "/app/projects?view=trash" : page };
+      projectId: p.id, fixHref: reason === null ? null : p.state === "ok" ? `${page}?tab=features` : p.state === "trashed" ? "/app/projects?view=trash" : page };
   })];
 }
 
@@ -69,18 +106,19 @@ export function scopeOptions(list: ProjectSummary[] | undefined): ScopeOption[] 
  * shown, or that does not exist, falls back to the page's default and says why (`note`). While the project list
  * is still loading (`list` undefined) a project id is kept, so a shared link does not flash the default first.
  */
-export function resolveScope(raw: string | null, list: ProjectSummary[] | undefined, page: ScopePage):
+export function resolveScope(raw: string | null, list: ProjectSummary[] | undefined, page: ScopePage, opts: ScopeOpts = {}):
   { scope: Scope; note: string | null; pending: boolean } {
   const fallback = DEFAULT_SCOPE[page];
-  const fbLabel = scopeLabel(fallback, {});
+  const fbLabel = fallback.kind === "bound" ? boundName(opts) : scopeLabel(fallback, {});
   if (raw === "both") return { scope: { kind: "all" }, note: null, pending: false };
-  if (raw === "project:corvin") return { scope: { kind: "bound" }, note: null, pending: false };   // the built-in project IS Corvin
+  // the built-in project IS the bound scope - unless the bound scope names another repository (then it is a scope of its own)
+  if (raw === "project:corvin" && !opts.boundLabel) return { scope: { kind: "bound" }, note: null, pending: false };
   if (raw?.startsWith("project:") && list === undefined) return { scope: { kind: "project", id: raw.slice(8) }, note: null, pending: true };
-  const scope = parseScope(raw, selectableProjects(list).map((p) => p.id), fallback);
+  const scope = parseScope(raw, selectableProjects(list, opts).map((p) => p.id), fallback);
   if (scope.kind === "both") return { scope: { kind: "all" }, note: null, pending: false };
   if (raw?.startsWith("project:") && scope.kind !== "project") {
     const id = raw.slice(8);
-    const p = listedProjects(list).find((x) => x.id === id);
+    const p = listedProjects(list, opts).find((x) => x.id === id);
     const note = p
       ? `${p.title || p.id} cannot be shown: ${projectUnavailableReason(p) ?? "unavailable"}. Showing ${fbLabel} instead.`
       : `There is no project "${id}". Showing ${fbLabel} instead.`;
@@ -155,10 +193,10 @@ export function graphScopes(s: Scope, projectIds: string[]): (string | null)[] {
 }
 
 /** Human label of a scope for the selector and the chip. */
-export function scopeLabel(s: Scope, titles: Record<string, string>): string {
+export function scopeLabel(s: Scope, titles: Record<string, string>, boundLabel?: string | null): string {
   switch (s.kind) {
     case "all": return "All knowledge bases";
-    case "bound": return "Corvin";
+    case "bound": return boundLabel || "Corvin";
     case "both": return "All knowledge bases";
     case "project": return titles[s.id] ?? s.id;
   }

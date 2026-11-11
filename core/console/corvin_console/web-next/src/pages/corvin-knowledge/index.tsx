@@ -26,7 +26,7 @@ import { GraphCanvas } from "./GraphCanvas";
 import { DocumentPane } from "./DocumentPane";
 import { listProjects } from "@/lib/api/projects";
 import { ScopeSelect } from "@/pages/projects/scope-select";
-import { graphScopes, listedProjects, mergeGraphs, resolveScope, scopeLabel, scopeList, scopeParam, selectableProjects } from "@/pages/projects/scope";
+import { boundName, boundRepoLabel, graphScopes, listedProjects, mergeGraphs, resolveScope, scopeLabel, scopeList, scopeParam, selectableProjects } from "@/pages/projects/scope";
 import { buildLinkIndex } from "./link-resolver";
 import { neighbourhood, newestDecisionKey, searchNodes } from "./graph-model";
 
@@ -92,17 +92,25 @@ export function CorvinKnowledgePage() {
   const [scopeParams, setScopeParams] = useSearchParams();
   const projectsQ = useQuery({ queryKey: ["projects", "list"], queryFn: ({ signal }) => listProjects(signal), retry: false });
   const projectList = projectsQ.isLoading ? undefined : (scopeList(projectsQ.data) ?? []);
-  const pickable = selectableProjects(projectList);
-  const { scope, note: scopeNote, pending: scopePending } = resolveScope(scopeParams.get("scope"), projectList, "graph");
+  const config = useQuery({ queryKey: [...KEY_CONFIG], queryFn: ({ signal }) => api<KnowledgeConfig>(`${BASE_PATH}/config`, { signal }), retry: false });
+  // The graph has its own Repository setting. When it points somewhere other than Corvin's knowledge base (the built-in project,
+  // which is also the Tasks board's), the default scope is named after that repository and Corvin is listed on its own: one name
+  // never stands for two knowledge bases (REVIEW-0067 M4).
+  const builtinPath = projectsQ.data?.projects?.find((p) => p.builtin)?.path;
+  const boundLabel = boundRepoLabel(config.data?.repo_path, builtinPath);
+  const scopeOpts = useMemo(() => ({ boundLabel, pendingBound: config.isLoading }), [boundLabel, config.isLoading]);
+  const pickable = selectableProjects(projectList, scopeOpts);
+  const { scope, note: scopeNote, pending: scopePending } = resolveScope(scopeParams.get("scope"), projectList, "graph", scopeOpts);
   const scopeKey = scopeParam(scope);
-  const titles = useMemo(() => Object.fromEntries(listedProjects(projectList).map((p) => [p.id, p.title || p.id])), [projectList]);
-  const scopeName = scopeLabel(scope, titles);
+  const titles = useMemo(() => Object.fromEntries(listedProjects(projectList, scopeOpts).map((p) => [p.id, p.title || p.id])), [projectList, scopeOpts]);
+  const scopeName = scope.kind === "bound" ? boundName(scopeOpts) : scopeLabel(scope, titles);
   const setScope = (raw: string) => setScopeParams((p) => { const n = new URLSearchParams(p); if (raw === "bound") n.delete("scope"); else n.set("scope", raw); n.delete("node"); return n; }, { replace: true });
   const graph = useQuery({
     // A shared ?scope=project:<id> waits for the project list instead of showing Corvin first, and the joined view
     // waits for it too (it fetches one graph per project). The project ids are part of the key only for the joined
     // view: anywhere else their arrival would throw away a loaded graph and show "0 nodes" for a moment.
-    enabled: !scopePending && !(scope.kind === "all" && projectList === undefined),
+    // ... and waits for the graph's own setting, which decides whether Corvin is the default scope or a scope of its own (REVIEW-0067 M4)
+    enabled: !scopePending && !config.isLoading && !(scope.kind === "all" && projectList === undefined),
     queryKey: [...KEY_GRAPH, scopeKey, scope.kind === "all" ? pickable.map((p) => p.id).join(",") : ""],
     queryFn: async ({ signal }) => {
       const ids = graphScopes(scope, pickable.map((p) => p.id));
@@ -118,7 +126,6 @@ export function CorvinKnowledgePage() {
     },
     retry: false,
   });
-  const config = useQuery({ queryKey: [...KEY_CONFIG], queryFn: ({ signal }) => api<KnowledgeConfig>(`${BASE_PATH}/config`, { signal }), retry: false });
 
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
@@ -209,7 +216,15 @@ export function CorvinKnowledgePage() {
       </div>
 
       {/* the knowledge base comes first: every number below belongs to it */}
-      <div className="max-w-md"><ScopeSelect value={scopeKey} projects={projectList} note={scopeNote} onChange={setScope} /></div>
+      <div className="max-w-md space-y-1">
+        <ScopeSelect value={scopeKey} projects={projectList} note={scopeNote} onChange={setScope} opts={scopeOpts} />
+        {boundLabel && scope.kind === "bound" && (
+          <p className="text-xs text-muted-foreground" data-testid="scope-bound-note">
+            This graph reads <span className="font-mono break-all">{config.data?.repo_path}</span> (Repository path under Settings below), not
+            Corvin's knowledge base. Choose Corvin in the list to see Corvin's own.
+          </p>
+        )}
+      </div>
 
       <Card>
         <CardContent className="py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
@@ -230,7 +245,7 @@ export function CorvinKnowledgePage() {
       </Card>
       {failedParts.map((p) => (
         <p key={p.projectId ?? "bound"} role="status" data-testid="knowledge-build-error" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
-          The graph of {p.projectId ? (titles[p.projectId] ?? p.projectId) : "Corvin"} could not be built: {p.error ?? "unknown error"}
+          The graph of {p.projectId ? (titles[p.projectId] ?? p.projectId) : boundName(scopeOpts)} could not be built: {p.error ?? "unknown error"}
         </p>
       ))}
       {msg && <p className="text-xs text-muted-foreground" data-testid="knowledge-msg">{msg}</p>}

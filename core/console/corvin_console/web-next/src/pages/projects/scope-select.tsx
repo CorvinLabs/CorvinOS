@@ -5,20 +5,22 @@
  */
 import { Link } from "react-router-dom";
 import type { ProjectSummary } from "@/lib/api/projects";
-import { scopeOptions } from "./scope";
+import { scopeOptions, type ScopeOpts } from "./scope";
 
 /** Deploy marker of the switcher (a string literal). */
 export const MARKER_SCOPE_SWITCH = "Not available here:";
 
-export function ScopeSelect({ value, projects, onChange, note, label = "Knowledge base" }: {
+export function ScopeSelect({ value, projects, onChange, note, label = "Knowledge base", opts }: {
   value: string;
   projects: ProjectSummary[] | undefined;
   onChange: (v: string) => void;
   /** Why the URL's choice was not honoured (unknown or unavailable project). */
   note?: string | null;
   label?: string;
+  /** The graph page names its own repository when it is not Corvin's (scope.ts `boundRepoLabel`). */
+  opts?: ScopeOpts;
 }) {
-  const options = scopeOptions(projects);
+  const options = scopeOptions(projects, opts);
   const blocked = options.filter((o) => o.disabled && o.projectId);
   return (
     <div className="flex flex-col gap-1 min-w-0">

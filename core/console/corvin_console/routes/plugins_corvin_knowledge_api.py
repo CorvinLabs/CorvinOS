@@ -334,8 +334,16 @@ def _scoped_config(tenant_id: str, project: Optional[str]) -> Dict[str, Any]:
     tenant's project registry (``kb_projection.project_kbs``), never from the request; an id
     that is not registered for this tenant is 404."""
     config = effective_config(tenant_id)
-    if project is None or project == "corvin":      # the built-in Corvin project IS the tenant's own graph (CONCEPT-0129)
+    if project is None:
         return config
+    if project == "corvin":
+        # The built-in Corvin project is the tenant's OWN knowledge base - the one the Tasks board projects and the project's Docs
+        # tab counts (``builtin.repo`` = ``kb_projection.kb_repo``, CONCEPT-0129). The graph's Repository setting may name another
+        # knowledge base for the default view; it never relabels Corvin's (REVIEW-0067 M4). Before the KB exists: the default view.
+        from core.projects import builtin  # noqa: PLC0415
+
+        repo = builtin.repo(tenant_id)
+        return {**config, "repo_path": str(repo)} if repo is not None else config
     for pid, docs in kb_projection.project_kbs(tenant_id, only=project):   # resolves (and walks the .git of) this project only
         if pid == project:
             return {**config, "repo_path": str(docs)}

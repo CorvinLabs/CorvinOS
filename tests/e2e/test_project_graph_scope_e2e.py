@@ -110,6 +110,33 @@ class ProjectGraphScopeE2E(unittest.TestCase):
                 self.assertEqual(b["graph_state"], "ok")
                 self.assertIn("bound task", {x["title"] for x in b["entities"]})
 
+    def test_builtin_corvin_graph_is_the_boards_kb_even_when_the_graph_setting_points_elsewhere(self):
+        """REVIEW-0067 M4: the graph's Repository setting may name another knowledge base (the operator's choice). The default
+        (bound) graph then reads that one; ``?project=corvin`` - the built-in project, the same knowledge base the Tasks board and
+        the project's Docs tab read - still reads the board's knowledge base, so "Corvin" never names two knowledge bases."""
+        import json as _json
+        other = self.tmp / "other"
+        fx._kb_init(other, engine=True)
+        fx._seed(other, "other")
+        fx._kb(other, "index")
+        with _sandbox(self.tmp / "s", tenants=("_default",)) as (_c, _t, _home, clients):
+            from corvin_console.routes import plugins_corvin_knowledge_api as kg
+            cfg = self.tmp / "oshome" / "corvin-knowledge.json"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(_json.dumps({**kg.DEFAULT_CONFIG, "repo_path": str(other)}), encoding="utf-8")
+            own, _ = clients["_default"]
+            with mock.patch.object(kg, "CONFIG_FILE", cfg):
+                b = own.get(f"{_KG}/graph").json()
+                self.assertEqual(Path(b["repo_path"]).resolve(), other.resolve(), b)
+                self.assertIn("other task", {x["title"] for x in b["entities"]})
+                c = own.get(f"{_KG}/graph", params={"project": "corvin"})
+                self.assertEqual(c.status_code, 200, c.text)
+                body = c.json()
+                self.assertEqual(Path(body["repo_path"]).resolve(), self.bound.resolve(), body)
+                titles = {x["title"] for x in body["entities"]}
+                self.assertIn("bound task", titles)
+                self.assertNotIn("other task", titles)
+
     def test_projector_builds_the_project_graph_and_the_counters_follow_the_scope(self):
         with _sandbox(self.tmp / "s", tenants=("_default",)) as (_c, _t, home, clients):
             from corvin_console import kb_projection

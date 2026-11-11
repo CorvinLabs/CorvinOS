@@ -1085,11 +1085,12 @@ Both pages show ONE switcher (`ScopeSelect` in `pages/projects/scope-select.tsx`
 above every number it governs) with the same entries in the same order: **All knowledge bases** (`all`), **Corvin**
 (`bound`, the tenant's own knowledge base), then **every** registered project (`project:<id>`). A project that
 cannot be shown is listed DISABLED with its reason (`projectUnavailableReason`: "no knowledge base - switch it on in
-Settings", "knowledge base not created yet", "folder missing: ...", "invalid project.yaml", "still being created"),
-and a line under the select ("Not available here: ...") links to where it is fixed (the project's Settings tab, or
-its page when the folder is missing/invalid). The choice is the URL (`?scope=`), so a reload and a shared link keep
+Features", "knowledge base not created yet", "folder missing: ...", "invalid project.yaml", "still being created"),
+and a line under the select ("Not available here: ...") links to where it is fixed (the project's Features tab, where the
+knowledge-base switch is - the Settings tab has none, REVIEW-0067 M2 -, or its page when the folder is missing/invalid). The choice is the URL (`?scope=`), so a reload and a shared link keep
 it. Defaults: `all` on Tasks, `bound` on the Knowledge Graph (`DEFAULT_SCOPE`). `both` (the graph's former word for
-the joined view) is read as `all`; `project:corvin` is `bound`. An unknown or unavailable project id falls back to
+the joined view) is read as `all`; `project:corvin` is `bound` - except on the graph page when its Repository setting names
+another knowledge base (below). An unknown or unavailable project id falls back to
 the page default and SAYS so (`scope-note`: 'There is no project "x". Showing ... instead.'). While the project list
 is still loading, a `project:<id>` link waits for it instead of showing the default first (`resolveScope` → `pending`).
 Pure decisions in `pages/projects/scope.ts` (`tests/unit/projects-scope.test.ts`, 13 tests).
@@ -1108,6 +1109,17 @@ Pure decisions in `pages/projects/scope.ts` (`tests/unit/projects-scope.test.ts`
   empty project KB says so with its own path, and a graph that could not be built is named in a banner. Pull/Push/Sync
   are shown only for Corvin (they act on the bound checkout). The project ids are part of the query key only for the
   joined view, which waits for the project list (elsewhere their arrival discarded a loaded graph: "0 nodes" for a moment).
+- **One name, one knowledge base (REVIEW-0067 M4, 2026-11-11).** The built-in project "Corvin" is `builtin.repo` =
+  `kb_projection.kb_repo` - the knowledge base the Tasks board projects and its Docs tab counts. The Knowledge Graph's default
+  (`bound`) view reads its own Repository setting (`effective_config().repo_path`, the plugin record / `corvin-knowledge.json`),
+  which the operator's tenant may point at ANOTHER knowledge-base checkout. When that path is not the built-in project's folder
+  (`scope.boundRepoLabel`, `~` and a trailing slash tolerated), the graph's default scope is named after its folder
+  ("LLM_lie_detector/docs": the last folder, with its parent when it is `docs`/`knowledge`/`kb`), a note under the switcher
+  names the path, and **Corvin** is listed as its own entry (`project:corvin`); the server reads `?project=corvin` from
+  `builtin.repo`, never from the graph setting (`plugins_corvin_knowledge_api._scoped_config`; proof
+  `tests/e2e/test_project_graph_scope_e2e.py::test_builtin_corvin_graph_is_the_boards_kb_even_when_the_graph_setting_points_elsewhere`,
+  stubbed `projects-scope.spec.ts`). With the setting empty or equal to Corvin's folder, nothing changes: `bound` is "Corvin".
+  The Tasks board needs no such label: its `bound` IS the built-in project's knowledge base.
 - **Project graphs are built by the console** (`kb_projection.ensure_project_graph`/`index_project_graph`): on a read
   whose `kb/graph` is missing or older than the KB's sources (`graph_stale`, bounded scan), and after a projector pass
   that exported a changed project KB — always with the bound engine, off the event loop (`asyncio.to_thread`), one

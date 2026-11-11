@@ -97,10 +97,10 @@ test("a project without a knowledge base is listed disabled with its reason, on 
     const demo = page.getByTestId("scope-select").locator('option[value="project:demo"]');
     await expect(demo).toHaveCount(1);
     await expect(demo).toHaveAttribute("disabled", "");
-    await expect(demo).toHaveText("demo (no knowledge base - switch it on in Settings)");
+    await expect(demo).toHaveText("demo (no knowledge base - switch it on in Features)");
     await expect(page.getByTestId("scope-unavailable")).toContainText("demo");
-    await expect(page.getByTestId("scope-unavailable").getByRole("link", { name: "demo" })).toHaveAttribute("href", /\/app\/projects\/demo\?tab=settings/);
-    await expect(page.getByTestId("scope-select").locator("option")).toHaveText(["All knowledge bases", "Corvin", "Plumbline", "demo (no knowledge base - switch it on in Settings)"]);
+    await expect(page.getByTestId("scope-unavailable").getByRole("link", { name: "demo" })).toHaveAttribute("href", /\/app\/projects\/demo\?tab=features/);
+    await expect(page.getByTestId("scope-select").locator("option")).toHaveText(["All knowledge bases", "Corvin", "Plumbline", "demo (no knowledge base - switch it on in Features)"]);
   }
 });
 
@@ -144,4 +144,49 @@ test("a project in the Trash is listed in the switcher as unavailable: In Trash,
   await expect(line.getByRole("link", { name: "Old study" })).toHaveAttribute("href", "/console/app/projects?view=trash");
   await page.goto("/console/app/initiatives?scope=project:gone");
   await expect(page.getByTestId("scope-note")).toHaveText("Old study cannot be shown: In Trash. Showing All knowledge bases instead.");
+});
+
+test("the graph names its own repository when it is not Corvin's, and lists Corvin on its own (REVIEW-0067 M4)", async ({ page }) => {
+  await stub(page);
+  const CK = "/home/u/projects/Corvin-Knowledge";
+  const corvin = { id: "corvin", path: CK, display_path: CK, template: "builtin@1", state: "ok", title: "Corvin", kb: true, builtin: true, storage: "builtin",
+    active: ["core", "kb", "tasks", "graph"] };
+  await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: { ...PROJECTS, projects: [corvin, ...PROJECTS.projects] } }));
+  await page.route(/\/v1\/console\/plugins\/corvin-knowledge\/config/, (r) => r.fulfill({ json: { repo_path: "/home/u/projects/LLM_lie_detector/docs",
+    remote_url: "", auto_sync_on_query: true, consistency_level: "warn" } }));
+  const asked: (string | null)[] = [];
+  await page.route(/\/v1\/console\/plugins\/corvin-knowledge\/graph(\?|$)/, (r) => {
+    const project = new URL(r.request().url()).searchParams.get("project");
+    asked.push(project);
+    const repo = project === "corvin" ? CK : project ? "/home/u/projects/alpha/docs" : "/home/u/projects/LLM_lie_detector/docs";
+    const title = project === "corvin" ? "Corvin decision" : project ? "Project decision" : "Lie detector decision";
+    return r.fulfill({ json: { entities: [{ id: `uid-${project ?? "bound"}`, label: "ADR-0001", file: "a.md", type: "decision", title, status: "accepted", tags: [] }],
+      relations: [], duplicate_rows: 0, graph_state: "ok", graph_error: null, repo_path: repo } });
+  });
+  await page.goto("/console/app/corvin-knowledge");
+  await expect(page.getByTestId("scope-select").locator("option")).toHaveText(
+    ["All knowledge bases", "LLM_lie_detector/docs", "Corvin", "Plumbline", "demo (no knowledge base - switch it on in Features)"]);
+  await expect(page.getByTestId("knowledge-repo")).toContainText("LLM_lie_detector/docs");
+  await expect(page.getByTestId("knowledge-repo")).not.toContainText("Corvin ·");
+  await expect(page.getByTestId("scope-bound-note")).toContainText("not Corvin's knowledge base");
+  // the built-in project's own graph: the board's knowledge base, by its own request
+  await page.goto("/console/app/corvin-knowledge?scope=project:corvin");
+  await expect(page.getByTestId("scope-select")).toHaveValue("project:corvin");
+  await expect(page.getByTestId("knowledge-repo")).toContainText("Corvin");
+  await expect(page.getByTestId("knowledge-repo")).toContainText(CK);
+  await expect(page.getByTestId("scope-bound-note")).toHaveCount(0);
+  expect(asked).toContain("corvin");
+});
+
+test("when the graph reads Corvin's own knowledge base, Corvin is the default and listed once", async ({ page }) => {
+  await stub(page);
+  const CK = "/home/u/projects/Corvin-Knowledge";
+  const corvin = { id: "corvin", path: CK, display_path: CK, template: "builtin@1", state: "ok", title: "Corvin", kb: true, builtin: true, storage: "builtin",
+    active: ["core", "kb", "tasks", "graph"] };
+  await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: { ...PROJECTS, projects: [corvin, ...PROJECTS.projects] } }));
+  await page.route(/\/v1\/console\/plugins\/corvin-knowledge\/config/, (r) => r.fulfill({ json: { repo_path: CK, remote_url: "", auto_sync_on_query: true, consistency_level: "warn" } }));
+  await page.goto("/console/app/corvin-knowledge");
+  await expect(page.getByTestId("scope-select").locator("option")).toHaveText(
+    ["All knowledge bases", "Corvin", "Plumbline", "demo (no knowledge base - switch it on in Features)"]);
+  await expect(page.getByTestId("scope-bound-note")).toHaveCount(0);
 });

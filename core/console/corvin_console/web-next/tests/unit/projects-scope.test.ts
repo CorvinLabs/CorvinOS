@@ -98,7 +98,7 @@ describe("the switcher lists every project, and says why one cannot be chosen", 
   ];
   it("names the reason a project is not selectable", () => {
     expect(projectUnavailableReason(list[1])).toBeNull();
-    expect(projectUnavailableReason(list[2])).toBe("no knowledge base - switch it on in Settings");
+    expect(projectUnavailableReason(list[2])).toBe("no knowledge base - switch it on in Features");
     expect(projectUnavailableReason(list[3])).toBe("knowledge base not created yet");
     expect(projectUnavailableReason(list[4])).toBe("folder missing: directory /p/gone does not exist");
     expect(projectUnavailableReason(list[5])).toBe("invalid project.yaml");
@@ -109,8 +109,8 @@ describe("the switcher lists every project, and says why one cannot be chosen", 
     expect(o.map((x) => x.label).slice(0, 3)).toEqual(["All knowledge bases", "Corvin", "Plumbline"]);
     expect(o.filter((x) => x.disabled).map((x) => x.projectId)).toEqual(["demo", "fresh", "gone", "bad"]);
     const demo = o.find((x) => x.projectId === "demo")!;
-    expect(demo.label).toBe("demo (no knowledge base - switch it on in Settings)");
-    expect(demo.fixHref).toBe("/app/projects/demo?tab=settings");
+    expect(demo.label).toBe("demo (no knowledge base - switch it on in Features)");
+    expect(demo.fixHref).toBe("/app/projects/demo?tab=features");
     expect(o.find((x) => x.projectId === "gone")!.fixHref).toBe("/app/projects/gone");
     expect(selectableProjects(list).map((x) => x.id)).toEqual(["alpha"]);
   });
@@ -125,7 +125,7 @@ describe("the switcher lists every project, and says why one cannot be chosen", 
     expect(ghost.note).toBe('There is no project "ghost". Showing All knowledge bases instead.');
     const demo = resolveScope("project:demo", list, "graph");
     expect(demo.scope).toEqual({ kind: "bound" });
-    expect(demo.note).toBe("demo cannot be shown: no knowledge base - switch it on in Settings. Showing Corvin instead.");
+    expect(demo.note).toBe("demo cannot be shown: no knowledge base - switch it on in Features. Showing Corvin instead.");
   });
   it("a shared project link waits for the project list instead of showing the default first", () => {
     expect(resolveScope("project:alpha", undefined, "tasks")).toEqual({ scope: { kind: "project", id: "alpha" }, note: null, pending: true });
