@@ -410,6 +410,113 @@ async def export_job_file(job_id: str, rec: Sess) -> Any:
     return _file_answer(res)
 
 
+# ── share: import, first half (ADR-2323 Decision 13, T-0399) ──────────────────────────────────────────────────────────────
+# The multipart body is parsed AS IT ARRIVES (python_multipart's push parser over request.stream(); never request.body(),
+# never an UploadFile spool) and the one file part is written in <= 1 MiB pieces into the staging file through awaited worker
+# threads; past 500 MiB the stream is abandoned with 413 and the partial staging removed.
+
+_UPLOAD_CHUNK = 1 << 20
+_MULTIPART_SLACK = 64 * 1024          # headers and boundaries around the one file part
+
+
+def _parse_multipart_boundary(ctype: str) -> bytes:
+    from python_multipart.multipart import parse_options_header  # noqa: PLC0415
+    kind, params = parse_options_header(ctype)
+    b = params.get(b"boundary")
+    if kind != b"multipart/form-data" or not b or len(b) > 200:
+        raise HTTPException(status_code=400, detail={"message": svc.IMPORT_MESSAGES["no_file"], "reason_class": "no_file"})
+    return b
+
+
+@collection.post("/import/validate")
+async def import_validate(request: Request, rec: SessCsrf) -> dict:
+    from python_multipart.multipart import MultipartParser  # noqa: PLC0415
+    boundary = _parse_multipart_boundary(request.headers.get("content-type", ""))
+    declared: Optional[int] = None
+    cl = request.headers.get("content-length")
+    if cl is not None:
+        try:
+            declared = int(cl)
+        except ValueError:
+            raise HTTPException(status_code=400, detail={"message": "invalid Content-Length", "reason_class": "invalid"}) from None
+        if declared > svc.IMPORT_MAX_BYTES + _MULTIPART_SLACK:
+            raise HTTPException(status_code=413, detail={"message": svc.IMPORT_MESSAGES["too_large"], "reason_class": "too_large"})
+    handle = await asyncio.to_thread(_call, svc.staging_open, rec.tenant_id, declared)
+    st = {"part": None, "header": b"", "headers": [], "files": 0, "other": 0, "buf": bytearray()}
+
+    def on_part_begin() -> None:
+        st["part"], st["headers"] = None, []
+
+    def on_header_field(data: bytes, start: int, end: int) -> None:
+        st["header"] += data[start:end]
+
+    def on_header_value(data: bytes, start: int, end: int) -> None:
+        st["headers"].append((st["header"], data[start:end]))
+        st["header"] = b""
+
+    def on_headers_finished() -> None:
+        disp = b"".join(v for k, v in st["headers"] if k.lower() == b"content-disposition")
+        is_file = b'name="file"' in disp and b"filename=" in disp
+        st["part"] = "file" if is_file and st["files"] == 0 else "other"
+        if is_file:
+            st["files"] += 1
+
+    def on_part_data(data: bytes, start: int, end: int) -> None:
+        if st["part"] == "file":
+            st["buf"] += data[start:end]
+        else:
+            st["other"] += end - start
+
+    parser = MultipartParser(boundary, {"on_part_begin": on_part_begin, "on_header_field": on_header_field,
+                                        "on_header_value": on_header_value, "on_headers_finished": on_headers_finished,
+                                        "on_part_data": on_part_data})
+    try:
+        async for chunk in request.stream():
+            parser.write(chunk)
+            if st["other"] > _MULTIPART_SLACK:
+                raise HTTPException(status_code=400, detail={"message": svc.IMPORT_MESSAGES["no_file"], "reason_class": "no_file"})
+            while len(st["buf"]) >= _UPLOAD_CHUNK:
+                piece = bytes(st["buf"][:_UPLOAD_CHUNK])
+                del st["buf"][:_UPLOAD_CHUNK]
+                await asyncio.to_thread(_call, svc.staging_write, handle, piece)
+        parser.finalize()
+        if st["buf"]:
+            await asyncio.to_thread(_call, svc.staging_write, handle, bytes(st["buf"]))
+            st["buf"] = bytearray()
+        if st["files"] != 1 or handle.written == 0:
+            raise HTTPException(status_code=400, detail={"message": svc.IMPORT_MESSAGES["no_file"], "reason_class": "no_file"})
+        await asyncio.to_thread(svc.staging_close, handle)
+    except BaseException as exc:
+        await asyncio.to_thread(svc.staging_abort, handle)
+        if isinstance(exc, HTTPException) or not isinstance(exc, Exception):
+            raise
+        from python_multipart.exceptions import MultipartParseError  # noqa: PLC0415
+        if isinstance(exc, MultipartParseError):
+            raise HTTPException(status_code=400, detail={"message": svc.IMPORT_MESSAGES["no_file"], "reason_class": "no_file"}) from None
+        raise
+    return await asyncio.to_thread(_call, svc.import_validate, rec.tenant_id, handle.staging_id)
+
+
+@collection.get("/import/{staging_id}")
+async def import_report(staging_id: str, rec: Sess) -> dict:
+    return await asyncio.to_thread(_call, svc.import_report, rec.tenant_id, staging_id)
+
+
+@collection.get("/import/{staging_id}/verdict")
+async def import_verdict(staging_id: str, rec: Sess, project: str = "", location: Optional[str] = None,
+                         project_id: Optional[str] = None) -> dict:
+    if (location is not None and len(location) > 1000) or (project_id is not None and len(project_id) > 28) or len(project) > 28:
+        raise HTTPException(status_code=422, detail={"message": registry.SENTENCES["path_rule"], "reason_class": "path_rule"})
+    return await asyncio.to_thread(_call, svc.import_verdict, rec.tenant_id, staging_id, project, location, project_id)
+
+
+@collection.delete("/import/{staging_id}", status_code=204)
+async def import_cancel(staging_id: str, rec: SessCsrf) -> None:
+    from fastapi import Response  # noqa: PLC0415
+    await asyncio.to_thread(_call, svc.import_cancel, rec.tenant_id, staging_id)
+    return Response(status_code=204)
+
+
 @collection.api_route("/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], include_in_schema=False)
 def _collection_unknown(rest: str, rec: Sess) -> dict:
     raise HTTPException(status_code=404, detail={"message": "no such collection route", "reason_class": "not_found"})

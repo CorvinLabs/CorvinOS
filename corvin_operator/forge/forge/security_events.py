@@ -831,6 +831,8 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2323 Decisions 12/15: sharing a project (project ids, counts and closed vocabularies - never a path, title or match)
     "project.exported":             "INFO",
     "project.export_refused":       "WARNING",
+    "project.import_validated":     "INFO",
+    "project.import_rejected":      "WARNING",
     # ADR-0103 — A2A Network Membership Attestation.
     # Metadata only — SesT bytes, instruction, pairing cert body NEVER in chain.
     # Allow-list: instance_id, sest_fp_prefix (16 hex chars), pairing_id,
@@ -3833,6 +3835,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # ADR-2323 Decision 15: parts = comma-joined closed part vocabulary; never a path, a title, a file name or a match
     "project.exported": frozenset({"project_id", "files", "parts", "outcome", "tenant_id"}),
     "project.export_refused": frozenset({"reason_class", "project_id", "tenant_id"}),
+    # ADR-2323 Decision 13: files = total entries of the bundle; reason_class = the stage or staging_full; never a file name
+    "project.import_validated": frozenset({"files", "outcome", "tenant_id"}),
+    "project.import_rejected": frozenset({"reason_class", "tenant_id"}),
     "task_item.kb_create": frozenset({
         "kind", "outcome", "kb_id", "actor_kind", "sid_fingerprint", "tenant_id",
         "scope",   # ADR-2316: the project scope (a project id, never a path)

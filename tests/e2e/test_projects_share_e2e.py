@@ -317,5 +317,222 @@ class Export(ShareBase):
             self.assertEqual(c.own.post(_X, json={"project_ids": [pid]}).status_code, 403)
 
 
+class ImportValidate(ShareBase):
+    def upload(self, c, data: bytes, client=None, headers=None, name="bundle.zip"):
+        client = client or c.own
+        return client.post(_V, files={"file": (name, data, "application/zip")}, headers=headers or c.h)
+
+    def staging_root(self, c, tenant="_default") -> Path:
+        return c.home / "tenants" / tenant / "projects" / "import_staging"
+
+    def stagings(self, c, tenant="_default") -> list[str]:
+        r = self.staging_root(c, tenant)
+        return sorted(p.name for p in r.iterdir()) if r.exists() else []
+
+    def exported(self, c, pid) -> bytes:
+        r = self.export(c, [pid], parts={"git_history": False})
+        self.assertEqual(r.status_code, 200, r.text[:300])
+        return r.content
+
+    # AC1
+    def test_a_built_bundle_answers_200_with_cards_and_the_default_location_by_precedence(self):
+        from core.projects import registry
+        with self.ctx() as c:
+            pid, root = self.create(c)
+            data = self.exported(c, pid)
+            shutil.rmtree(root)
+            c.own.delete(f"{_URL}/{pid}", headers=c.h)
+            registry.set_default_storage("_default", "managed")
+            r = self.upload(c, data)
+            self.assertEqual(r.status_code, 200, r.text[:500])
+            body = r.json()
+            self.assertRegex(body["staging_id"], r"^[0-9a-f]{32}$")
+            self.assertEqual(body["origin"], "unverified")
+            card = body["projects"][0]
+            self.assertEqual((card["id"], card["classification"]), (pid, "internal"))
+            self.assertEqual(card["default_location"]["storage"], "managed")
+            self.assertEqual(card["conflicts"], [])
+            sd = self.staging_root(c) / body["staging_id"]
+            self.assertTrue((sd / "bundle.zip").is_file() and (sd / "report.json").is_file())
+            if POSIX:
+                self.assertEqual(stat.S_IMODE(os.stat(sd).st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE(os.stat(sd / "bundle.zip").st_mode), 0o600)
+            again = c.own.get(f"{_URL}/-/import/{body['staging_id']}")
+            self.assertEqual(again.status_code, 200)
+            self.assertEqual(again.json()["projects"][0]["id"], pid)
+            # nothing was written into the projects area
+            self.assertFalse((c.root / pid).exists())
+            registry.set_default_storage("_default", "root", str(c.root))
+            r2 = self.upload(c, data)
+            self.assertEqual(r2.json()["projects"][0]["default_location"],
+                             {"storage": "root", "path": str((c.root / pid).resolve())})
+            # tenant isolation: acme never sees the staging
+            with mock.patch.dict(os.environ, {"CORVIN_TENANT_ID": "acme"}):
+                self.assertEqual(c.other.get(f"{_URL}/-/import/{body['staging_id']}").status_code, 404)
+                self.assertEqual(c.other.delete(f"{_URL}/-/import/{body['staging_id']}", headers=c.oh).status_code, 404)
+            self.assertTrue(sd.exists())
+            self.assertEqual(c.own.delete(f"{_URL}/-/import/{body['staging_id']}", headers=c.h).status_code, 204)
+            self.assertFalse(sd.exists())
+            ev = [self.details(e) for e in self.events(c, "project.import_validated")]
+            self.assertEqual(len(ev), 2)
+            self.assertEqual(ev[0]["outcome"], "validated")
+
+    # AC2
+    def test_every_hostile_corpus_file_answers_422_at_its_stage_and_leaves_no_staging(self):
+        import zipfile as zfm
+        with self.ctx() as c:
+            corpus = {
+                "container": dict(extra=[("projects/alpha/../../x", b"x")]),
+                "container ": dict(extra=[("projects/alpha/.git/config", MARKER.encode())]),
+                "envelope": dict(envelope_patch=lambda e: e.update(format_version=2)),
+                "integrity": dict(extra=[("projects/alpha/extra.txt", b"x")], list_extra=False),
+                "manifest": dict(extra=[("projects/alpha/sub/project.yaml",
+                                         b"schema: 1\nid: inner\ntitle: x\ntenant: _default\n")]),
+                "secrets": dict(extra=[("projects/alpha/t.md", JWT.encode())]),
+            }
+            for stage, kw in corpus.items():
+                with self.subTest(stage):
+                    p = make_bundle(self.tmp / "h.zip", **kw)
+                    r = self.upload(c, p.read_bytes())
+                    self.assertEqual(r.status_code, 422, r.text[:300])
+                    self.assertEqual(r.json()["detail"]["reason_class"], stage.strip())
+                    self.assertNotIn(MARKER, r.text)
+                    self.assertEqual(self.stagings(c), [])
+            r = self.upload(c, b"not a zip")
+            self.assertEqual((r.status_code, r.json()["detail"]["reason_class"]), (422, "container"))
+            rej = [self.details(e)["reason_class"] for e in self.events(c, "project.import_rejected")]
+            self.assertEqual(rej, ["container", "container", "envelope", "integrity", "manifest", "secrets", "container"])
+
+    # AC3
+    def test_conflicts_id_taken_same_source_folder_not_empty_and_nested(self):
+        with self.ctx() as c:
+            pid, root = self.create(c)
+            data = self.exported(c, pid)
+            body = self.upload(c, data).json()
+            kinds = {x["kind"]: x for x in body["projects"][0]["conflicts"]}
+            self.assertEqual(kinds["id_taken"]["fix"], {"suggested_id": f"{pid}-2"})
+            self.assertEqual(kinds["id_taken"]["message"], f'A project "{pid}" already exists in this list.')
+            self.assertEqual(kinds["same_source"]["message"],
+                             "This was exported from a project in this list. It can only be imported as a copy.")
+            sid = body["staging_id"]
+            # folder_not_empty at the default place of a fresh id
+            hand = make_bundle(self.tmp / "o.zip", {"omega": {"a.txt": b"x"}})
+            b2 = self.upload(c, hand.read_bytes()).json()
+            dl = Path(b2["projects"][0]["default_location"]["path"])
+            dl.mkdir(parents=True)
+            (dl / "x.txt").write_text("x")
+            b3 = self.upload(c, hand.read_bytes()).json()
+            self.assertEqual([x["kind"] for x in b3["projects"][0]["conflicts"]], ["folder_not_empty"])
+            self.assertEqual(b3["projects"][0]["conflicts"][0]["message"], "That folder already exists and is not empty.")
+            # nested via /verdict
+            v = c.own.get(f"{_URL}/-/import/{sid}/verdict",
+                          params={"project": pid, "location": str(root / "inner"), "project_id": "fresh-id"})
+            self.assertEqual(v.status_code, 200, v.text)
+            kinds = [x["kind"] for x in v.json()["conflicts"]]
+            self.assertIn("nested", kinds)
+            self.assertNotIn("id_taken", kinds)
+            self.assertEqual([x for x in v.json()["conflicts"] if x["kind"] == "nested"][0]["message"],
+                             f"It lies inside another project ({pid}).")
+
+    # AC4
+    def test_staging_cap_ttl_sweeps_and_the_host_budget(self):
+        with self.ctx() as c:
+            data = make_bundle(self.tmp / "s.zip").read_bytes()
+            ids = [self.upload(c, data).json()["staging_id"] for _ in range(6)]
+            have = self.stagings(c)
+            self.assertEqual(len(have), 5)
+            self.assertNotIn(ids[0], have)
+            # TTL: one projector tick an hour later
+            later = time.time() + 3601
+            out = c.svc.sweep_share("_default", now=later)
+            self.assertEqual(out["stagings"], 5)
+            self.assertEqual(self.stagings(c), [])
+            # TTL: the next validate request sweeps too
+            sid = self.upload(c, data).json()["staging_id"]
+            real = time.time
+            with mock.patch.object(c.svc, "_now", lambda: real() + 3601):
+                nxt = self.upload(c, data).json()["staging_id"]
+            self.assertEqual(self.stagings(c), [nxt])
+            self.assertNotIn(sid, self.stagings(c))
+            # host budget of three stagings: another tenant is refused and nothing of this tenant is dropped
+            self.upload(c, data)
+            self.upload(c, data)
+            mine = self.stagings(c)
+            self.assertEqual(len(mine), 3)
+            size = (self.staging_root(c) / mine[0] / "bundle.zip").stat().st_size
+            with mock.patch.object(c.svc, "IMPORT_HOST_BUDGET_BYTES", 3 * size + 10), \
+                    mock.patch.dict(os.environ, {"CORVIN_TENANT_ID": "acme"}):
+                r = self.upload(c, data, client=c.other, headers=c.oh)
+            self.assertEqual(r.status_code, 429, r.text[:300])
+            self.assertEqual(r.json()["detail"], {"message": "Too many imports are waiting; finish or cancel one first.",
+                                                  "reason_class": "staging_full"})
+            self.assertEqual(self.stagings(c), mine)
+            self.assertEqual(self.stagings(c, "acme"), [])
+            rej = [self.details(e) for e in self.events(c, "project.import_rejected", tenant="acme")]
+            self.assertEqual([x["reason_class"] for x in rej], ["staging_full"])
+            text = self.chain_text(c, "acme")
+            self.assertNotIn("bundle.zip", text)
+            self.assertNotIn(str(c.home), text)
+
+    # AC5
+    def test_a_501_mib_upload_is_413_before_the_body_is_read_and_never_above_one_chunk_past_the_limit(self):
+        with self.ctx() as c:
+            seen = {"max": 0}
+            real_write = c.svc.staging_write
+
+            def spy(handle, data):
+                real_write(handle, data)
+                seen["max"] = max(seen["max"], handle.written)
+            boundary = "corvinboundary7"
+            head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"b.zip\"\r\n"
+                    "Content-Type: application/zip\r\n\r\n").encode()
+            sent = {"n": 0}
+
+            async def body():
+                yield head
+                chunk = b"\0" * (1 << 20)
+                for _ in range(501):
+                    sent["n"] += len(chunk)
+                    yield chunk
+                yield f"\r\n--{boundary}--\r\n".encode()
+
+            async def run():
+                async with self.client(c, c.own) as ac:
+                    return await ac.post(_V, content=body(), headers={**c.h, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+            with mock.patch.object(c.svc, "staging_write", spy):
+                r = asyncio.run(run())
+            self.assertEqual(r.status_code, 413, r.text[:300])
+            self.assertEqual(r.json()["detail"]["message"], "The file is larger than 500 MB.")
+            self.assertLessEqual(seen["max"], (500 << 20) + (1 << 20))
+            self.assertGreater(seen["max"], 499 << 20)                              # positive control: it streamed
+            self.assertEqual(self.stagings(c), [])
+            # a declared length above the limit is refused before anything is read
+            r = c.own.post(_V, content=b"x", headers={**c.h, "Content-Type": f"multipart/form-data; boundary={boundary}",
+                                                      "Content-Length": str((502 << 20))})
+            self.assertEqual(r.status_code, 413)
+
+    # AC6
+    def test_both_events_in_both_registries_and_no_path_or_file_name_in_the_chain(self):
+        from forge import security_events as se
+        with self.ctx() as c:
+            for ev in ("project.import_validated", "project.import_rejected"):
+                self.assertIn(ev, se.EVENT_SEVERITY)
+                self.assertIn(ev, se._EVENT_ALLOWLIST)
+            data = make_bundle(self.tmp / "q.zip").read_bytes()
+            self.assertEqual(self.upload(c, data, name="very-unique-upload-name.zip").status_code, 200)
+            self.assertEqual(self.upload(c, b"junk", name="very-unique-upload-name.zip").status_code, 422)
+            text = self.chain_text(c)
+            self.assertNotIn("very-unique-upload-name", text)
+            self.assertNotIn(str(c.home), text)
+            ok = [self.details(e) for e in self.events(c, "project.import_validated")]
+            self.assertEqual(ok[0]["files"], 2)
+            self.assertNotIn("_dropped_fields", json.dumps(ok))
+
+    def test_import_validate_needs_csrf(self):
+        with self.ctx() as c:
+            r = c.own.post(_V, files={"file": ("b.zip", b"x", "application/zip")})
+            self.assertEqual(r.status_code, 403)
+
+
 if __name__ == "__main__":
     unittest.main()

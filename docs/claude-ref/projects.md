@@ -359,6 +359,10 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 | `GET /-/export/preview?ids=a,b[&parts=kb,git_history,generated]` | the preview (counts, `left_out`, parts, commits, `kb_entries`, notes) plus `gpg: bool`; writes nothing |
 | `GET /-/exports/{job_id}` | `{state: running/done/error, progress {files, bytes}, download_url?, warnings?, reason_class?, message?}`; another tenant's job is 404 |
 | `GET /-/exports/{job_id}/file` | the finished file (kept until the 24 h TTL) |
+| `POST /-/import/validate` | multipart, one `file` (CSRF): streamed to the tenant's staging, V1-V6; 200 the report with `default_location` and `conflicts`; 422 `<stage>`, 413 above 500 MB, 429 `staging_full`/`busy` (§ Share) |
+| `GET /-/import/{staging_id}` | the stored report |
+| `GET /-/import/{staging_id}/verdict?project&location&project_id` | the conflicts recomputed for a chosen place / new id |
+| `DELETE /-/import/{staging_id}` | (CSRF) Cancel: the staging is removed, 204 |
 | `POST /{id}/move` | `{location}`: same-disk rename only; a rename that fails with `EXDEV` (Windows error 17) answers 409 `cross_device` ("The new place is on another disk. Export the project and import it there, or copy the folder yourself and use Locate folder."), tree and index unchanged, `project.blocked reason_class=cross_device`; moving into/out of the managed root sets `storage` |
 
 **Collection namespace `/projects/-/…` (ADR-2321 Decision 16, REVIEW-0061 M4).** `manifest.RESERVED_IDS` is NOT extended
@@ -508,6 +512,37 @@ Audit (both registered in `EVENT_SEVERITY` and `_EVENT_ALLOWLIST`): `project.exp
 `parts` (comma-joined included part names), `outcome` requested/applied/error, `tenant_id`} - one requested per export,
 one applied per project; `project.export_refused` WARNING {`reason_class`, `project_id`?, `tenant_id`}. Never a path or a
 title.
+
+### Import, first half: upload, staging, report (Decision 13, T-0399)
+
+`POST /-/import/validate` (CSRF, `multipart/form-data`, one part `file`): a declared `Content-Length` above 500 MiB
+(+ 64 KiB of multipart framing) is 413 before anything is read; otherwise `staging_open` sweeps the tenant's expired
+stagings, checks the host-wide budget (2 GiB across every tenant's stagings plus the uploads in flight; over it -> 429
+`staging_full` "Too many imports are waiting; finish or cancel one first.", audited `project.import_rejected
+reason_class=staging_full`, never dropping another tenant's staging), drops the tenant's oldest staging beyond 5 and
+creates `<tenant_home>/projects/import_staging/<staging_id>/bundle.zip` (dir 0o700, file 0o600, `O_EXCL|O_NOFOLLOW`).
+The body is parsed as it arrives (`python_multipart`'s push parser over `request.stream()`; never `request.body()`,
+never an `UploadFile` spool) and written in 1 MiB pieces through awaited worker threads; past 500 MiB the upload stops
+with 413 "The file is larger than 500 MB." and the partial staging is removed (measured: at most one chunk past the
+limit on disk). Then `bundle.validate(path, known)` (known = the tenant's template catalogue) in one of two validate
+slots (429 `busy` at once): a failing stage deletes the staging and answers 422 `{reason_class: <stage>, message}`
+(`project.import_rejected`); success answers 200 `{staging_id, origin: "unverified", exporter, created_at, projects:
+[{…the validation card…, default_location: {storage, path}, conflicts: [{kind, message, fix}]}]}`, persisted as
+`report.json`, audited `project.import_validated {files, outcome: validated}`. Nothing is written into the projects area.
+
+| Conflict | When | Fix |
+|---|---|---|
+| `id_taken` | the registry has the id - 'A project "<id>" already exists in this list.' | `{suggested_id: <id>-2}` |
+| `same_source` | a registered project carries the bundle's `source_project_uid` - "This was exported from a project in this list. It can only be imported as a copy." | `{suggested_id}` |
+| `folder_not_empty` | the place exists and is not empty - "That folder already exists and is not empty." | `{choose_location: true}` |
+| `nested` | `validate_location(purpose="import")` says `nested` - "It lies inside another project (<id>)." | `{choose_location: true}` |
+
+Any other location refusal is listed with its own `reason_class` and sentence. The default place follows ADR-2321
+Decision 3 (`registry.default_location`): `storage` is the tenant's `default_storage` (`managed` or `root`). A nested
+CorvinOS manifest never gets here (V4 refuses it). `GET /-/import/{staging_id}` answers the report again,
+`GET /-/import/{staging_id}/verdict?project=&location=&project_id=` recomputes the conflicts for a chosen place/id,
+`DELETE /-/import/{staging_id}` (CSRF) is Cancel (204). Another tenant's staging is 404. TTL 1 h, swept by the projector
+tick (`sweep_share`) and by every validate request.
 
 ### Validation V1-V6 - `bundle.validate(path, known) -> BundleReport` (Decision 10, T-0398)
 

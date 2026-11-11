@@ -2071,6 +2071,11 @@ _JOB_ID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 _JOB_FILE = "job.json"
 
 
+def _now() -> float:
+    """The share sweepers' clock (one seam, so a test can move it without moving the session clock)."""
+    return time.time()
+
+
 class Busy(ProjectsError):
     status = 429
     reason_class = "busy"
@@ -2151,7 +2156,7 @@ def sweep_share(tenant_id: str, *, busy: bool = False, now: Optional[float] = No
     while the host is saturated; bounded to 200 directories per kind and tick."""
     if busy:
         return {"exports": 0, "stagings": 0}
-    now = time.time() if now is None else now
+    now = _now() if now is None else now
     return {"exports": _sweep_dir(tenant_id, "exports", EXPORT_TTL_S, now),
             "stagings": _sweep_dir(tenant_id, "import_staging", IMPORT_STAGING_TTL_S, now)}
 
@@ -2285,7 +2290,7 @@ def export_projects(tenant_id: str, project_ids: list[str], parts: Optional[dict
     here - the route runs this in a worker thread) or ``{kind: "job", job_id, warnings}`` (a background job)."""
     b = _bundle()
     ids = list(dict.fromkeys(project_ids or []))
-    _sweep_dir(tenant_id, "exports", EXPORT_TTL_S, time.time())                 # request-time sweep of the tenant's own jobs
+    _sweep_dir(tenant_id, "exports", EXPORT_TTL_S, _now())                      # request-time sweep of the tenant's own jobs
     if not ids:
         raise NotFound("no such project")
     if len(ids) > b.LIMITS["max_projects"]:
@@ -2439,3 +2444,307 @@ def export_job_file(tenant_id: str, job_id: str) -> dict[str, Any]:
 
 
 IMPORT_STAGING_TTL_S = 3600.0
+
+
+# ── Share: import, first half - upload, staging, validate, report (ADR-2323 Decision 13; T-0399) ──────────────────────────
+# The route streams the multipart body in chunks straight into <tenant_home>/projects/import_staging/<staging_id>/bundle.zip
+# (dir 0o700, file 0o600, O_EXCL|O_NOFOLLOW) and aborts at 500 MiB + 1 byte (413). At most 5 stagings per tenant (the oldest
+# is dropped), a host-wide budget of 2 GiB across tenants (429 staging_full, audited, never dropping another tenant's
+# staging), TTL 1 h (projector tick + a request-time sweep of the tenant's own). bundle.validate runs on the staged file in
+# one of two validate slots (429 busy at once). Nothing is written into the projects area.
+
+IMPORT_MAX_BYTES = 500 << 20
+IMPORT_STAGINGS_PER_TENANT = 5
+IMPORT_HOST_BUDGET_BYTES = 2 << 30
+IMPORT_MESSAGES = {
+    "too_large": "The file is larger than 500 MB.",
+    "staging_full": "Too many imports are waiting; finish or cancel one first.",
+    "busy": "Two imports are being checked already; try again in a moment.",
+    "no_file": "Choose one project bundle file to upload.",
+}
+CONFLICT_MESSAGES = {
+    "id_taken": 'A project "{id}" already exists in this list.',
+    "folder_not_empty": "That folder already exists and is not empty.",
+    "same_source": "This was exported from a project in this list. It can only be imported as a copy.",
+    "nested": "It lies inside another project ({id}).",
+}
+_STAGING_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_staging_lock = threading.Lock()
+_staging_reserved: dict[tuple[str, str], int] = {}
+_validate_slots = threading.BoundedSemaphore(2)
+
+
+class ImportRejected(ProjectsError):
+    status = 422
+
+    def __init__(self, message: str, reason_class: str):
+        super().__init__(message)
+        self.reason_class = reason_class
+
+
+class TooLarge(ProjectsError):
+    status = 413
+    reason_class = "too_large"
+
+
+class StagingFull(ProjectsError):
+    status = 429
+    reason_class = "staging_full"
+
+
+@dataclass
+class StagingHandle:
+    tenant_id: str
+    staging_id: str
+    dir: Path
+    fd: int
+    written: int = 0
+
+
+def _import_rejected(tenant_id: str, reason_class: str) -> None:
+    try:
+        _tt._chain(tenant_id, "project.import_rejected", {"reason_class": reason_class})
+    except Exception:  # noqa: BLE001 - a refusal has no effect to protect
+        pass
+
+
+def _host_staging_bytes() -> int:
+    """Bytes held by every tenant's stagings on this host (bounded walk: at most 200 tenants x 5 stagings)."""
+    total = 0
+    tenants = corvin_home() / "tenants"
+    try:
+        with os.scandir(tenants) as it:
+            tdirs = [e.path for _, e in zip(range(200), it) if e.is_dir(follow_symlinks=False)]
+    except OSError:
+        return 0
+    for t in tdirs:
+        root = Path(t) / "projects" / "import_staging"
+        if not root.is_dir() or is_link(root):
+            continue
+        try:
+            with os.scandir(root) as it:
+                for _, e in zip(range(50), it):
+                    z = Path(e.path) / "bundle.zip"
+                    if e.is_dir(follow_symlinks=False) and not is_link(z):
+                        with contextlib.suppress(OSError):
+                            total += os.lstat(z).st_size
+        except OSError:
+            continue
+    return total
+
+
+def _own_stagings(tenant_id: str) -> list[tuple[float, Path]]:
+    root = _share_root(tenant_id, "import_staging")
+    out: list[tuple[float, Path]] = []
+    if not root.is_dir() or is_link(root):
+        return out
+    with os.scandir(root) as it:
+        for _, e in zip(range(200), it):
+            if e.is_dir(follow_symlinks=False) and _STAGING_ID_RE.match(e.name):
+                st = _read_job(Path(e.path)) or {}
+                try:
+                    created = float(st.get("created_ts") or os.lstat(e.path).st_mtime)
+                except (OSError, TypeError, ValueError):
+                    created = 0.0
+                out.append((created, Path(e.path)))
+    return sorted(out)
+
+
+def _in_flight_bytes() -> int:
+    return sum(_staging_reserved.values())
+
+
+def staging_open(tenant_id: str, declared: Optional[int] = None) -> StagingHandle:
+    """Admit one upload: sweep the tenant's expired stagings, check the host budget (429 ``staging_full``, audited), drop the
+    tenant's oldest beyond the cap, create the staging directory and the empty ``bundle.zip``."""
+    _sweep_dir(tenant_id, "import_staging", IMPORT_STAGING_TTL_S, _now())
+    with _staging_lock:
+        need = min(declared or 0, IMPORT_MAX_BYTES)
+        if _host_staging_bytes() + _in_flight_bytes() + need > IMPORT_HOST_BUDGET_BYTES:
+            _import_rejected(tenant_id, "staging_full")
+            raise StagingFull(IMPORT_MESSAGES["staging_full"])
+        own = _own_stagings(tenant_id)
+        while len(own) >= IMPORT_STAGINGS_PER_TENANT:
+            _created, oldest = own.pop(0)
+            with _running_lock:
+                busy_one = (tenant_id, oldest.name) in _running_jobs
+            if not busy_one:
+                shutil.rmtree(oldest, ignore_errors=True)
+        sid = secrets.token_hex(16)
+        d = _private_dir(_share_root(tenant_id, "import_staging") / sid)
+        _write_job(d, {"kind": "staging", "created_ts": time.time()})
+        fd = os.open(d / "bundle.zip", os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_BINARY", 0), 0o600)
+        _staging_reserved[(tenant_id, sid)] = need
+        with _running_lock:
+            _running_jobs.add((tenant_id, sid))
+    return StagingHandle(tenant_id=tenant_id, staging_id=sid, dir=d, fd=fd)
+
+
+def staging_write(handle: StagingHandle, data: bytes) -> None:
+    """Append one chunk; 413 beyond 500 MiB (the partial file is the caller's to abort), 429 beyond the host budget."""
+    if handle.written + len(data) > IMPORT_MAX_BYTES:
+        handle.written += len(data)
+        raise TooLarge(IMPORT_MESSAGES["too_large"])
+    view = memoryview(data)
+    while view:
+        n = os.write(handle.fd, view)
+        view = view[n:]
+    handle.written += len(data)
+    key = (handle.tenant_id, handle.staging_id)
+    with _staging_lock:
+        if handle.written > _staging_reserved.get(key, 0):
+            others = _in_flight_bytes() - _staging_reserved.get(key, 0)
+            # the walk counts this staging's file (handle.written bytes) already; add what the other uploads reserved
+            if _host_staging_bytes() + others > IMPORT_HOST_BUDGET_BYTES:
+                _import_rejected(handle.tenant_id, "staging_full")
+                raise StagingFull(IMPORT_MESSAGES["staging_full"])
+            _staging_reserved[key] = handle.written
+
+
+def _release(handle: StagingHandle) -> None:
+    with contextlib.suppress(OSError):
+        os.close(handle.fd)
+    with _staging_lock:
+        _staging_reserved.pop((handle.tenant_id, handle.staging_id), None)
+    with _running_lock:
+        _running_jobs.discard((handle.tenant_id, handle.staging_id))
+
+
+def staging_abort(handle: StagingHandle) -> None:
+    _release(handle)
+    shutil.rmtree(handle.dir, ignore_errors=True)
+
+
+def staging_close(handle: StagingHandle) -> None:
+    with contextlib.suppress(OSError):
+        os.fsync(handle.fd)
+    _release(handle)
+
+
+def _known(tenant_id: str) -> Optional[dict[str, Any]]:
+    try:
+        cat = catalogue(tenant_id)
+    except Exception:  # noqa: BLE001 - no catalogue: no staleness warnings
+        return None
+    return {"templates": {f"{t.id}@{t.version}" for t in cat.templates.values()} | set(cat.templates),
+            "features": set(cat.fragments)}
+
+
+def _staging_dir(tenant_id: str, staging_id: str) -> Path:
+    if not isinstance(staging_id, str) or not _STAGING_ID_RE.match(staging_id):
+        raise NotFound("no such import")
+    d = _share_root(tenant_id, "import_staging") / staging_id
+    if is_link(d) or not d.is_dir() or is_link(d / "bundle.zip"):
+        raise NotFound("no such import")
+    return d
+
+
+def _nest_owner(tenant_id: str, loc: Path) -> Optional[str]:
+    r = registry._resolve_forgiving(loc)                                   # noqa: SLF001 - the registry's own resolution
+    for e in registry.entries(tenant_id):
+        try:
+            p = registry._resolve_forgiving(Path(str(e.get("path"))))        # noqa: SLF001
+        except (OSError, ValueError):
+            continue
+        if r == p or p in r.parents or r in p.parents:
+            return e.get("id")
+    return None
+
+
+def _default_place(tenant_id: str, pid: str) -> dict[str, str]:
+    loc, _storage = registry.default_location(tenant_id, pid, audit=_bind_audit(tenant_id))
+    return {"storage": registry.settings(tenant_id)["default_storage"], "path": str(registry._resolve_forgiving(loc))}  # noqa: SLF001
+
+
+def _conflicts(tenant_id: str, card: dict[str, Any], *, location: Optional[str] = None,
+               project_id: Optional[str] = None) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    pid = project_id or card["id"]
+    out: list[dict[str, Any]] = []
+    if registry.get(tenant_id, pid) is not None:
+        out.append({"kind": "id_taken", "message": CONFLICT_MESSAGES["id_taken"].format(id=pid),
+                    "fix": {"suggested_id": _unique_id(tenant_id, pid)}})
+    uid = card.get("source_project_uid")
+    if uid and any(e.get("uid") == uid for e in registry.entries(tenant_id)):
+        out.append({"kind": "same_source", "message": CONFLICT_MESSAGES["same_source"],
+                    "fix": {"suggested_id": _unique_id(tenant_id, pid)}})
+    if location:
+        place = {"storage": "own", "path": location}
+    else:
+        place = _default_place(tenant_id, pid)
+    try:
+        registry.validate_location(tenant_id, place["path"], purpose="import")
+    except registry.ProjectPathError as exc:
+        rc = exc.reason_class
+        if rc == "not_empty":
+            out.append({"kind": "folder_not_empty", "message": CONFLICT_MESSAGES["folder_not_empty"],
+                        "fix": {"choose_location": True}})
+        elif rc == "nested":
+            owner = _nest_owner(tenant_id, Path(place["path"])) or "another project"
+            out.append({"kind": "nested", "message": CONFLICT_MESSAGES["nested"].format(id=owner),
+                        "fix": {"choose_location": True}})
+        else:
+            out.append({"kind": rc, "message": str(exc), "fix": {"choose_location": True}})
+    return out, place
+
+
+def import_validate(tenant_id: str, staging_id: str) -> dict[str, Any]:
+    """Validate the staged bundle (V1-V6) and answer the report with every project's default place and conflicts. A refusal
+    deletes the staging and answers 422 ``{reason_class: <stage>, message}``."""
+    d = _staging_dir(tenant_id, staging_id)
+    if not _validate_slots.acquire(blocking=False):
+        shutil.rmtree(d, ignore_errors=True)
+        raise Busy(IMPORT_MESSAGES["busy"])
+    key = (tenant_id, staging_id)
+    with _running_lock:
+        _running_jobs.add(key)
+    try:
+        rep = _bundle().validate(d / "bundle.zip", _known(tenant_id))
+        if not rep["ok"]:
+            shutil.rmtree(d, ignore_errors=True)
+            _import_rejected(tenant_id, rep["reason_class"])
+            raise ImportRejected(rep["message"], rep["reason_class"])
+        cards = []
+        for p in rep["projects"]:
+            conflicts, place = _conflicts(tenant_id, p)
+            cards.append({**p, "default_location": place, "conflicts": conflicts})
+        report = {"staging_id": staging_id, "origin": "unverified", "exporter": rep["exporter"],
+                  "created_at": rep["created_at"], "projects": cards}
+        try:
+            _audit(tenant_id, "project.import_validated", files=rep["counts"]["files"], outcome="validated")
+        except _tt.AuditUnavailable:
+            shutil.rmtree(d, ignore_errors=True)
+            raise
+        from core.projects.fsutil import atomic_write  # noqa: PLC0415
+        atomic_write(d / "report.json", (json.dumps(report, sort_keys=True) + "\n").encode("utf-8"), mode=0o600, owned=True)
+        return report
+    finally:
+        with _running_lock:
+            _running_jobs.discard(key)
+        _validate_slots.release()
+
+
+def import_report(tenant_id: str, staging_id: str) -> dict[str, Any]:
+    d = _staging_dir(tenant_id, staging_id)
+    try:
+        return json.loads((d / "report.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise NotFound("no such import") from None
+
+
+def import_verdict(tenant_id: str, staging_id: str, project: str, location: Optional[str] = None,
+                   project_id: Optional[str] = None) -> dict[str, Any]:
+    rep = import_report(tenant_id, staging_id)
+    card = next((p for p in rep.get("projects", []) if p.get("id") == project), None)
+    if card is None:
+        raise NotFound("no such project in this import")
+    if project_id is not None and not manifest.is_new_id_allowed(project_id):
+        return {"conflicts": [{"kind": "invalid_id", "message": "id must be lowercase kebab-case, 1-28 characters",
+                               "fix": {"suggested_id": _unique_id(tenant_id, slug(project_id))}}]}
+    conflicts, place = _conflicts(tenant_id, card, location=location, project_id=project_id)
+    return {"conflicts": conflicts, "location": place}
+
+
+def import_cancel(tenant_id: str, staging_id: str) -> None:
+    d = _staging_dir(tenant_id, staging_id)
+    shutil.rmtree(d, ignore_errors=True)
