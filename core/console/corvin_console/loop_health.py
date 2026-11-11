@@ -26,6 +26,9 @@ This module, wired from the console lifespan:
 * ``host_saturated`` — asked ONLY by optional background work (the KB projector's
   cadence, starting a new SkillForge fork). Audit, tripwires, the integrity scan, the
   learning brake (anomaly monitor) and canary rollback never ask it;
+* ``browse_pool`` / ``prewarm_browse_pool`` — the folder browser's dedicated 4-thread pool
+  (ADR-2322 Decision 8), pre-warmed after the default pool; listings never use the default
+  executor;
 * ``install_thread_dump_signal`` — ``kill -USR2 <pid>`` writes EVERY thread's stack (code
   locations only) to stderr, i.e. the journal. ``py-spy dump`` needs ptrace, which
   ``kernel.yama.ptrace_scope=1`` denies a non-ancestor process without sudo — measured
@@ -178,6 +181,48 @@ async def prewarm(n: int = PREWARM_WORKERS, *, gap_s: float = PREWARM_GAP_S,
             release["go"] = True
             cond.notify_all()
     return {k: len(v) for k, v in idents.items()}
+
+
+# ── the folder browser's own pool (ADR-2322 Decision 8, REVIEW-0061 M1) ────────
+
+#: threads of the dedicated folder-browser pool: the global cap of concurrent listings
+BROWSE_POOL_WORKERS = 4
+
+_browse_pool: Optional[ThreadPoolExecutor] = None
+_browse_pool_lock = threading.Lock()
+
+
+def browse_pool() -> ThreadPoolExecutor:
+    """The ONE pool every folder listing runs on - never the default executor that ``asyncio.to_thread`` and the audit-chain
+    writes share, so a listing hung on a dead mount can never hold an audit write. Long-lived (never shut down while the process
+    runs); created on first use and pre-warmed by :func:`prewarm_browse_pool` from both hosts' lifespan."""
+    global _browse_pool
+    with _browse_pool_lock:
+        if _browse_pool is None:
+            _browse_pool = ThreadPoolExecutor(max_workers=BROWSE_POOL_WORKERS, thread_name_prefix="corvin-browse")
+        return _browse_pool
+
+
+async def prewarm_browse_pool(*, gap_s: float = PREWARM_GAP_S, hold_max_s: float = PREWARM_HOLD_MAX_S) -> int:
+    """Start the browse pool's threads ahead of demand (each warm-up call holds its thread until all are running, so the pool
+    really grows to ``BROWSE_POOL_WORKERS``). Returns the number of distinct threads."""
+    pool = browse_pool()
+    n = BROWSE_POOL_WORKERS
+    cond = threading.Condition()
+    seen: set[int] = set()
+
+    def _hold() -> None:
+        with cond:
+            seen.add(threading.get_ident())
+            cond.notify_all()
+            cond.wait_for(lambda: len(seen) >= n, timeout=hold_max_s)
+
+    futs = []
+    for _ in range(n):
+        futs.append(asyncio.wrap_future(pool.submit(_hold)))
+        await asyncio.sleep(gap_s)
+    await asyncio.gather(*futs, return_exceptions=True)
+    return len(seen)
 
 
 # ── process priority ────────────────────────────────────────────────────────
@@ -491,6 +536,12 @@ async def _prewarm_then_watch() -> None:
         raise
     except Exception:  # noqa: BLE001
         log.warning("loop health: pre-warm failed", exc_info=True)
+    try:
+        log.info("loop health: folder-browser pool pre-warmed (%d threads)", await prewarm_browse_pool())
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        log.warning("loop health: folder-browser pool pre-warm failed", exc_info=True)
     try:
         start_watchdog(asyncio.get_running_loop())
     except Exception:  # noqa: BLE001

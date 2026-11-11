@@ -825,6 +825,8 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2321 Decision 14: where new projects go / the workspace binding (to = managed|root, outcome only - never a path or key)
     "project.storage_changed":      "WARNING",
     "project.relocated":            "WARNING",
+    # ADR-2322 Decision 11: a refused folder-browser request (reason_class only - never a path or a name)
+    "project.browse_refused":       "WARNING",
     "project.video_created":        "INFO",
     # ADR-0103 — A2A Network Membership Attestation.
     # Metadata only — SesT bytes, instruction, pairing cert body NEVER in chain.
@@ -3823,6 +3825,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # ADR-2321 Decision 14: never a path, never a workspace key
     "project.storage_changed": frozenset({"to", "outcome", "tenant_id"}),
     "project.relocated": frozenset({"project_id", "outcome", "tenant_id"}),
+    # ADR-2322 Decision 11: never a path, never a name
+    "project.browse_refused": frozenset({"reason_class", "tenant_id"}),
     "task_item.kb_create": frozenset({
         "kind", "outcome", "kb_id", "actor_kind", "sid_fingerprint", "tenant_id",
         "scope",   # ADR-2316: the project scope (a project id, never a path)

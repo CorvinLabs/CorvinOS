@@ -432,6 +432,8 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
     _audit(tenant_id, "project.plan_created", project_id=pid, template=f"{tpl.id}@{tpl.version}",
            files=len(plan.writes), storage=storage)
     _store_plan(rec)
+    if location:
+        _record_recent(tenant_id, loc)                          # an explicit location the user chose (never the default place)
     summary = plan.summary()
     loc_warn = registry.location_warnings(loc) if storage == "own" else []
     summary["warnings"] = [*summary["warnings"], *external_warnings(tenant_id, plan.features), *(w["message"] for w in loc_warn)]
@@ -722,6 +724,7 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
         _audit(tenant_id, "project.adopted", project_id=man["id"], template=man.get("template"))
         registry.register(tenant_id, man["id"], loc, man.get("template"))        # writes nothing in the project
         registry.set_protection(tenant_id, man["id"], manifest.legacy_class(man), manifest.DEFAULT_ACCESS)   # a manifest may RAISE the class, never grant itself write access
+        _record_recent(tenant_id, loc)
         return get_project(tenant_id, man["id"])
     ttl = (title or loc.name).strip()
     if not 0 < len(ttl) <= 120:
@@ -751,6 +754,7 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
             pass
         raise
     registry.set_protection(tenant_id, pid, manifest.DEFAULT_CLASS, manifest.DEFAULT_ACCESS)
+    _record_recent(tenant_id, loc)
     return get_project(tenant_id, pid)
 
 
@@ -836,6 +840,7 @@ def move_project(tenant_id: str, project_id: str, location: str) -> dict[str, An
         _audit(tenant_id, "project.moved", project_id=project_id, outcome="applied")
     except _tt.AuditUnavailable:
         warnings.append("the audit chain was unavailable for the 'applied' record")
+    _record_recent(tenant_id, dest)
     # machine-local files carry the old absolute path (ADR-2315 Decision 5): regenerate them now
     repaired: Optional[int] = None
     try:
@@ -1804,6 +1809,7 @@ def set_root(tenant_id: str, path: str) -> dict[str, Any]:
             _audit(tenant_id, "project.storage_changed", to="root", outcome="applied")
         except _tt.AuditUnavailable:
             pass
+    _record_recent(tenant_id, root)
     return {"projects_root": str(root), "outside": _outside(tenant_id, root)}
 
 
@@ -1837,6 +1843,8 @@ def set_default_storage(tenant_id: str, default_storage: str, projects_root: Opt
                 raise Conflict(ROOT_REQUIRED, "root_required") from None
             raise
         outcome = "applied"
+        if root is not None:
+            _record_recent(tenant_id, root)
     finally:
         try:
             _audit(tenant_id, "project.storage_changed", to=default_storage, outcome=outcome)
@@ -1894,9 +1902,140 @@ def relocate_project(tenant_id: str, project_id: str, location: str) -> dict[str
         _audit(tenant_id, "project.relocated", project_id=project_id, outcome="applied")
     except _tt.AuditUnavailable:
         warnings.append("the audit chain was unavailable for the 'applied' record")
+    _record_recent(tenant_id, dest)
     repaired: Optional[int] = None
     try:
         repaired = len(repair(tenant_id, project_id).get("written", []))
     except Exception:  # noqa: BLE001 - the relink stands; the doctor names what is out of sync
         repaired = None
     return {**get_project(tenant_id, project_id), "repaired_files": repaired, "warnings": warnings}
+
+
+# ── the folder browser's bounds (ADR-2322 Decisions 8 and 11, T-0391) ─────────────────────────────────────────────────────
+# The listing itself is core.projects.browse (pure). What lives here is the admission the route applies before a listing runs on
+# loop_health.browse_pool(): a per-session token bucket (fairness), non-blocking global and per-tenant slots (a hung mount can hold
+# at most BROWSE_GLOBAL_SLOTS threads host-wide and BROWSE_TENANT_SLOTS per tenant), the 10 s cache of a late result, and the
+# once-per-session-per-minute stamp of project.browse_refused. All in memory, all bounded, all thread-safe (the slots are released
+# from the pool thread when the listing really returns).
+
+from collections import OrderedDict as _OrderedDict  # noqa: E402
+
+BROWSE_BUDGET_S = 2.0
+BROWSE_GLOBAL_SLOTS = 4
+BROWSE_TENANT_SLOTS = 2
+BROWSE_RATE_PER_S = 10.0
+BROWSE_BURST = 10.0
+BROWSE_MAX_SESSIONS = 256
+BROWSE_LATE_TTL_S = 10.0
+BROWSE_LATE_MAX = 64
+BROWSE_AUDIT_EVERY_S = 60.0
+BROWSE_THROTTLED = "Too many folder requests at once; wait a moment."
+#: the listing verdicts whose refusal is audited (besides path_rule, slow and throttled)
+BROWSE_AUDITED_VERDICTS = frozenset({"corvin_home", "system_prefix", "symlink"})
+
+
+class BrowseGate:
+    """Admission and bookkeeping of the folder browser; one instance per process (:data:`BROWSE_GATE`)."""
+
+    def __init__(self, *, global_slots: int = BROWSE_GLOBAL_SLOTS, tenant_slots: int = BROWSE_TENANT_SLOTS,
+                 rate: float = BROWSE_RATE_PER_S, burst: float = BROWSE_BURST):
+        self._lock = threading.Lock()
+        self.global_slots, self.tenant_slots, self.rate, self.burst = global_slots, tenant_slots, rate, burst
+        self._busy = 0
+        self._busy_tenant: dict[str, int] = {}               # only tenants with a running listing: bounded by global_slots
+        self._buckets: "_OrderedDict[str, tuple[float, float]]" = _OrderedDict()
+        self._stamps: "_OrderedDict[str, float]" = _OrderedDict()
+        self._late: "_OrderedDict[tuple, tuple[float, dict]]" = _OrderedDict()
+
+    # per-session token bucket (fairness, never a global counter)
+    def allow(self, sid: str, now: Optional[float] = None) -> bool:
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            tokens, last = self._buckets.pop(sid, (self.burst, now))
+            tokens = min(self.burst, tokens + (now - last) * self.rate)
+            ok = tokens >= 1.0
+            self._buckets[sid] = (tokens - 1.0 if ok else tokens, now)
+            while len(self._buckets) > BROWSE_MAX_SESSIONS:
+                self._buckets.popitem(last=False)
+            return ok
+
+    # non-blocking slots: per tenant first, then global
+    def acquire(self, tenant_id: str) -> bool:
+        with self._lock:
+            if self._busy_tenant.get(tenant_id, 0) >= self.tenant_slots or self._busy >= self.global_slots:
+                return False
+            self._busy_tenant[tenant_id] = self._busy_tenant.get(tenant_id, 0) + 1
+            self._busy += 1
+            return True
+
+    def release(self, tenant_id: str) -> None:
+        with self._lock:
+            n = self._busy_tenant.get(tenant_id, 0) - 1
+            if n > 0:
+                self._busy_tenant[tenant_id] = n
+            else:
+                self._busy_tenant.pop(tenant_id, None)
+            self._busy = max(0, self._busy - 1)
+
+    def busy(self) -> tuple[int, dict[str, int]]:
+        with self._lock:
+            return self._busy, dict(self._busy_tenant)
+
+    # a result that arrived after its request timed out, served once within BROWSE_LATE_TTL_S
+    def put_late(self, key: tuple, result: dict) -> None:
+        with self._lock:
+            self._late.pop(key, None)
+            self._late[key] = (time.monotonic(), result)
+            while len(self._late) > BROWSE_LATE_MAX:
+                self._late.popitem(last=False)
+
+    def take_late(self, key: tuple) -> Optional[dict]:
+        with self._lock:
+            hit = self._late.pop(key, None)
+        if hit is None or time.monotonic() - hit[0] > BROWSE_LATE_TTL_S:
+            return None
+        return hit[1]
+
+    # project.browse_refused at most once per session per minute
+    def should_audit(self, sid: str, now: Optional[float] = None) -> bool:
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            last = self._stamps.get(sid)
+            if last is not None and now - last < BROWSE_AUDIT_EVERY_S:
+                return False
+            self._stamps.pop(sid, None)
+            self._stamps[sid] = now
+            while len(self._stamps) > BROWSE_MAX_SESSIONS:
+                self._stamps.popitem(last=False)
+            return True
+
+    def reset(self) -> None:
+        with self._lock:
+            self._busy = 0
+            self._busy_tenant.clear()
+            self._buckets.clear()
+            self._stamps.clear()
+            self._late.clear()
+
+
+BROWSE_GATE = BrowseGate()
+
+
+def browse_refused(tenant_id: str, sid: str, reason_class: str) -> None:
+    """``project.browse_refused`` (WARNING) with ``reason_class`` only - never a path or a name; at most one record per session
+    per minute; best effort (a refusal has no effect to protect). Blocking: the route awaits it through ``asyncio.to_thread``."""
+    if not BROWSE_GATE.should_audit(sid):
+        return
+    try:
+        _tt._chain(tenant_id, "project.browse_refused", {"reason_class": reason_class})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _record_recent(tenant_id: str, path: Any) -> None:
+    """A confirmed location goes into the picker's recent places (ADR-2322 Decision 5); best effort, never fails a mutation."""
+    try:
+        from core.projects import browse  # noqa: PLC0415
+        browse.record_recent(tenant_id, str(path))
+    except Exception:  # noqa: BLE001
+        pass

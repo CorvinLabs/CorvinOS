@@ -198,6 +198,143 @@ def put_storage(body: StorageBody, rec: SessCsrf) -> dict:
 collection = APIRouter(prefix="/-")
 
 
+# ── the folder browser (ADR-2322, T-0391): directories only, bounded, never on the default executor ─────────────────────────
+# The listing is core.projects.browse (pure). Here: the per-session throttle (429), the non-blocking global/per-tenant slots
+# (none free -> 200 `slow` at once), the dedicated pool loop_health.browse_pool() with a hard budget (timeout -> 200 `slow`; the
+# thread is not cancelled, it keeps its slots until it returns and its result is kept 10 s for the next request), and
+# project.browse_refused (reason_class only, at most once per session per minute, awaited through asyncio.to_thread).
+
+class FavouritesBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    paths: list[str] = Field(max_length=64)
+
+
+def _browse_slow_verdict() -> dict:
+    from core.projects import browse as B  # noqa: PLC0415
+    return {"ok": False, "reason_class": "slow", "message": B.SLOW}
+
+
+async def _browse_refused(rec, reason_class: str) -> None:
+    await asyncio.to_thread(svc.browse_refused, rec.tenant_id, rec.sid, reason_class)
+
+
+async def _browse_throttle(rec) -> None:
+    if not svc.BROWSE_GATE.allow(rec.sid):
+        await _browse_refused(rec, "throttled")
+        raise HTTPException(status_code=429, detail={"message": svc.BROWSE_THROTTLED, "reason_class": "throttled"})
+
+
+async def _browse_run(rec, key: Optional[tuple], fn, *args) -> tuple[str, Any]:
+    """``("ok", result)`` or ``("slow", None)``. Admission is non-blocking; the slots are released by the pool callback when the
+    thread really finishes, never when the request gives up."""
+    from .. import loop_health  # noqa: PLC0415
+    gate = svc.BROWSE_GATE
+    if key is not None:
+        late = gate.take_late(key)
+        if late is not None:
+            return "ok", late
+    if not gate.acquire(rec.tenant_id):
+        return "slow", None
+    tenant = rec.tenant_id
+    state = {"gave_up": False}
+
+    def _done(f) -> None:
+        gate.release(tenant)
+        if state["gave_up"] and key is not None and not f.cancelled() and f.exception() is None:
+            gate.put_late(key, f.result())
+
+    try:
+        fut = loop_health.browse_pool().submit(fn, *args)
+    except RuntimeError:                              # the pool is shut down (interpreter exit)
+        gate.release(tenant)
+        return "slow", None
+    fut.add_done_callback(_done)
+    try:
+        return "ok", await asyncio.wait_for(asyncio.wrap_future(fut), svc.BROWSE_BUDGET_S)
+    except asyncio.TimeoutError:
+        state["gave_up"] = True
+        return "slow", None
+
+
+def _browse_422(message: str) -> HTTPException:
+    return HTTPException(status_code=422, detail={"message": message, "reason_class": "path_rule"})
+
+
+@collection.get("/browse/places")
+async def browse_places(rec: Sess) -> dict:
+    """The picker's left column (ADR-2322 Decision 5)."""
+    from core.projects import browse as B  # noqa: PLC0415
+    await _browse_throttle(rec)
+    status, res = await _browse_run(rec, None, B.places, rec.tenant_id)
+    if status == "slow":
+        await _browse_refused(rec, "slow")
+        return {"places": [], "verdict": _browse_slow_verdict()}
+    return {"places": res}
+
+
+@collection.get("/browse")
+async def browse_listing(rec: Sess, path: str = "", purpose: str = "", project_id: Optional[str] = None,
+                         hidden: Optional[str] = None, page: Optional[str] = None) -> dict:
+    """One page of a server folder's DIRECTORIES with the location rule's verdict for ``path`` and ``purpose``."""
+    from core.projects import browse as B  # noqa: PLC0415
+    await _browse_throttle(rec)
+    try:
+        norm = B.check_input(path, purpose, project_id)          # pure: a UNC/device path never reaches the filesystem
+        if page is not None and (len(page) > 255 or "\x00" in page):
+            raise B.BrowseInputError(registry.SENTENCES["path_rule"])
+    except B.BrowseInputError as exc:
+        await _browse_refused(rec, "path_rule")
+        raise _browse_422(str(exc)) from None
+    show_hidden = hidden in ("1", "true", "yes")
+    key = (rec.tenant_id, norm, purpose, project_id, show_hidden, page)
+    try:
+        status, res = await _browse_run(rec, key, B.listing, rec.tenant_id, norm, purpose, project_id, show_hidden, page)
+    except B.BrowseInputError as exc:                            # Windows names / length (checks 2-3)
+        await _browse_refused(rec, "path_rule")
+        raise _browse_422(str(exc)) from None
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail={"message": f"the filesystem refused the listing ({type(exc).__name__})",
+                                                     "reason_class": "filesystem"}) from None
+    if status == "slow":
+        await _browse_refused(rec, "slow")
+        return {**B.frame(rec.tenant_id, norm, managed_root=None), "readable": False, "entries": [],
+                "verdict": _browse_slow_verdict(), "truncated": False}
+    v = res.get("verdict") or {}
+    if not v.get("ok") and v.get("reason_class") in svc.BROWSE_AUDITED_VERDICTS:
+        await _browse_refused(rec, v["reason_class"])
+    return res
+
+
+async def _favourite_rows(rec) -> dict:
+    from core.projects import browse as B  # noqa: PLC0415
+    status, res = await _browse_run(rec, None, B.places, rec.tenant_id)
+    if status == "slow":
+        return {"places": [], "verdict": _browse_slow_verdict()}
+    return {"places": res}
+
+
+@collection.put("/browse/favourites")
+async def browse_favourites(body: FavouritesBody, rec: SessCsrf) -> dict:
+    """Replace the favourites (at most 10, each judged by the input rule); answers the favourite rows."""
+    from core.projects import browse as B  # noqa: PLC0415
+    try:
+        await asyncio.to_thread(B.set_favourites, rec.tenant_id, list(body.paths))
+    except B.BrowseInputError as exc:
+        await _browse_refused(rec, "path_rule")
+        raise _browse_422(str(exc)) from None
+    out = await _favourite_rows(rec)
+    out["places"] = [p for p in out["places"] if p.get("kind") == "favourite"]
+    return out
+
+
+@collection.delete("/browse/recent")
+async def browse_clear_recent(rec: SessCsrf) -> dict:
+    """"Clear recent places"; answers the places."""
+    from core.projects import browse as B  # noqa: PLC0415
+    await asyncio.to_thread(B.clear_recent, rec.tenant_id)
+    return await _favourite_rows(rec)
+
+
 @collection.api_route("/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], include_in_schema=False)
 def _collection_unknown(rest: str, rec: Sess) -> dict:
     raise HTTPException(status_code=404, detail={"message": "no such collection route", "reason_class": "not_found"})

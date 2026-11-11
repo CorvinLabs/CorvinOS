@@ -212,7 +212,38 @@ Nothing is created by reading places.
 `{schema: 1, recent: [...], favourites: [...]}`. `record_recent` keeps the last 8 confirmed locations, newest first,
 deduplicated (`os.path.normcase`); `set_favourites` replaces the list (at most 10 -> "At most 10 favourites.", each judged
 by the input rule); `clear_recent` empties `recent`. Never audited; the `L-projects` erasure handler reports it `SKIPPED`
-(no per-person key, ADR-2321 Decision 13).
+(no per-person key, ADR-2321 Decision 13). Recent places are recorded on success by `plan_project` (only with an
+explicit `location`), `adopt_project`, `move_project`, `relocate_project`, `set_root` and `set_default_storage` with a
+projects root - never by the browser.
+
+**Routes, bounds, audit (T-0391, ADR-2322 Decisions 5-8, 11, 13).** `GET /v1/console/projects/-/browse/places`,
+`GET /v1/console/projects/-/browse?path&purpose[&project_id][&hidden=1][&page]`, `PUT …/-/browse/favourites {paths}` and
+`DELETE …/-/browse/recent` (CSRF for both). Session required, the tenant is the session's, no extra toggle or login (the
+host guard of ADR-2313 applies as on every console route). Order of one listing request, all non-blocking:
+
+1. per-session token bucket (10 requests/s, burst 10, bounded LRU of 256 sessions) - beyond it 429 `{"message": "Too many
+   folder requests at once; wait a moment.", "reason_class": "throttled"}`;
+2. `browse.check_input` on the loop (pure; a UNC/device path never reaches the filesystem) - 422 `path_rule` with the rule's
+   sentence;
+3. a finished late result of the same request (tenant, path, purpose, project id, hidden, page) younger than 10 s is
+   answered at once;
+4. slots: per tenant 2, global 4 (`projects_service.BrowseGate`, counters under one lock; only tenants with a running listing
+   are tracked) - none free -> 200 `slow` at once;
+5. the listing runs on `loop_health.browse_pool()` - a dedicated `ThreadPoolExecutor(max_workers=4,
+   thread_name_prefix="corvin-browse")`, pre-warmed by `loop_health._prewarm_then_watch` in BOTH hosts' lifespan
+   (`install_serving`), never the default executor that `asyncio.to_thread` and audit writes share - awaited with
+   `asyncio.wait_for(asyncio.wrap_future(…), 2.0)`. On timeout 200 with `entries: []` and verdict `{ok: false,
+   reason_class: "slow", message: "This folder did not answer in time (network share?). Try again or choose another
+   place."}`. The thread is not cancelled: its slots are released by the future's done-callback when it really returns, and
+   its result is kept 10 s for the next identical request. So at most 4 hung listings exist host-wide, 2 per tenant, and
+   nothing else in the console waits for them.
+
+`/browse/places` runs on the same pool with the same throttle and slots (`slow` -> `{places: [], verdict}`).
+**Audit:** `project.browse_refused` (WARNING) `{reason_class, tenant_id}` on 422 `path_rule`, `slow`, `throttled` and a
+listing answered with a refused verdict of class `corvin_home`, `system_prefix` or `symlink`; at most one record per
+session per minute (an in-memory stamp per session id); written best-effort through an awaited `asyncio.to_thread`.
+Successful listings, favourites and recents are never audited. Proof: `tests/e2e/test_projects_browse_e2e.py` (real HTTP
+through the console router, concurrent requests in one event loop).
 
 ## The fragment engine (`core/projects/fragments.py`)
 
@@ -271,13 +302,17 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 | `PUT /settings/storage` | `{default_storage: managed\|root, projects_root?}`: where NEW projects go; moves nothing; audit-first `project.storage_changed` requested/applied; 200 `{default_storage, projects_root, managed_root, outside: [ids]}`; 409 `root_required` ("Choose a folder of your own before switching to it."); a bad root is the rule's 422. `{rekey: true}` starts a new workspace for a copied installation (binding rule (c), `outcome=rekeyed`); 409 `not_foreign` ("This workspace belongs to this installation.") while the workspace is this installation's (ADR-2321 Decisions 8, 16) |
 | `PUT /root` | `{path}`: the ALIAS of `set_default_storage("root", path)` - not a second settings writer; response `{projects_root, outside}` as before; audit-first `project.root_changed`, plus `project.storage_changed` (`to: root`) only when `default_storage` flips (REVIEW-0062 N9) |
 | `POST /{id}/relocate` | `{location}` ("Locate folder"): re-points the index at a folder that already holds this project's manifest (purpose `relocate`), re-attaches chats, runs repair; audit `project.relocated` requested/applied; 409 `not_missing` while the recorded path still holds the manifest; 422 `wrong_manifest` for a folder holding another project (ADR-2321 Decision 11) |
+| `GET /-/browse/places` | the picker's places (`managed`, `root`, `home`, `desktop`, `documents`, `drive`, `recent`, `favourite`; each `{kind, label, path, available, note}`); bounded like a listing (§ Picker) |
+| `GET /-/browse?path&purpose[&project_id][&hidden=1][&page]` | one page of a server folder's DIRECTORIES with the location rule's verdict for `path` + `purpose` (§ Picker); 422 `path_rule`, 429 `throttled`, 200 `slow` |
+| `PUT /-/browse/favourites` | `{paths}` (CSRF): replaces the favourites (at most 10, each by the input rule; else 422 `path_rule` "At most 10 favourites."); answers `{places}` = the favourite rows |
+| `DELETE /-/browse/recent` | (CSRF) "Clear recent places"; answers `{places}` |
 | `POST /{id}/move` | `{location}`: same-disk rename only; a rename that fails with `EXDEV` (Windows error 17) answers 409 `cross_device` ("The new place is on another disk. Export the project and import it there, or copy the folder yourself and use Locate folder."), tree and index unchanged, `project.blocked reason_class=cross_device`; moving into/out of the managed root sets `storage` |
 
 **Collection namespace `/projects/-/…` (ADR-2321 Decision 16, REVIEW-0061 M4).** `manifest.RESERVED_IDS` is NOT extended
 (an existing project named `import`, `files` or `trash` would turn invalid on load). Collection-level routes of
 ADR-2321..2323 (browse, export, import, trash) live under the first segment `-`, which `PROJECT_ID_RE` can never
-match. The sub-router `routes/projects.py::collection` is registered BEFORE every `/{project_id}` route; today it
-holds only a catch-all that answers 404 `not_found`, never a project lookup. Projects named `import`, `browse`,
+match. The sub-router `routes/projects.py::collection` is registered BEFORE every `/{project_id}` route; it holds the
+folder-browser routes (T-0391) and, last, a catch-all that answers 404 `not_found`, never a project lookup. Projects named `import`, `browse`,
 `trash`, `export`, `exports`, `files` keep loading and answer detail, health and move.
 
 **Hint words (ADR-2321 Decision 2, REVIEW-0061 M5).** `core/projects/hints.py` loads `_looks_protected` from
@@ -311,6 +346,7 @@ requested|applied|rebound|recovered|rekeyed|error - never a path or a workspace 
 `project.plan_created`/`project.created`) - never a path. A `ProjectPathError` answers 422
 `{message, reason_class}` with the exception's own class.
 `project.feature_files_removed` and `project.video_created` are registered with their tasks.
+`project.browse_refused` (WARNING; `reason_class`, `tenant_id` only - never a path or a name): § Picker.
 
 ## Console panel (T-0357)
 
