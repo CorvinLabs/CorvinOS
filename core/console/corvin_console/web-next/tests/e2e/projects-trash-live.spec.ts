@@ -48,6 +48,8 @@ function tree(root: string): Record<string, string> {
       const p = path.join(d, n);
       const rel = path.relative(root, p);
       if (rel.split(path.sep)[0] === ".git") continue;                 // git may pack objects in the background
+      // the console builds a project's knowledge graph in the background (derived, git-ignored data) - it may appear between two looks
+      if (rel.split(path.sep).join("/").startsWith("docs/kb/graph")) continue;
       const st = fs.lstatSync(p);
       if (st.isSymbolicLink()) out[rel] = `link:${fs.readlinkSync(p)}`;
       else if (st.isDirectory()) { out[rel] = "dir"; walk(p); }
