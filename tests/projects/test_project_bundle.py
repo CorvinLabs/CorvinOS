@@ -299,13 +299,19 @@ class Build(BundleBase):
         (self.tmp / "secret.txt").write_text(MARKER)
         real_open = os.open
 
+        swapped = []
+
         def hook(path, flags, *a, **k):
-            if str(path).endswith("swap.txt") and not os.path.islink(path):
-                os.unlink(path)
-                os.symlink(self.tmp / "secret.txt", path)
+            # the walk opens by name relative to a directory descriptor (REVIEW-0063 M1): swap the real file by its full path
+            target = root / "swap.txt"
+            if str(path).endswith("swap.txt") and not target.is_symlink():
+                os.unlink(target)
+                os.symlink(self.tmp / "secret.txt", target)
+                swapped.append(1)
             return real_open(path, flags, *a, **k)
         with mock.patch.object(bundle.os, "open", hook):
             z, _ = self.build([pid], git_history=False)
+        self.assertTrue(swapped, "positive control: the swap happened at open time")
         self.assertEqual(self.left_out(self.envelope(z), pid)["swap.txt"], "link")
         with zipfile.ZipFile(z) as zf:
             self.assertFalse(any(MARKER.encode() in zf.read(n) for n in zf.namelist()))

@@ -522,14 +522,25 @@ as on disk, modes 0o644/0o755 only.
 | `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_ed25519*`, `secrets.*`, `credentials.*` | `secret_name` |
 
 The walk adds: a symlink or junction (target and contents never read) -> `link`; a regular file with `st_nlink > 1` ->
-`hard_link`; a directory on another filesystem -> `mount`; a CorvinOS `project.yaml` below the root (mapping,
+`hard_link`; a directory or a regular file on another filesystem than the project root (a bind mount) -> `mount`; a CorvinOS `project.yaml` below the root (mapping,
 `schema: 1`, valid id) -> `nested_manifest`; a `generated` tree (`node_modules`, `.venv`, `__pycache__`, `build`,
 `dist`, `target`) unless the part is on -> `generated`; a name Windows cannot hold (device name, `:<>"|?*\`, control
 character, trailing dot/space, not UTF-8) or one that collides with an earlier entry after casefold/NFC ->
 `unportable_name`; a FIFO, socket or device -> `special_file`. The last two reasons keep the export inside its own V1.
-Files are opened with `O_NOFOLLOW` (Windows: after `fsutil.is_link`) and `fstat` must equal the walk's `os.lstat`
-(`st_dev`, `st_ino`, `st_size`; never `DirEntry.stat()`, which is zero on Windows); a file swapped for a link between the
-walk and the open is left out as `link`, never read. Text files (not an archive by content; no NUL in the first 8 KiB
+**The walk goes by descriptor on POSIX (REVIEW-0063 M1, `bundle._Tree`).** The root is opened `O_DIRECTORY|O_NOFOLLOW`
+and its fstat compared with its lstat; each directory below is opened `O_DIRECTORY|O_NOFOLLOW` relative to its parent's
+descriptor, its fstat must equal the lstat that queued it, and it is listed with `os.scandir(fd)`; entries are lstat-ed
+with `dir_fd`; a file is opened again for the copy through the same descriptor chain from the root with `O_NOFOLLOW` at
+every component. A directory swapped for a link after its check therefore fails the open (ELOOP/ENOTDIR) and is left out
+as `link` - a swap can only make the export SKIP an entry, never read an outside file. **Windows** has no `dir_fd` and no
+`scandir(fd)`: the path fallback lists a directory by path and drops it (`link`) when its lstat identity differs from the
+queued one or a component below the root is a link, checked BEFORE and AFTER the listing; a file is opened after
+`fsutil.is_link`, and after the open no component below the root may be a link and the path's lstat identity must equal
+the open handle's. The difference: on Windows a swap that is undone between the two checks (swap, list, swap back) is not
+seen; on POSIX it cannot reach the listing at all. In both modes `fstat` must equal the walk's lstat (`st_dev`, `st_ino`,
+`st_size`; never `DirEntry.stat()`, which is zero on Windows); a file swapped for a link between the walk and the open is
+left out as `link`, never read. Test hook: `bundle._race_hook(stage, rel)` runs right before a queued directory (`dir`)
+or a file (`file`) is opened (tests only). Text files (not an archive by content; no NUL in the first 8 KiB
 unless a UTF-16/32 BOM) are scanned for credential shapes while they are copied; a hit refuses `secret_shape` naming the
 path, never the match, and the ZIP (built through a private temp directory beside the target) is removed. A ZIP inside
 the project is a file: never opened, not scanned.

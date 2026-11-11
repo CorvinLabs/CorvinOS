@@ -1,10 +1,15 @@
 """The project bundle ``corvin.project-bundle`` v1 (ADR-2323): building one (Decisions 7, 8, 9, 12, 16).
 
-``build`` walks each registered project with ``os.scandir`` and NEVER follows a link: a symlink or a junction is left out
-(``link``), its target and contents never read; a regular file is opened with ``O_NOFOLLOW`` (on Windows after an
-``fsutil.is_link`` check) and its ``fstat`` must equal the walk's ``os.lstat`` (``st_dev``, ``st_ino``, ``st_size``; never
-``DirEntry.stat()``, which reports zeros on Windows); a file with more than one hard link is left out (``hard_link``); a
-directory on another filesystem than the project root is left out (``mount``). What ``bundle_rules.protected_entry``
+``build`` walks each registered project and NEVER follows a link: a symlink or a junction is left out (``link``), its target
+and contents never read. On POSIX the walk goes by descriptor (REVIEW-0063 M1, :class:`_Tree`): each directory is opened
+``O_DIRECTORY|O_NOFOLLOW`` relative to its parent's descriptor, its fstat must equal the lstat that queued it, it is listed
+with ``os.scandir(fd)``, and every file is opened ``O_NOFOLLOW`` relative to its directory's descriptor - a directory swapped
+for a link after its check can only make the export SKIP it, never read through it. Windows has no ``dir_fd`` and no
+``scandir(fd)``: the path fallback lists by path and drops a directory whose identity changed or that lies behind a link
+before or after the listing, and re-checks a file's path for links and identity after opening it (a swap that is undone
+between two checks is not caught there). A file's ``fstat`` must equal the walk's lstat (``st_dev``, ``st_ino``, ``st_size``;
+never ``DirEntry.stat()``, which reports zeros on Windows); a file with more than one hard link is left out (``hard_link``); a
+directory OR a file on another filesystem than the project root is left out (``mount``, REVIEW-0063 m3). What ``bundle_rules.protected_entry``
 names never travels; a nested CorvinOS ``project.yaml`` is left out (``nested_manifest``). Text files are scanned for
 credential shapes while they are read; a hit refuses the export (``secret_shape``, naming the path, never the match) and
 no ZIP remains. The envelope ``project-bundle.json`` is written last at the ZIP root.
@@ -42,7 +47,7 @@ from core.bundle_common import BundleCheckError
 from core.bundle_common import secrets as _secrets
 
 from . import bundle_rules, changes, manifest, registry
-from .fsutil import dirent_is_junction, is_link
+from .fsutil import dirent_is_junction, is_link, passes_link
 
 FORMAT = "corvin.project-bundle"
 FORMAT_VERSION = 1
@@ -135,12 +140,14 @@ class _File:
     mtime: float
     mode: int
     part: str                      # files | kb | generated | videos_index
+    parts: tuple[str, ...] = ()    # the components below the project root (the descriptor walk re-opens through them)
 
 
 @dataclass
 class _Walk:
     pid: str
     root: Path
+    root_ident: tuple[int, int] = (0, 0)
     files: list[_File] = field(default_factory=list)
     left_out: list[dict[str, str]] = field(default_factory=list)
     part_bytes: dict[str, int] = field(default_factory=dict)
@@ -213,6 +220,75 @@ def _open_nofollow(path: str) -> int:
     return os.open(path, os.O_RDONLY | _O_NOFOLLOW | _O_BINARY)
 
 
+#: tests only: called as ``_race_hook(stage, rel)`` right before a queued directory (``"dir"``) or a file (``"file"``) is
+#: opened, so a race can be injected deterministically at that point (REVIEW-0063 M1)
+_race_hook: Optional[Callable[[str, str], None]] = None
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+
+
+def _fd_walk() -> bool:
+    """The descriptor walk (REVIEW-0063 M1): every directory is opened ``O_DIRECTORY|O_NOFOLLOW`` relative to its parent's
+    descriptor and listed through that descriptor, every file is opened ``O_NOFOLLOW`` relative to its directory's descriptor.
+    POSIX only - Windows has neither ``dir_fd`` nor ``scandir(fd)``; there :func:`_walk` uses the path fallback."""
+    # ``os.fwalk`` exists exactly where os.open/os.stat take dir_fd and os.scandir takes a descriptor (decided once at import of
+    # ``os`` against the real functions - a wrapped os.open, e.g. a test fence, is not in supports_dir_fd)
+    return not _IS_WINDOWS and bool(_O_NOFOLLOW) and bool(_O_DIRECTORY) and hasattr(os, "fwalk")
+
+
+def _ident(st: os.stat_result) -> tuple[int, int]:
+    return st.st_dev, st.st_ino
+
+
+def _open_dir_at(name: str, dir_fd: Optional[int]) -> int:
+    return os.open(name, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW | _O_CLOEXEC, dir_fd=dir_fd)
+
+
+class _Tree:
+    """Opens paths below a project root WITHOUT following a link anywhere on the way (descriptor walk): the root is opened
+    once and its identity compared with the walk's; every component below is opened relative to its parent's descriptor with
+    ``O_NOFOLLOW``, so a component swapped for a link fails with ELOOP/ENOTDIR instead of being followed. The descriptor of the
+    last directory is cached (the files of one directory are read one after the other)."""
+
+    def __init__(self, root: Path, ident: tuple[int, int]):
+        self.root_fd = _open_dir_at(str(root), None)
+        if _ident(os.fstat(self.root_fd)) != ident:
+            os.close(self.root_fd)
+            raise OSError(errno.ESTALE, "the project folder changed")
+        self._cache: Optional[tuple[tuple[str, ...], int]] = None
+
+    def dir_fd(self, parts: tuple[str, ...]) -> int:
+        """A NEW descriptor of the directory *parts* below the root (the caller closes it)."""
+        if self._cache is not None and self._cache[0] == parts:
+            return os.dup(self._cache[1])
+        cur = os.dup(self.root_fd)
+        try:
+            for name in parts:
+                nxt = _open_dir_at(name, cur)
+                os.close(cur)
+                cur = nxt
+        except BaseException:
+            os.close(cur)
+            raise
+        if self._cache is not None:
+            os.close(self._cache[1])
+        self._cache = (parts, os.dup(cur))
+        return cur
+
+    def open_file(self, parts: tuple[str, ...]) -> int:
+        dfd = self.dir_fd(parts[:-1])
+        try:
+            return os.open(parts[-1], os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC, dir_fd=dfd)
+        finally:
+            os.close(dfd)
+
+    def close(self) -> None:
+        if self._cache is not None:
+            os.close(self._cache[1])
+            self._cache = None
+        os.close(self.root_fd)
+
+
 def _project(tenant_id: str, project_id: str) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     e = registry.get(tenant_id, project_id) if isinstance(project_id, str) and manifest.PROJECT_ID_RE.match(project_id) else None
     if e is None or not isinstance(e.get("path"), str) or e.get("pending") or registry.is_trashed(e):
@@ -262,94 +338,169 @@ def _part_of(rel_parts: tuple[str, ...]) -> str:
     return "files"
 
 
+class _EntView:
+    """A directory entry with an absolute ``path`` (an entry listed through a descriptor carries only its name), for the
+    junction check of ``fsutil.dirent_is_junction``."""
+
+    __slots__ = ("_e", "name", "path")
+
+    def __init__(self, e: "os.DirEntry[str]", path: str):
+        self._e, self.name, self.path = e, e.name, path
+
+    def is_symlink(self) -> bool:
+        return self._e.is_symlink()
+
+    def __getattr__(self, k: str):
+        return getattr(self._e, k)
+
+
 def _walk(pid: str, root: Path, parts: Parts) -> _Walk:
+    """List the project. POSIX: the descriptor walk (:class:`_Tree`) - a directory is opened ``O_DIRECTORY|O_NOFOLLOW`` relative
+    to its parent's descriptor, its fstat must equal the lstat that queued it, and it is listed through that descriptor, so a
+    directory swapped for a link after its check is never listed through the link (REVIEW-0063 M1). Windows (no ``dir_fd``,
+    no ``scandir(fd)``): the path fallback lists by path and drops a directory whose lstat identity changed or that lies
+    behind a link before OR after the listing; this narrows the window but cannot close a swap that is undone before the
+    second check (what is read later is still compared with the walk's dev/ino at open time)."""
     w = _Walk(pid=pid, root=root)
     root_st = os.lstat(root)
+    w.root_ident = _ident(root_st)
     seen_fold: set[str] = set()
+    fd_mode = _fd_walk()
 
     def leave(rel: str, reason: str) -> None:
         w.left_out.append({"path": rel, "reason": reason})
 
-    stack: list[tuple[str, tuple[str, ...], str]] = [(str(root), (), "files")]
-    while stack:
-        d, dparts, dpart = stack.pop()
+    tree: Optional[_Tree] = None
+    if fd_mode:
         try:
-            with _scandir(d) as it:
-                entries = sorted(it, key=lambda e: e.name)
+            tree = _Tree(root, w.root_ident)
         except OSError as exc:
             raise BundleRefused("unreadable", project_id=pid, detail=type(exc).__name__) from None
-        for ent in entries:
-            rel_parts = (*dparts, ent.name)
-            rel = "/".join(rel_parts)
-            if len(rel_parts) > LIMITS["max_depth"] - 2 or len(f"{PROJECTS_PREFIX}{pid}/{rel}".encode("utf-8", "surrogateescape")) > LIMITS["max_name_bytes"]:
-                raise BundleRefused("path_too_long", rel, project_id=pid)
-            reason = NEVER_LIST(PurePosixPath(*rel_parts))
-            if reason is not None:
-                leave(rel, reason)
-                continue
-            if ent.is_symlink() or dirent_is_junction(ent):
-                leave(rel, "link")
-                continue
+    stack: list[tuple[tuple[str, ...], str, tuple[int, int]]] = [((), "files", w.root_ident)]
+    try:
+        while stack:
+            dparts, dpart, want = stack.pop()
+            drel = "/".join(dparts)
+            dpath = os.path.join(str(root), *dparts) if dparts else str(root)
+            if dparts and _race_hook is not None:
+                _race_hook("dir", drel)
+            dfd: Optional[int] = None
             try:
-                ent.name.encode("utf-8")
-            except UnicodeEncodeError:
-                leave(rel, "unportable_name")
-                continue
-            if bundle_rules.unportable_component(ent.name):
-                leave(rel, "unportable_name")
-                continue
-            folded = unicodedata.normalize("NFC", rel).casefold()
-            if folded in seen_fold:
-                leave(rel, "unportable_name")
-                continue
-            try:
-                st = os.lstat(ent.path)                  # never ent.stat(): zeros for st_ino/st_dev/st_nlink on Windows (N8)
-            except OSError:
-                leave(rel, "special_file")
-                continue
-            if stat.S_ISLNK(st.st_mode):
-                leave(rel, "link")
-                continue
-            if stat.S_ISDIR(st.st_mode):
-                if st.st_dev != root_st.st_dev:
-                    leave(rel, "mount")
-                    continue
-                part = dpart
-                if ent.name in GENERATED:
-                    if not parts.generated:
-                        leave(rel, "generated")
+                if tree is not None:
+                    try:
+                        dfd = tree.dir_fd(dparts)
+                    except OSError:
+                        leave(drel, "link")                     # swapped for a link (ELOOP / ENOTDIR) or gone since its check
                         continue
-                    part = "generated"
-                if part == "files" and rel_parts == ("docs", "kb"):
-                    if not parts.kb:
+                    if _ident(os.fstat(dfd)) != want:
+                        leave(drel, "link")
                         continue
-                    part = "kb"
-                seen_fold.add(folded)
-                stack.append((ent.path, rel_parts, part))
-                continue
-            if not stat.S_ISREG(st.st_mode):
-                leave(rel, "special_file")
-                continue
-            if st.st_nlink > 1:
-                leave(rel, "hard_link")
-                continue
-            if rel_parts != (manifest.FILE,) and ent.name.casefold() == manifest.FILE:
-                try:
-                    fd = _open_nofollow(ent.path)
-                except OSError:
-                    leave(rel, "link")
-                    continue
-                try:
-                    if _nested_manifest(fd, st.st_size):
-                        leave(rel, "nested_manifest")
+                    try:
+                        with _scandir(dfd) as it:
+                            entries = sorted(it, key=lambda e: e.name)
+                    except OSError as exc:
+                        raise BundleRefused("unreadable", project_id=pid, detail=type(exc).__name__) from None
+                else:
+                    def same() -> bool:
+                        try:
+                            return _ident(os.lstat(dpath)) == want and not (dparts and passes_link(root, Path(dpath)))
+                        except OSError:
+                            return False
+                    if not same():
+                        leave(drel, "link")
                         continue
-                finally:
-                    os.close(fd)
-            seen_fold.add(folded)
-            fpart = dpart if dpart != "files" else _part_of(rel_parts)
-            w.files.append(_File(rel=rel, abs=ent.path, size=st.st_size, dev=st.st_dev, ino=st.st_ino, mtime=st.st_mtime,
-                                 mode=st.st_mode, part=fpart))
-            w.part_bytes[fpart] = w.part_bytes.get(fpart, 0) + st.st_size
+                    try:
+                        with _scandir(dpath) as it:
+                            entries = sorted(it, key=lambda e: e.name)
+                    except OSError as exc:
+                        raise BundleRefused("unreadable", project_id=pid, detail=type(exc).__name__) from None
+                    if not same():                              # changed while it was listed: nothing of it travels
+                        leave(drel, "link")
+                        continue
+                for ent in entries:
+                    epath = os.path.join(dpath, ent.name)
+                    rel_parts = (*dparts, ent.name)
+                    rel = "/".join(rel_parts)
+                    if len(rel_parts) > LIMITS["max_depth"] - 2 or len(f"{PROJECTS_PREFIX}{pid}/{rel}".encode("utf-8", "surrogateescape")) > LIMITS["max_name_bytes"]:
+                        raise BundleRefused("path_too_long", rel, project_id=pid)
+                    reason = NEVER_LIST(PurePosixPath(*rel_parts))
+                    if reason is not None:
+                        leave(rel, reason)
+                        continue
+                    if ent.is_symlink() or dirent_is_junction(_EntView(ent, epath)):
+                        leave(rel, "link")
+                        continue
+                    try:
+                        ent.name.encode("utf-8")
+                    except UnicodeEncodeError:
+                        leave(rel, "unportable_name")
+                        continue
+                    if bundle_rules.unportable_component(ent.name):
+                        leave(rel, "unportable_name")
+                        continue
+                    folded = unicodedata.normalize("NFC", rel).casefold()
+                    if folded in seen_fold:
+                        leave(rel, "unportable_name")
+                        continue
+                    try:
+                        # never ent.stat(): zeros for st_ino/st_dev/st_nlink on Windows (N8)
+                        st = os.stat(ent.name, dir_fd=dfd, follow_symlinks=False) if dfd is not None else os.lstat(epath)
+                    except OSError:
+                        leave(rel, "special_file")
+                        continue
+                    if stat.S_ISLNK(st.st_mode):
+                        leave(rel, "link")
+                        continue
+                    if st.st_dev != root_st.st_dev:             # a directory OR a file of another filesystem (REVIEW-0063 m3)
+                        leave(rel, "mount")
+                        continue
+                    if stat.S_ISDIR(st.st_mode):
+                        part = dpart
+                        if ent.name in GENERATED:
+                            if not parts.generated:
+                                leave(rel, "generated")
+                                continue
+                            part = "generated"
+                        if part == "files" and rel_parts == ("docs", "kb"):
+                            if not parts.kb:
+                                continue
+                            part = "kb"
+                        seen_fold.add(folded)
+                        stack.append((rel_parts, part, _ident(st)))
+                        continue
+                    if not stat.S_ISREG(st.st_mode):
+                        leave(rel, "special_file")
+                        continue
+                    if st.st_nlink > 1:
+                        leave(rel, "hard_link")
+                        continue
+                    if rel_parts != (manifest.FILE,) and ent.name.casefold() == manifest.FILE:
+                        try:
+                            fd = (os.open(ent.name, os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC, dir_fd=dfd) if dfd is not None
+                                  else _open_nofollow(epath))
+                        except OSError:
+                            leave(rel, "link")
+                            continue
+                        try:
+                            if _ident(os.fstat(fd)) != _ident(st):
+                                leave(rel, "link")
+                                continue
+                            if _nested_manifest(fd, st.st_size):
+                                leave(rel, "nested_manifest")
+                                continue
+                        finally:
+                            os.close(fd)
+                    seen_fold.add(folded)
+                    fpart = dpart if dpart != "files" else _part_of(rel_parts)
+                    w.files.append(_File(rel=rel, abs=epath, size=st.st_size, dev=st.st_dev, ino=st.st_ino,
+                                         mtime=st.st_mtime, mode=st.st_mode, part=fpart, parts=rel_parts))
+                    w.part_bytes[fpart] = w.part_bytes.get(fpart, 0) + st.st_size
+            finally:
+                if dfd is not None:
+                    os.close(dfd)
+    finally:
+        if tree is not None:
+            tree.close()
     w.files.sort(key=lambda f: f.rel)
     w.left_out.sort(key=lambda r: r["path"])
     return w
@@ -640,19 +791,40 @@ def _ratio_breach(size: int, packed: int) -> bool:
     return size >= LIMITS["ratio_check_min_bytes"] and size > LIMITS["max_compression_ratio"] * max(packed, 1)
 
 
-def _read_into(zf: zipfile.ZipFile, name: str, f: _File, scanner: Optional[_secrets.StreamScanner],
-               sniff_cb: Callable[[bytes], Optional[_secrets.StreamScanner]], progress_cb,
-               stored: frozenset = frozenset()) -> tuple[Optional[str], int]:
-    """Copy one file into the ZIP without following a link. Returns ``(sha256, size)`` or ``(None, 0)`` when the file turned
-    out to be a link / changed since the walk (the entry is then not written)."""
+def _open_walked(f: _File, tree: Optional["_Tree"], root: Optional[Path]) -> Optional[int]:
+    """Open a walked file again without following a link anywhere below the project root, and only if it is still the file
+    the walk listed (``st_dev``, ``st_ino``, ``st_size``). POSIX: through the descriptor chain of :class:`_Tree`. Windows (the
+    path fallback): ``fsutil.is_link`` before the open, and after it no component below the root may be a link and the
+    path's lstat identity must still be the open handle's - a swap is caught unless it is undone between those two checks."""
+    if _race_hook is not None:
+        _race_hook("file", f.rel)
     try:
-        fd = _open_nofollow(f.abs)
+        fd = tree.open_file(f.parts) if tree is not None and f.parts else _open_nofollow(f.abs)
     except OSError:
-        return None, 0
+        return None
     try:
         st = os.fstat(fd)
         if (st.st_dev, st.st_ino, st.st_size) != (f.dev, f.ino, f.size) or not stat.S_ISREG(st.st_mode):
-            return None, 0
+            raise OSError(errno.ESTALE, "changed")
+        if tree is None and root is not None:
+            if passes_link(root, Path(f.abs)) or _ident(os.lstat(f.abs)) != _ident(st):
+                raise OSError(errno.ESTALE, "changed")
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def _read_into(zf: zipfile.ZipFile, name: str, f: _File, scanner: Optional[_secrets.StreamScanner],
+               sniff_cb: Callable[[bytes], Optional[_secrets.StreamScanner]], progress_cb,
+               stored: frozenset = frozenset(), *, tree: Optional["_Tree"] = None,
+               root: Optional[Path] = None) -> tuple[Optional[str], int]:
+    """Copy one file into the ZIP without following a link. Returns ``(sha256, size)`` or ``(None, 0)`` when the file turned
+    out to be a link / changed since the walk (the entry is then not written)."""
+    fd = _open_walked(f, tree, root)
+    if fd is None:
+        return None, 0
+    try:
         b0 = os.read(fd, min(_CHUNK, f.size)) if f.size else b""
         info = zipfile.ZipInfo(name, date_time=_zip_date(f.mtime))
         info.compress_type = zipfile.ZIP_STORED if name in stored or _compresses_too_well(f.size, b0) else zipfile.ZIP_DEFLATED
@@ -690,42 +862,59 @@ def _read_into(zf: zipfile.ZipFile, name: str, f: _File, scanner: Optional[_secr
         os.close(fd)
 
 
+def _zip_project_files(zf, pid, man, w: _Walk, tree: Optional[_Tree], root: Path, stored: frozenset, tick,
+                      done_files) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    listed: list[dict[str, Any]] = []
+    left = list(w.left_out)
+    prefix = f"{PROJECTS_PREFIX}{pid}/"
+    for f in w.files:
+        name = prefix + f.rel
+        if f.rel == manifest.FILE:
+            data = _manifest_bytes(man)
+            try:
+                _secrets.scan_bytes(data, f.rel)
+            except BundleCheckError:
+                raise BundleRefused("secret_shape", f.rel, project_id=pid) from None
+            info = zipfile.ZipInfo(name, date_time=_zip_date(f.mtime))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = (0o100644 & 0xFFFF) << 16
+            zf.writestr(info, data)
+            listed.append({"path": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
+            done_files[0] += 1
+            tick(len(data))
+            continue
+
+        def sniff(head: bytes, _rel=f.rel) -> Optional[_secrets.StreamScanner]:
+            return _secrets.StreamScanner(_rel) if is_text(head) else None
+        try:
+            sha, size = _read_into(zf, name, f, None, sniff, tick, stored, tree=tree, root=root)
+        except BundleCheckError:
+            raise BundleRefused("secret_shape", f.rel, project_id=pid) from None
+        if sha is None:
+            left.append({"path": f.rel, "reason": "link"})      # swapped or changed since the walk: never read
+            continue
+        listed.append({"path": name, "sha256": sha, "size": size})
+        done_files[0] += 1
+    return listed, left
+
+
 def _write_zip(tenant_id, loaded, walks, parts: Parts, histories, tmp_zip: Path, stored: frozenset, tick, done_files) -> dict:
     envelope_projects = []
     fd = os.open(tmp_zip, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_BINARY, 0o600)
     with os.fdopen(fd, "wb") as raw, zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         for (pid, root, e, man), w in zip(loaded, walks):
-            listed: list[dict[str, Any]] = []
-            left = list(w.left_out)
-            prefix = f"{PROJECTS_PREFIX}{pid}/"
-            for f in w.files:
-                name = prefix + f.rel
-                if f.rel == manifest.FILE:
-                    data = _manifest_bytes(man)
-                    try:
-                        _secrets.scan_bytes(data, f.rel)
-                    except BundleCheckError:
-                        raise BundleRefused("secret_shape", f.rel, project_id=pid) from None
-                    info = zipfile.ZipInfo(name, date_time=_zip_date(f.mtime))
-                    info.compress_type = zipfile.ZIP_DEFLATED
-                    info.external_attr = (0o100644 & 0xFFFF) << 16
-                    zf.writestr(info, data)
-                    listed.append({"path": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
-                    done_files[0] += 1
-                    tick(len(data))
-                    continue
-
-                def sniff(head: bytes, _rel=f.rel) -> Optional[_secrets.StreamScanner]:
-                    return _secrets.StreamScanner(_rel) if is_text(head) else None
+            tree: Optional[_Tree] = None
+            if _fd_walk():
                 try:
-                    sha, size = _read_into(zf, name, f, None, sniff, tick, stored)
-                except BundleCheckError:
-                    raise BundleRefused("secret_shape", f.rel, project_id=pid) from None
-                if sha is None:
-                    left.append({"path": f.rel, "reason": "link"})      # swapped or changed since the walk: never read
-                    continue
-                listed.append({"path": name, "sha256": sha, "size": size})
-                done_files[0] += 1
+                    tree = _Tree(root, w.root_ident)
+                except OSError as exc:
+                    raise BundleRefused("unreadable", project_id=pid, detail=type(exc).__name__) from None
+            try:
+                listed, left = _zip_project_files(zf, pid, man, w, tree, root, stored, tick, done_files)
+            finally:
+                if tree is not None:
+                    tree.close()
+            prefix = f"{PROJECTS_PREFIX}{pid}/"
             git: dict[str, str] = {}
             for inner, target, key, head in histories.get(pid, []):
                 name = prefix + inner
