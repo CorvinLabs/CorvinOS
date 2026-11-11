@@ -9,6 +9,8 @@ import { adoptProject, attachProject, detachProject, getChatAttachment, getHealt
 import { ACCESS_META, CLASS_META, CLASS_ORDER, accessOf, classOf, lowersProtection, needsConfirmation } from "./roles";
 import { listChatSessions } from "@/lib/api/sessions";
 import { explain } from "./wizard";
+import { FolderField, FolderPicker } from "@/components/folder-picker";
+import { parentOf } from "./picker-logic";
 
 export function AdoptSection() {
   const { session } = useAuth();
@@ -28,20 +30,21 @@ export function AdoptSection() {
     <form className="w-full basis-full space-y-2 rounded-lg border p-3" data-testid="adopt-form" onSubmit={(e) => { e.preventDefault(); mut.mutate(); }}
       onKeyDown={(e) => {
         if (e.key === "Escape" && !mut.isPending) {
-          e.preventDefault(); setOpen(false); setMsg(null);
+          e.preventDefault(); setOpen(false); setMsg(null); setLocation("");
           requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-testid=adopt-start]")?.focus());
         }
       }}>
       <p className="text-sm text-muted-foreground">Any folder of your own. If it has no project.yaml, exactly that one file is added; nothing else in the folder changes.</p>
-      <label className="block text-sm">Folder (absolute path)
-        <input className="mt-1 w-full rounded border bg-background px-2 py-1 font-mono text-xs" value={location} onChange={(e) => setLocation(e.target.value)} data-testid="adopt-location" autoFocus />
-      </label>
+      <div className="space-y-1 text-sm"><span className="block">Folder</span>
+        <FolderField value={location} onChange={(p) => { setLocation(p); setMsg(null); }} purpose="adopt" inputTestId="adopt-location" testid="adopt-folder"
+          disabled={mut.isPending} />
+      </div>
       <label className="block text-sm">Title (optional)
         <input className="mt-1 w-full rounded border bg-background px-2 py-1 text-sm" value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} data-testid="adopt-title" />
       </label>
       <div className="flex gap-2">
         <Button size="sm" type="submit" disabled={mut.isPending || !location.trim()} data-testid="adopt-submit">Add folder</Button>
-        <Button size="sm" type="button" variant="ghost" disabled={mut.isPending} onClick={() => { setOpen(false); setMsg(null); }}>Cancel</Button>
+        <Button size="sm" type="button" variant="ghost" disabled={mut.isPending} onClick={() => { setOpen(false); setMsg(null); setLocation(""); }}>Cancel</Button>
       </div>
       {msg && <p role="status" className="text-sm" data-testid="adopt-note">{msg}</p>}
     </form>
@@ -91,16 +94,17 @@ export function RenameField({ d, csrf, enabled, onChanged }: { d: ProjectDetail;
   );
 }
 
-/** Move the folder (this phase: a validated path; the folder picker replaces the field later). Same disk only, asked twice. */
+/** Move the folder: the picker chooses the new place (its verdict shown before Choose), then "Move here" and a second click
+ * "Yes, move the folder". Same disk only; the server judges the place again. */
 export function MoveFlow({ d, csrf, onChanged }: { d: ProjectDetail; csrf: string; onChanged: () => void }) {
-  const [open, setOpen] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [dest, setDest] = useState("");
   const [sure, setSure] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const move = useMutation({
-    mutationFn: () => moveProject(d.id, dest.trim(), csrf),
+    mutationFn: () => moveProject(d.id, dest, csrf),
     onSuccess: (r) => {
-      setSure(false); setOpen(false); setDest("");
+      setSure(false); setDest("");
       // null = the repair after the move failed: the machine-local files still name the old folder (not "nothing to regenerate")
       const repaired = r.repaired_files === null
         ? "The machine-local files could not be regenerated for the new location - run Repair in Maintenance."
@@ -111,28 +115,30 @@ export function MoveFlow({ d, csrf, onChanged }: { d: ProjectDetail; csrf: strin
     },
     onError: (e) => { setSure(false); setMsg(explain(e)); onChanged(); },   // the move may have happened (a timeout): show what the server says now
   });
+  const cancel = () => { setDest(""); setSure(false); };
   return (
     <div className="space-y-2" data-testid="move-flow">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground">Move the folder to another place. Same disk only; your files are not changed, machine-local files are regenerated.</p>
-        {!open && <Button size="sm" variant="outline" className="self-start sm:self-auto" onClick={() => { setOpen(true); setMsg(null); }} data-testid="move-open">Move…</Button>}
+        {!dest && <Button size="sm" variant="outline" className="self-start sm:self-auto" onClick={() => { setPicking(true); setMsg(null); }} data-testid="move-open">Move…</Button>}
       </div>
-      {open && (
-        <div className="space-y-2 rounded border p-2">
-          <label className="block text-sm">New folder (absolute path)
-            <input className="mt-1 w-full rounded border bg-background px-2 py-1 font-mono text-xs" value={dest} autoFocus
-              onChange={(e) => { setDest(e.target.value); setSure(false); }} placeholder={d.path ? `e.g. ${d.path}-new` : "absolute path of the new folder"}
-              data-testid="move-input" />
-          </label>
+      <FolderPicker open={picking} purpose="move" projectId={d.id} title={d.title || d.id} initialPath={d.path ? parentOf(d.path) : null}
+        inputTestId="move-input" onChoose={(p) => { setDest(p); setSure(false); setPicking(false); }} onCancel={() => setPicking(false)} />
+      {dest && (
+        <div className="space-y-2 rounded border p-2" data-testid="move-target">
+          <p className="text-sm">New place: <span className="break-all font-mono text-xs" data-testid="move-dest">{dest}</span></p>
           {!sure ? (
-            <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => setSure(true)} disabled={!dest.trim()} data-testid="move-start">Move here</Button>
-              <Button size="sm" variant="ghost" onClick={() => { setOpen(false); setDest(""); }}>Cancel</Button>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={() => setSure(true)} data-testid="move-start">Move here</Button>
+              <Button size="sm" variant="ghost" onClick={() => setPicking(true)} data-testid="move-change">Choose another…</Button>
+              <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>
             </div>
           ) : (
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="destructive" onClick={() => move.mutate()} disabled={move.isPending} data-testid="move-confirm">Yes, move the folder</Button>
-              <Button size="sm" variant="ghost" onClick={() => setSure(false)}>Cancel</Button>
+              <Button size="sm" variant="destructive" onClick={() => move.mutate()} disabled={move.isPending} data-testid="move-confirm">
+                {move.isPending ? "Moving…" : "Yes, move the folder"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSure(false)} disabled={move.isPending}>Cancel</Button>
             </div>
           )}
         </div>
@@ -314,9 +320,8 @@ export function DefaultPlaceDialog({ open, onOpenChange, list }: { open: boolean
               <span className="min-w-0 flex-1 space-y-1">
                 <span className="block font-medium">A folder of my own</span>
                 {kind === "root" && (
-                  <input className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" value={folder} autoFocus aria-label="Folder for new projects"
-                    placeholder="absolute path, e.g. /home/you/work" onChange={(e) => { setFolder(e.target.value); setError(null); }}
-                    data-testid="place-root-input" disabled={mut.isPending} />
+                  <FolderField value={folder} onChange={(p) => { setFolder(p); setError(null); }} purpose="projects_root"
+                    inputTestId="place-root-input" testid="place-root-folder" disabled={mut.isPending} />
                 )}
               </span>
             </label>

@@ -514,6 +514,23 @@ class VerdictAndAudit(BrowseBase):
             text = self._chain_text(c)
             self.assertNotIn(str(self.tmp), text, "an audit record carries a path")
 
+    # T-0393: an own folder whose path the path gate's hint test matches is usable, with the warning sentence in the verdict
+    def test_hint_word_folder_is_ok_with_the_warning_sentence(self):
+        with self._ctx() as c:
+            lab = self.tmp / "code" / "forge-lab"
+            lab.mkdir(parents=True)
+            for purpose in ("adopt", "create"):
+                q = {"path": str(lab if purpose == "adopt" else lab / "new"), "purpose": purpose}
+                v = c.own.get(_B, params=q).json()["verdict"]
+                self.assertTrue(v["ok"], v)
+                self.assertEqual(v["warnings"], ["hint_word"])
+                self.assertEqual(v["notes"], [{"class": "hint_word", "message":
+                                 "The assistant may refuse some shell commands in a folder whose path contains 'forge'."}])
+            plain = self.tmp / "code" / "plain-lab"
+            plain.mkdir()
+            v = c.own.get(_B, params={"path": str(plain), "purpose": "adopt"}).json()["verdict"]
+            self.assertEqual((v["ok"], "warnings" in v, "notes" in v), (True, False, False), v)
+
     # AC9
     def test_favourites_round_trip_and_recent_after_adopt(self):
         with self._ctx() as c:

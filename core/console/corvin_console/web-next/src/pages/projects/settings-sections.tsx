@@ -16,6 +16,8 @@ import { AttachSection, MoveFlow, ProtectionSection, RenameField } from "./manag
 import { StorageBadge } from "./badges";
 import { roleLabel } from "./roles";
 import { explain } from "./wizard";
+import { FolderPicker } from "@/components/folder-picker";
+import { parentOf } from "./picker-logic";
 
 const KEY = (id: string) => ["projects", "detail", id] as const;
 const HEALTH = (id: string) => ["projects", "health", id] as const;
@@ -152,12 +154,12 @@ function Location({ d, csrf, actions, notes, where, onChanged }: {
   );
 }
 
-/** "Folder missing": point the list at the folder that now holds this project. Moves nothing. */
+/** "Folder missing": point the list at the folder that now holds this project, chosen in the picker. Moves nothing. */
 function LocateBox({ d, csrf, onChanged }: { d: ProjectDetail; csrf: string; onChanged: () => void }) {
-  const [loc, setLoc] = useState("");
+  const [picking, setPicking] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const mut = useMutation({
-    mutationFn: () => relocateProject(d.id, loc.trim(), csrf),
+    mutationFn: (loc: string) => relocateProject(d.id, loc, csrf),
     onSuccess: (r) => {
       const warn = (r.warnings ?? []).filter(Boolean);
       setMsg(`Found. The list now points at the new folder.${warn.length ? ` Note: ${warn.join(" ")}` : ""}`);
@@ -169,11 +171,11 @@ function LocateBox({ d, csrf, onChanged }: { d: ProjectDetail; csrf: string; onC
     <div className="space-y-2 rounded border border-red-500/40 p-3" data-testid="locate-box">
       <p className="text-sm">Folder missing: {d.reason || "the folder is not where the list says."}</p>
       <p className="text-sm text-muted-foreground">If you moved or renamed it, point the list at it. Nothing is moved or copied.</p>
-      <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(e) => { e.preventDefault(); if (loc.trim()) mut.mutate(); }}>
-        <input className="min-w-0 flex-1 rounded border bg-background px-2 py-1 font-mono text-xs" value={loc} onChange={(e) => { setLoc(e.target.value); setMsg(null); }}
-          aria-label="Where the folder is now" placeholder="e.g. /home/you/code/alpha" data-testid="locate-input" />
-        <Button size="sm" type="submit" disabled={mut.isPending || !loc.trim()} data-testid="locate-submit">Locate folder…</Button>
-      </form>
+      <Button size="sm" variant="outline" disabled={mut.isPending} onClick={() => { setPicking(true); setMsg(null); }} data-testid="locate-open">
+        {mut.isPending ? "Locating…" : "Locate folder…"}
+      </Button>
+      <FolderPicker open={picking} purpose="relocate" projectId={d.id} title={d.title || d.id} initialPath={d.path ? parentOf(d.path) : null}
+        inputTestId="locate-input" onChoose={(p) => { setPicking(false); mut.mutate(p); }} onCancel={() => setPicking(false)} />
       {msg && <p role="status" className="text-sm" data-testid="locate-note">{msg}</p>}
     </div>
   );

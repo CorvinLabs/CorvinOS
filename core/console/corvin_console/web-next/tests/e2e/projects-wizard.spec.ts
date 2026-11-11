@@ -4,6 +4,7 @@
  * the HTTP E2E in CorvinOS). A real project is never created by this spec.
  */
 import { test, expect, type Page } from "@playwright/test";
+import { enterPath, stubPicker } from "./projects-picker-stub";
 
 const CATALOGUE = {
   available: true, projects_root: "/home/u/projects",
@@ -161,14 +162,31 @@ test("step 2 defaults to the Corvin workspace; a create with no path lands there
     .toHaveText("Corvin workspace › plumbline");
 });
 
-test("the projects folder is offered once one is set; Choose a folder reveals the path field and sends only the path", async ({ page }) => {
+test("the projects folder is offered once one is set; Choose a folder opens the picker and sends only the chosen path", async ({ page }) => {
   const st = await stubPlace(page, { rootSet: true });
+  await stubPicker(page);
   const wiz = await toStep2(page);
   await expect(wiz.getByTestId("wizard-place-root")).toBeVisible();
   await expect(wiz.getByTestId("wizard-place-root-label")).toContainText("/home/u/work");
   await wiz.getByTestId("wizard-place-custom").check();
   await expect(wiz.getByTestId("wizard-next")).toBeDisabled();                         // a folder of my own needs the folder
-  await wiz.getByTestId("wizard-location").fill("/home/u/code/plumbline");
+  await expect(wiz.getByTestId("wizard-location")).toHaveCount(0);                     // no bare path field before the picker opens
+  // Cancel keeps the wizard as it was: still step 2, the title kept, no folder
+  await wiz.getByTestId("wizard-folder-choose").click();
+  await page.getByTestId("picker-cancel").click();
+  await expect(page.getByTestId("folder-picker")).toHaveCount(0);
+  await expect(wiz.getByTestId("wizard-step")).toHaveText("Step 2 of 4");
+  await expect(wiz.getByTestId("wizard-title")).toHaveValue("Plumbline");
+  await expect(wiz.getByTestId("wizard-folder-value")).toHaveCount(0);
+  await wiz.getByTestId("wizard-folder-choose").click();
+  await enterPath(page, "wizard-location", "/home/u/code/plumbline");
+  await page.getByTestId("picker-choose").click();
+  await expect(wiz.getByTestId("wizard-folder-value")).toHaveText("/home/u/code/plumbline");
+  // choosing again and cancelling restores the chosen folder
+  await wiz.getByTestId("wizard-folder-choose").click();
+  await page.getByTestId("picker-place").filter({ hasText: "Home" }).click();
+  await page.getByTestId("picker-cancel").click();
+  await expect(wiz.getByTestId("wizard-folder-value")).toHaveText("/home/u/code/plumbline");
   await wiz.getByTestId("wizard-next").click();
   await wiz.getByTestId("wizard-next").click();
   await expect(wiz.getByTestId("review-storage")).toHaveText("Own folder");
@@ -195,15 +213,25 @@ test("a managed id the safety check would refuse brings the wizard back to the i
 
 for (const theme of ["light", "dark"] as const) {
   test(`the wizard's place step at 375 px (${theme})`, async ({ page }) => {
-    const out = process.env.SHOTS_DIR ?? "/tmp/phase1-shots";
+    const out = process.env.SHOTS_DIR ?? "/tmp/phase2-shots";
     await page.setViewportSize({ width: 375, height: 812 });
     await page.addInitScript((t) => { try { localStorage.setItem("corvin-theme", t); localStorage.setItem("corvin-dark-default-v2", "1"); } catch { /* ignore */ } }, theme);
     await stubPlace(page, { rootSet: true });
+    await stubPicker(page);
     const wiz = await toStep2(page);
     await wiz.getByTestId("wizard-place-custom").check();
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
     await page.screenshot({ path: `${out}/wizard-place-${theme}-375.png` });
+    await wiz.getByTestId("wizard-folder-choose").click();
+    await enterPath(page, "wizard-location", "/home/u/code/plumbline");
+    await expect(page.getByTestId("picker-choose")).toBeEnabled();
+    await page.screenshot({ path: `${out}/wizard-picker-${theme}-375.png` });
+    await page.getByTestId("picker-choose").click();
+    await page.screenshot({ path: `${out}/wizard-place-chosen-${theme}-375.png` });
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.screenshot({ path: `${out}/wizard-place-${theme}-1280.png` });
+    await wiz.getByTestId("wizard-folder-choose").click();
+    await expect(page.getByTestId("picker-choose")).toBeEnabled();
+    await page.screenshot({ path: `${out}/wizard-picker-${theme}-1280.png` });
   });
 }

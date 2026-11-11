@@ -191,7 +191,7 @@ def _block(ctx: _Ctx, given: Path, resolved: Path) -> Optional[str]:
 # ── the verdict ──────────────────────────────────────────────────────────────────────────────────
 
 def verdict(tenant_id: str, path: str, purpose: str, project_id: Optional[str] = None) -> dict[str, Any]:
-    """``registry.validate_location`` for *path* and *purpose*, caught into ``{ok, reason_class, message[, warnings]}``."""
+    """``registry.validate_location`` for *path* and *purpose*, caught into ``{ok, reason_class, message[, warnings, notes]}``."""
     try:
         resolved = registry.validate_location(tenant_id, path, purpose=purpose, project_id=project_id)
     except registry.ProjectPathError as exc:
@@ -202,9 +202,10 @@ def verdict(tenant_id: str, path: str, purpose: str, project_id: Optional[str] =
     out: dict[str, Any] = {"ok": True, "message": OK_NEW if purpose in ("create", "move", "import") else OK}
     own = registry.known_managed_root(tenant_id)
     if own is None or resolved.parent != registry._resolve_forgiving(own):
-        warns = [w["class"] for w in registry.location_warnings(resolved)]
-        if warns:
-            out["warnings"] = warns
+        notes = registry.location_warnings(resolved)
+        if notes:
+            out["warnings"] = [w["class"] for w in notes]
+            out["notes"] = notes                             # the sentence per class (the hint word named), for the picker
     return out
 
 

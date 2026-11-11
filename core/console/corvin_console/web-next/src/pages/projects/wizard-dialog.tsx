@@ -7,9 +7,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { FolderField } from "@/components/folder-picker";
 import { useAuth } from "@/lib/auth";
 import { createProject, listProjects, listTemplates, planProject, type ProjectPlan, type TemplateInfo } from "@/lib/api/projects";
 import { featureLabel } from "./encodings";
+import { underRoot } from "./picker-logic";
 import { AccessBadge, ClassBadge, StorageBadge } from "./badges";
 import { ACCESS_META, CLASS_META, CLASS_ORDER, badgeLine, groupTemplates } from "./roles";
 import { INITIAL, canAdvance, choosable, chooseTemplate, explain, featureNames, idProblem, initialPlace, planRequest, templateById, toggleFeature,
@@ -151,8 +153,13 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
                   <span className="min-w-0 flex-1 space-y-1"><span className="block font-medium">Choose a folder…</span>
                     {s.place === "custom" && (
                       <>
-                        <Input data-testid="wizard-location" value={s.location} autoFocus aria-label="Folder (absolute path)"
-                          onChange={(e) => set({ location: e.target.value })} placeholder="e.g. /home/you/code/alpha" className="font-mono text-xs" />
+                        {s.location && (
+                          <span className="block" data-testid="wizard-folder-badge">
+                            <StorageBadge kind={underRoot(s.location, where.data?.managed_root) ? "managed" : "own"} />
+                          </span>
+                        )}
+                        <FolderField value={s.location} onChange={(p) => set({ location: p })} purpose="create" title={s.title.trim() || undefined}
+                          initialPath={where.data?.projects_root_set ? where.data.projects_root : null} inputTestId="wizard-location" testid="wizard-folder" />
                         <span className="block text-xs text-muted-foreground">An empty or new folder of your own.</span>
                       </>
                     )}

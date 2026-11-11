@@ -5,6 +5,7 @@
  * proven by tests/e2e/test_projects_ops_e2e.py over real HTTP.
  */
 import { test, expect, type Page } from "@playwright/test";
+import { enterPath, stubPicker } from "./projects-picker-stub";
 
 const ID = "plumbline";
 const DETAIL = {
@@ -18,16 +19,20 @@ async function base(page: Page) {
   await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: { projects_root: "/home/u/projects", projects: [] } }));
   await page.route(new RegExp(`/v1/console/projects/${ID}$`), (r) => r.fulfill({ json: DETAIL }));
   await page.route(new RegExp(`/v1/console/projects/${ID}/health$`), (r) => r.fulfill({ json: { project_id: ID, ok: true, checks: [] } }));
+  await stubPicker(page);
 }
 
-test("Add existing folder sends the path and the optional title, and is disabled while the path is empty", async ({ page }) => {
+test("Add existing folder sends the folder chosen in the picker and the optional title, and is disabled while none is chosen", async ({ page }) => {
   await base(page);
   let body: { location?: string; title?: string } | null = null;
   await page.route(/\/v1\/console\/projects\/adopt$/, (r) => { body = r.request().postDataJSON(); return r.fulfill({ status: 201, json: { ...DETAIL, id: "lie-copy" } }); });
   await page.goto("/console/app/projects");
   await page.getByTestId("adopt-start").click();
   await expect(page.getByTestId("adopt-submit")).toBeDisabled();
-  await page.getByTestId("adopt-location").fill("/home/u/projects/lie-copy");
+  await expect(page.getByTestId("adopt-location")).toHaveCount(0);              // no bare path field: the picker chooses
+  await page.getByTestId("adopt-folder-choose").click();
+  await enterPath(page, "adopt-location", "/home/u/projects/lie-copy");
+  await page.getByTestId("picker-choose").click();
   await page.getByTestId("adopt-title").fill("Lie detector");
   await page.getByTestId("adopt-submit").click();
   await expect.poll(() => body?.location).toBe("/home/u/projects/lie-copy");
@@ -35,14 +40,16 @@ test("Add existing folder sends the path and the optional title, and is disabled
   await expect(page.getByTestId("adopt-note")).toContainText("lie-copy");
 });
 
-test("a refused adopt shows the server's reason instead of success", async ({ page }) => {
+test("an adopt the server refuses on confirm (the folder changed after the verdict) shows the server's reason", async ({ page }) => {
   await base(page);
-  await page.route(/\/v1\/console\/projects\/adopt$/, (r) => r.fulfill({ status: 422, json: { detail: { message: "the location must be inside this tenant's projects root", reason_class: "path_rule" } } }));
+  await page.route(/\/v1\/console\/projects\/adopt$/, (r) => r.fulfill({ status: 409, json: { detail: { message: "This folder is inside another project, or contains one.", reason_class: "nested" } } }));
   await page.goto("/console/app/projects");
   await page.getByTestId("adopt-start").click();
-  await page.getByTestId("adopt-location").fill("/etc");
+  await page.getByTestId("adopt-folder-choose").click();
+  await enterPath(page, "adopt-location", "/home/u/code/notes");
+  await page.getByTestId("picker-choose").click();
   await page.getByTestId("adopt-submit").click();
-  await expect(page.getByTestId("adopt-note")).toContainText("projects root");
+  await expect(page.getByTestId("adopt-note")).toContainText("inside another project");
 });
 
 test("Rename sends only the title; Move needs a second confirming click and then sends the location", async ({ page }) => {
@@ -58,9 +65,13 @@ test("Rename sends only the title; Move needs a second confirming click and then
   await expect.poll(() => renamed?.title).toBe("A better name");
   await expect(page.getByTestId("manage-note")).toContainText("Only project.yaml changed");
 
-  await expect(page.getByTestId("move-input")).toHaveCount(0);                 // the field opens with "Move…" (Location section, T-0387)
+  await expect(page.getByTestId("move-input")).toHaveCount(0);                 // no bare path field: "Move…" opens the picker
   await page.getByTestId("move-open").click();
-  await page.getByTestId("move-input").fill("/home/u/projects/new");
+  await expect(page.getByTestId("picker-title")).toHaveText('Choose a folder for "Plumbline explainer"');
+  await enterPath(page, "move-input", "/home/u/projects/new");
+  await expect(page.getByTestId("picker-verdict-text")).toHaveText("Can be used — a new folder will be created when you continue.");
+  await page.getByTestId("picker-choose").click();
+  await expect(page.getByTestId("move-dest")).toHaveText("/home/u/projects/new");
   await page.getByTestId("move-start").click();
   expect(moved).toBeNull();                                                    // not sent before the confirmation
   await page.getByTestId("move-confirm").click();

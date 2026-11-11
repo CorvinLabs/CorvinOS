@@ -199,7 +199,9 @@ or `move`/`relocate` without `project_id`, is the same refusal. Windows names an
 `BrowseInputError` (`reason_class = "path_rule"`).
 
 **Verdict = the location rule.** `browse.verdict(tenant, path, purpose, project_id)` is `registry.validate_location`
-caught into `{ok, reason_class, message[, warnings: ["hint_word"]]}`; `ok` reads "Can be used — a new folder will be
+caught into `{ok, reason_class, message[, warnings: ["hint_word"], notes: [{class, message}]]}` (`notes` carries the
+sentence per warning class with the matched hint word, `registry.location_warnings` - "The assistant may refuse some shell
+commands in a folder whose path contains 'forge'." - so the picker shows the server's sentence, T-0393); `ok` reads "Can be used — a new folder will be
 created when you continue." for create/move/import, "Can be used" otherwise. A listing that can be entered carries exactly
 this verdict; a blocked one carries the block's class (so `/etc` answers `system_prefix`, while the rule alone would say
 `top_level` for that two-part path). The mutation re-validates on confirm.
@@ -273,8 +275,17 @@ opened it (React events bubble through the portal; Enter in the path field once 
 folder). **375 px:** a full-screen sheet; places become a horizontal chip row, breadcrumbs collapse to "‹ <parent>" + the
 current name, rows are 44 px, the verdict and the buttons sit in a sticky footer. Cancel leaves the field as it was.
 
-Proof: unit `tests/unit/projects-picker.test.ts` (a scripted keyboard session, the name rule table, verdict per purpose,
-row notes, breadcrumbs, places). The dialogs that open it and the browser specs follow with T-0393.
+**Where it is used (T-0393).** Wizard step 2 "Choose a folder…" (`create`, test id of the advanced field `wizard-location`);
+"Add existing folder" (`adopt`, `adopt-location`); Settings > Location **Move…** (`move` + project id, `move-input`) ->
+"Move here" -> "Yes, move the folder"; **Locate folder…** (`relocate` + project id, `locate-input`; Choose relinks at once,
+moves nothing); "Default place for new projects" > "A folder of my own" (`projects_root`, `place-root-input`). No location
+dialog shows a bare path field before the picker is opened. The import target (T-0402) will use the same component.
+
+Proof: unit `tests/unit/projects-picker.test.ts` (38: a scripted keyboard session, the name rule table, verdict per purpose,
+row notes, breadcrumbs, places); browser on the served bundle with a deterministic stubbed tree (`tests/e2e/projects-picker-stub.ts`):
+`projects-picker.spec.ts` (Choose off until `ok`, foreign/link/unreadable rows not enterable, slow + Retry, keyboard-only path,
+new folder, hint warning, favourites + clear recent, no ADR id or German word, the 375 px sheet, screenshots 1280/375 x both
+themes), and the dialogs' own specs (`projects-wizard`, `-manage`, `-settings`, `-panel`).
 
 ## The fragment engine (`core/projects/fragments.py`)
 
@@ -417,7 +428,8 @@ review is the server's **plan** (`POST /v1/console/projects/plan`): nothing is w
 the plan id (`POST /v1/console/projects`). Create stays disabled unless the plan says `ready`; a conflict or a
 missing plugin is shown in the review, a refusal (path rule, unknown template) is shown as the server's own
 sentence and does not advance. Every decision lives in `pages/projects/wizard.ts` (unit-tested): switching a feature
-on pulls in its requirements first, core is never a choice, an empty folder means the server default.
+on pulls in its requirements first, core is never a choice, an empty folder means the server default. Step 2's own folder is
+chosen in the folder picker (§ Picker).
 
 Proof: `tests/unit/projects-wizard.test.ts` (incl. a mutation: dropping the toggled feature fails it, which it did
 before the fix), `tests/e2e/projects-wizard.spec.ts` (the served bundle, network stubbed: four steps, gating,
@@ -431,7 +443,7 @@ Built tabs: **Overview** (the server's health checks, headline never "all good" 
 (switch on/off; a switch-off that would take dependants away asks first and then sends `cascade`; a switch-on that
 needs more asks first and then sends `accept_dependencies`; a feature whose tenant plugin is not enabled cannot be
 switched on and says why), **Settings** (seven sections since T-0387, see "Settings sections, Where and the default
-place" below). Pure decisions in `pages/projects/inspector-logic.ts` (unit-tested).
+place" below; Move and Locate folder choose the folder in the folder picker, § Picker). Pure decisions in `pages/projects/inspector-logic.ts` (unit-tested).
 
 **Also built** (T-0359): Structure (`GET /projects/{id}/structure`, read-only, two levels, .git left out, symlinks listed
 never followed), Docs (knowledge-base counts from the same read), Knowledge (opens the project's graph with
@@ -457,7 +469,7 @@ storage `managed`/`own`/builtin). Order and what each action touches:
 | Section | Contents | Drawn when |
 |---|---|---|
 | General | title, renamed in place (`PUT /{id}/title`, only `project.yaml`); for 10 s an **Undo** re-sends the old title; id (read-only, copy), template, role, added | always (rename only for `ok`) |
-| Location | storage badge (`Corvin workspace` / `Own folder` / `Projects folder`, `badges.tsx::StorageBadge`, palette tokens only), `display_path` (full path on hover, copy), "Show open command"; **Move…** opens the validated path field (`MoveFlow` in `manage.tsx`, `data-testid=move-input`) -> "Move here" -> "Yes, move the folder" (`POST /{id}/move`; another disk is the server's `cross_device` sentence); `missing`: a box "Folder missing: <reason>" with **Locate folder…** (`POST /{id}/relocate`; the badge and path update without a reload); a `foreign` workspace (`GET /projects` -> `workspace`): "This workspace belongs to another Corvin installation." + "Start a new workspace for this installation" after typing `new workspace` (`PUT /settings/storage {rekey: true}`); an own folder's `location_warnings` sentence | always (Move only `ok`, Locate only `missing`) |
+| Location | storage badge (`Corvin workspace` / `Own folder` / `Projects folder`, `badges.tsx::StorageBadge`, palette tokens only), `display_path` (full path on hover, copy), "Show open command"; **Move…** opens the folder picker (`MoveFlow` in `manage.tsx`, purpose `move`, opens at the folder's parent) -> "New place: <path>" with "Move here" -> "Yes, move the folder" (`POST /{id}/move`; another disk is the server's `cross_device` sentence); `missing`: a box "Folder missing: <reason>" with **Locate folder…** (the picker, purpose `relocate`; Choose sends `POST /{id}/relocate`; the badge and path update without a reload); a `foreign` workspace (`GET /projects` -> `workspace`): "This workspace belongs to another Corvin installation." + "Start a new workspace for this installation" after typing `new workspace` (`PUT /settings/storage {rekey: true}`); an own folder's `location_warnings` sentence | always (Move only `ok`, Locate only `missing`) |
 | Protection | `ProtectionSection` (unchanged) | `ok` |
 | Use in a chat | `AttachSection` (unchanged) | `ok`; the only section of Corvin itself |
 | Maintenance | "<n> checks, <m> failed — <first failed detail>" (`doctorSummary`; doctor notes are not counted) + "Open Overview"; Repair preview -> apply (`POST /{id}/repair`) | `ok`, `invalid` (repair off: needs a readable project.yaml) |
@@ -470,7 +482,7 @@ A `missing` or `invalid` project shows these sections under its state card (Gene
 **List** (`index.tsx`): the header sentence `defaultPlaceSentence()` - "New projects go to the Corvin workspace." or "New
 projects go to <projects_root>." - with **Change…**, which opens **Default place for new projects** (`DefaultPlaceDialog` in
 `manage.tsx`, replaces the old `RootEditor`): "Corvin workspace (recommended)" with the `managed_root` and "— managed by Corvin
-for this workspace", or "A folder of my own" with the validated path field; footer "Projects already somewhere else keep working;
+for this workspace", or "A folder of my own" with "Choose a folder…" (the folder picker, purpose `projects_root`); footer "Projects already somewhere else keep working;
 nothing is moved."; Save -> `PUT /settings/storage`; a refusal stays in the dialog as the server's sentence. Every card has a
 **Where** row (badge + shortened path, full path in `title`; Corvin itself: "Corvin's knowledge base"); a missing card links
 "Locate folder…" to its Settings. The **Where** filter (All places / Corvin workspace / Own folder / Projects folder) appears
@@ -479,8 +491,8 @@ only when the user's own projects have more than one kind. `Projects folder` is 
 (`encodings.ts::whereKind`, separator-aware, case-insensitive for Windows paths).
 
 **Wizard step 2** (`wizard-dialog.tsx`, `wizard.ts`): an optional **Id** field and **Where**: "Corvin workspace (recommended)",
-"Projects folder" (only while one is set) and "Choose a folder…" (reveals the validated path field; the folder picker replaces it
-with E-057). The start is the tenant's default place (`initialPlace`). The first two send `storage`, the third only `location`.
+"Projects folder" (only while one is set) and "Choose a folder…" (a button that opens the folder picker, purpose `create`; the
+chosen path is shown with its storage badge; Cancel keeps the wizard's state). The start is the tenant's default place (`initialPlace`). The first two send `storage`, the third only `location`.
 The review shows the storage badge and the target path. A refusal about the id (`hint_word`, `id_taken`) brings the wizard back to
 step 2 with the sentence under the id field (`idProblem`).
 
@@ -584,7 +596,8 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   location rule allows (purpose `move`); never into itself, never over content, never across disks (409
   `cross_device`). The index follows, then repair regenerates the machine-local files
   (they hold absolute paths); the response carries `repaired_files`. Audit: `project.renamed`, `project.moved`.
-- UI: "Add existing folder" on the list, Rename and Move in the Settings tab (Move needs a second confirming click).
+- UI: "Add existing folder" on the list (the folder chosen in the picker), Rename and Move in the Settings tab (Move: the picker,
+  then a second confirming click).
   Browser proof: `tests/e2e/projects-manage.spec.ts`.
 
 

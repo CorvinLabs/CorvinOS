@@ -8,8 +8,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { test, expect, type Page } from "@playwright/test";
+import { enterPath, stubPicker } from "./projects-picker-stub";
 
-const OUT = process.env.SHOTS_DIR ?? "/tmp/phase1-shots";
+const OUT = process.env.SHOTS_DIR ?? "/tmp/phase2-shots";
 const ID = "alpha";
 const OK = {
   id: ID, path: "/home/u/.local/share/corvin/projects/w-0123456789/alpha", template: "research@1", state: "ok", title: "Alpha research",
@@ -31,6 +32,7 @@ async function stub(page: Page, detail: Record<string, unknown>, list: Record<st
   await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: { projects_root: "/home/u/projects", projects_root_set: false,
     default_storage: "managed", managed_root: "/home/u/.local/share/corvin/projects/w-0123456789", workspace: "ok", projects: [], ...list } }));
   await page.route(/\/v1\/console\/chat\/sessions$/, (r) => r.fulfill({ json: { tenant_id: "_default", count: 0, sessions: [] } }));
+  await stubPicker(page);
   await page.route(new RegExp(`/v1/console/projects/${ID}$`), (r) => {
     if (r.request().method() === "DELETE") { st.removed += 1; return r.fulfill({ json: { removed: ID, files_deleted: false } }); }
     return r.fulfill({ json: st.detail });
@@ -120,10 +122,20 @@ test("a missing folder shows the Location box; Locate folder relinks and the bad
   const box = page.getByTestId("locate-box");
   await expect(box).toContainText("Folder missing: project.yaml is missing or unreadable");
   await expect(page.getByTestId("settings-section").locator("h2")).toHaveText(["General", "Location", "Danger zone"]);
-  await expect(page.getByTestId("locate-submit")).toBeDisabled();
-  await page.getByTestId("locate-input").fill("/home/u/moved/alpha");
-  await page.getByTestId("locate-submit").click();
-  await expect.poll(() => st.relocated).toEqual(["/home/u/moved/alpha"]);
+  await expect(page.getByTestId("locate-input")).toHaveCount(0);               // no bare path field: the picker chooses
+  await page.getByTestId("locate-open").click();
+  await expect(page.getByTestId("folder-picker")).toHaveAttribute("data-purpose", "relocate");
+  await enterPath(page, "locate-input", "/home/u/code/scratch");
+  await expect(page.getByTestId("picker-choose")).toBeEnabled();
+  await page.getByTestId("picker-cancel").click();
+  expect(st.relocated).toEqual([]);                                           // Cancel sends nothing
+  await page.getByTestId("locate-open").click();
+  await enterPath(page, "locate-input", "/home/u/moved/alpha");
+  await expect(page.getByTestId("picker-verdict-text")).toHaveText("This folder does not exist.");
+  await expect(page.getByTestId("picker-choose")).toBeDisabled();
+  await enterPath(page, "locate-input", "/home/u/code/scratch");
+  await page.getByTestId("picker-choose").click();
+  await expect.poll(() => st.relocated).toEqual(["/home/u/code/scratch"]);
   await expect(page.getByTestId("inspector-state")).toHaveText("Ready");
   await expect(page.getByTestId("location-path")).toHaveText("~/moved/alpha");
   await expect(page.getByTestId("storage-badge").first()).toHaveText("Own folder");
@@ -169,6 +181,18 @@ for (const t of ["light", "dark"] as const) {
       expect(overflow).toBeLessThanOrEqual(0);
       fs.mkdirSync(OUT, { recursive: true });
       await page.screenshot({ path: path.join(OUT, `settings-managed-${t}-${s.name}.png`), fullPage: true });
+      await page.getByTestId("move-open").click();
+      await page.getByTestId("picker-place").filter({ hasText: "Home" }).click();
+      await page.locator('[data-testid="picker-row"][data-name="code"]').click();
+      await page.getByTestId("picker-new-name").fill("alpha-new");
+      await expect(page.getByTestId("picker-choose")).toBeEnabled();
+      await page.screenshot({ path: path.join(OUT, `settings-move-picker-${t}-${s.name}.png`) });
+      await page.getByTestId("picker-choose").click();
+      await page.getByTestId("move-start").click();
+      await expect(page.getByTestId("move-confirm")).toBeVisible();
+      await page.getByTestId("location-section").scrollIntoViewIfNeeded();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: path.join(OUT, `settings-move-confirm-${t}-${s.name}.png`) });
     });
     test(`the missing-folder Location box at ${s.name} px (${t})`, async ({ page }) => {
       await theme(page, t);
@@ -181,6 +205,11 @@ for (const t of ["light", "dark"] as const) {
       expect(overflow).toBeLessThanOrEqual(0);
       fs.mkdirSync(OUT, { recursive: true });
       await page.screenshot({ path: path.join(OUT, `settings-missing-${t}-${s.name}.png`), fullPage: true });
+      await page.getByTestId("locate-open").click();
+      await expect(page.getByTestId("folder-picker")).toBeVisible();
+      await page.getByTestId("picker-place").filter({ hasText: "Home" }).click();
+      await page.locator('[data-testid="picker-row"][data-name="code"]').click();
+      await page.screenshot({ path: path.join(OUT, `settings-locate-picker-${t}-${s.name}.png`) });
     });
   }
 }

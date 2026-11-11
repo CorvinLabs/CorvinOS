@@ -7,6 +7,7 @@
  * project with its state, a missing folder is shown as missing, the empty state names what is missing,
  * no ADR id or plugin index id is rendered, and the page fits a 375 px phone in both themes.
  */
+import { enterPath, stubPicker } from "./projects-picker-stub";
 import { test, expect, type Page } from "@playwright/test";
 
 const LIST = {
@@ -107,6 +108,7 @@ const WHERE_LIST = { projects_root: "/home/u/projects", projects_root_set: false
   projects: [CORVIN, W("alpha", "managed", `${MR}/alpha`, "Corvin workspace › alpha"), W("beta", "own", "/home/u/code/beta", "~/code/beta")] };
 
 test("the header names the default place; the dialog saves a folder of my own through the storage route", async ({ page }) => {
+  await stubPicker(page);
   let list: Record<string, unknown> = { ...WHERE_LIST };
   const puts: unknown[] = [];
   await page.route(/\/v1\/console\/projects\/templates/, (r) => r.fulfill({ json: { available: true, templates: [], features: [] } }));
@@ -127,7 +129,15 @@ test("the header names the default place; the dialog saves a folder of my own th
   await expect(dlg).toContainText("Projects already somewhere else keep working; nothing is moved.");
   await dlg.getByTestId("place-root").check();
   await expect(dlg.getByTestId("place-save")).toBeDisabled();                      // a folder of my own needs a folder
-  await dlg.getByTestId("place-root-input").fill("/home/u/work");
+  await expect(dlg.getByTestId("place-root-input")).toHaveCount(0);                // no bare path field: the picker chooses
+  await dlg.getByTestId("place-root-folder-choose").click();
+  await expect(page.getByTestId("folder-picker")).toHaveAttribute("data-purpose", "projects_root");
+  await enterPath(page, "place-root-input", "/home/u/work");
+  await expect(page.getByTestId("picker-choose")).toBeEnabled();
+  expect(puts).toEqual([]);                                                        // Enter in the picker's field never submits the dialog behind it
+  await expect(dlg).toBeVisible();
+  await page.getByTestId("picker-choose").click();
+  await expect(dlg.getByTestId("place-root-folder-value")).toHaveText("/home/u/work");
   await dlg.getByTestId("place-save").click();
   await expect.poll(() => puts).toEqual([{ default_storage: "root", projects_root: "/home/u/work" }]);
   await expect(page.getByTestId("default-place-dialog")).toHaveCount(0);
@@ -135,6 +145,7 @@ test("the header names the default place; the dialog saves a folder of my own th
 });
 
 test("a refused folder keeps the dialog open with the server's sentence", async ({ page }) => {
+  await stubPicker(page);
   await page.route(/\/v1\/console\/projects\/templates/, (r) => r.fulfill({ json: { available: true, templates: [], features: [] } }));
   await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: WHERE_LIST }));
   await page.route(/\/v1\/console\/projects\/settings\/storage$/, (r) => r.fulfill({ status: 422,
@@ -143,7 +154,9 @@ test("a refused folder keeps the dialog open with the server's sentence", async 
   await page.getByTestId("default-place-change").click();
   const dlg = page.getByTestId("default-place-dialog");
   await dlg.getByTestId("place-root").check();
-  await dlg.getByTestId("place-root-input").fill("/etc/x");
+  await dlg.getByTestId("place-root-folder-choose").click();
+  await enterPath(page, "place-root-input", "/home/u/code/notes");
+  await page.getByTestId("picker-choose").click();
   await dlg.getByTestId("place-save").click();
   await expect(dlg.getByTestId("place-error")).toHaveText("This is a system folder; projects cannot live here.");
   await dlg.getByRole("button", { name: "Cancel" }).click();
@@ -182,9 +195,10 @@ test("with one kind of place there is no Where filter", async ({ page }) => {
 for (const theme of ["light", "dark"] as const) {
   for (const s of [{ name: "1280", width: 1280, height: 900 }, { name: "375", width: 375, height: 812 }]) {
     test(`the list with Where rows and the default-place dialog at ${s.name} px (${theme})`, async ({ page }) => {
-      const out = process.env.SHOTS_DIR ?? "/tmp/phase1-shots";
+      const out = process.env.SHOTS_DIR ?? "/tmp/phase2-shots";
       await page.setViewportSize({ width: s.width, height: s.height });
       await page.addInitScript((t) => { try { localStorage.setItem("corvin-theme", t); localStorage.setItem("corvin-dark-default-v2", "1"); } catch { /* ignore */ } }, theme);
+      await stubPicker(page);
       await stub(page, { projects: { ...WHERE_LIST, projects: [...WHERE_LIST.projects,
         { id: "old-study", path: "/home/u/old/old-study", template: "research@1", state: "missing", reason: "project.yaml is missing or unreadable",
           storage: "own", display_path: "~/old/old-study" }] } });
@@ -198,6 +212,15 @@ for (const theme of ["light", "dark"] as const) {
       await expect(page.getByTestId("default-place-dialog")).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
       await page.screenshot({ path: `${out}/default-place-dialog-${theme}-${s.name}.png`, fullPage: false });
+      await page.getByTestId("place-root-folder-choose").click();
+      await page.getByTestId("picker-place").filter({ hasText: "Home" }).click();
+      await page.locator('[data-testid="picker-row"][data-name="code"]').click();
+      await page.getByTestId("picker-new-name").fill("work");
+      await expect(page.getByTestId("picker-choose")).toBeEnabled();
+      await page.screenshot({ path: `${out}/default-place-picker-${theme}-${s.name}.png`, fullPage: false });
+      await page.getByTestId("picker-choose").click();
+      await expect(page.getByTestId("place-root-folder-value")).toHaveText("/home/u/code/work");
+      await page.screenshot({ path: `${out}/default-place-chosen-${theme}-${s.name}.png`, fullPage: false });
     });
   }
 }
