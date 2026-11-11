@@ -167,6 +167,53 @@ its temp dir the OWN home: `tests/e2e/_projects_fixtures.py::Sandbox` and `sandb
 `XDG_DATA_HOME` (on Windows also `USERPROFILE`, `LOCALAPPDATA`, `APPDATA`) into it and restore them. There is no
 test-only mode in the rule.
 
+## Picker: the server-side folder browser (ADR-2322, T-0390)
+
+`core/projects/browse.py` is the pure core (no FastAPI import, no audit call; stdlib only, Python 3.11-safe). The route
+(T-0391) adapts it and owns the budget, the throttle and the audit.
+
+**What is listed.** Directories only - a listing never returns a file name, size, count, mtime or content; a link to a file
+is skipped like a file. Each entry: `name`, `path` (where the row leads), `kind: "dir"`, `hidden`, `symlink`, `readable`
+(`os.access(R_OK|X_OK)`), `project` (`mine` with `id` + `title` from the manifest, `other` - existence only, never an id or a
+title -, or `none`) and an advisory `refusal` (`symlink`, `corvin_home`, `system_prefix`, `other_tenant`, `protected`,
+`hidden`, `nested`, `top_level`). An entry is a link when `entry.is_symlink() or fsutil.dirent_is_junction(entry)`; a link is
+never listed into or entered (`symlink: true`, `refusal: "symlink"`). Hidden entries (dot names, the Windows hidden
+attribute) only with `hidden=1`, never below the own managed root. Sorted case-insensitively; 200 per page, `next_page` is
+the last name of the page, `truncated` when more remain (or more than 20 000 entries were scanned). The listing also
+carries `path`, `display` (`user_dirs.display_path`), `parent`, `breadcrumbs`, `readable` of the folder itself and the
+`verdict`.
+
+**What is never entered** (answers `entries: []` with the reason as the verdict, the class's fixed sentence): a path with a
+linked component (the link walk of check 10, from the anchor or from a stored projects root the path lies below) ->
+`symlink`; at or below a Corvin home, lexically or by `st_dev`/`st_ino` identity of the path or an ancestor -> `corvin_home`
+(an ANCESTOR of a home is listed, the home is a row in it); a system prefix (`user_dirs.is_under_system_prefix`, the
+own-home and `/run/media/<own user>/<label>/…` exemptions) -> `system_prefix`; the managed parent, a workspace below it
+other than the own `managed_root`, or at/below another tenant's registered project -> `other_tenant`. The managed parent is
+one row "Corvin workspaces" whose `path` is the own `managed_root` (no workspace yet: the row carries `refusal:
+"other_tenant"`); no other workspace key is ever named.
+
+**Input rule.** `browse.check_input` - checks 1-3 of ADR-2321 Decision 10 - runs before anything touches the filesystem:
+type, NUL, at most 1000 characters, `registry.normalize_input` (every UNC/device path refused with its sentence "… map the
+share to a drive letter"), absolute, no `..`; nothing is expanded (`~/x` is refused). Purpose outside `registry.PURPOSES`,
+or `move`/`relocate` without `project_id`, is the same refusal. Windows names and length run next. A violation is
+`BrowseInputError` (`reason_class = "path_rule"`).
+
+**Verdict = the location rule.** `browse.verdict(tenant, path, purpose, project_id)` is `registry.validate_location`
+caught into `{ok, reason_class, message[, warnings: ["hint_word"]]}`; `ok` reads "Can be used — a new folder will be
+created when you continue." for create/move/import, "Can be used" otherwise. A listing that can be entered carries exactly
+this verdict; a blocked one carries the block's class (so `/etc` answers `system_prefix`, while the rule alone would say
+`top_level` for that two-part path). The mutation re-validates on confirm.
+
+**Places** (`browse.places`): `managed` ("Corvin workspace", when the tenant has a key), `root` ("Projects folder", when
+set), `user_dirs.user_places()` (home, desktop, documents), `user_dirs.drives()`, then `recent` and `favourite` rows.
+Nothing is created by reading places.
+
+**Picker store** `<tenant_home>/projects/picker.json` (0o600, `atomic_write`, under `picker.lock`):
+`{schema: 1, recent: [...], favourites: [...]}`. `record_recent` keeps the last 8 confirmed locations, newest first,
+deduplicated (`os.path.normcase`); `set_favourites` replaces the list (at most 10 -> "At most 10 favourites.", each judged
+by the input rule); `clear_recent` empties `recent`. Never audited; the `L-projects` erasure handler reports it `SKIPPED`
+(no per-person key, ADR-2321 Decision 13).
+
 ## The fragment engine (`core/projects/fragments.py`)
 
 A catalogue is `<src>/fragments/<id>/fragment.yaml` (+ template files) and `<src>/templates/<id>.yaml`.
