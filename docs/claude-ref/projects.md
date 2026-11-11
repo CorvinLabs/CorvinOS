@@ -245,7 +245,10 @@ host guard of ADR-2313 applies as on every console route). Order of one listing 
 listing answered with a refused verdict of class `corvin_home`, `system_prefix` or `symlink`; at most one record per
 session per minute (an in-memory stamp per session id); written best-effort through an awaited `asyncio.to_thread`.
 Successful listings, favourites and recents are never audited. Proof: `tests/e2e/test_projects_browse_e2e.py` (real HTTP
-through the console router, concurrent requests in one event loop).
+through the console router, concurrent requests in one event loop; registered in `run-all-tests.sh` with
+`tests/projects/test_browse.py`).
+
+![Picker flow](../diagrams/projects-picker-flow.svg)
 
 **The dialog (T-0392, `web-next/src/components/folder-picker.tsx`; every decision in `pages/projects/picker-logic.ts`,
 unit-tested).** `FolderPicker {open, purpose, projectId?, title?, initialPath?, inputTestId?, onChoose(path), onCancel}` and
@@ -285,7 +288,11 @@ Proof: unit `tests/unit/projects-picker.test.ts` (38: a scripted keyboard sessio
 row notes, breadcrumbs, places); browser on the served bundle with a deterministic stubbed tree (`tests/e2e/projects-picker-stub.ts`):
 `projects-picker.spec.ts` (Choose off until `ok`, foreign/link/unreadable rows not enterable, slow + Retry, keyboard-only path,
 new folder, hint warning, favourites + clear recent, no ADR id or German word, the 375 px sheet, screenshots 1280/375 x both
-themes), and the dialogs' own specs (`projects-wizard`, `-manage`, `-settings`, `-panel`).
+themes), and the dialogs' own specs (`projects-wizard`, `-manage`, `-settings`, `-panel`); the running console, nothing
+stubbed (keep-live, opt-in): `projects-picker-live.spec.ts` - refusals for `/etc`, the CORVIN_HOME and a folder under `/tmp`
+(a system prefix: the picker cannot use `/tmp`, so the throwaway folder lives in the home), the verdict before Choose, a real
+adopt, a real move through "New folder here" with the second click, a hand rename relinked with Locate folder, the hint-word
+warning; it removes the entry, exactly its two folders and restores `picker.json`.
 
 ## The fragment engine (`core/projects/fragments.py`)
 
