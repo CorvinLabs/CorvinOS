@@ -301,6 +301,15 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
                     return None
             except Exception:  # noqa: BLE001 - fail closed
                 return None
+        # the title goes into the system prompt too: one line, and judged by the same gate as the rules text; a title the gate
+        # refuses (or cannot judge) is replaced by the project id - the attachment itself stays (REVIEW-0066 m1)
+        title = manifest.one_line(str(man.get("title") or pid)) or pid
+        if title != pid and l34_allows is not None:
+            try:
+                if not l34_allows(title):
+                    title = pid
+            except Exception:  # noqa: BLE001 - fail closed
+                title = pid
     except (OSError, manifest.ManifestError):
         return None
     abs_root = os.path.abspath(root)
@@ -314,12 +323,14 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
     mcp = root / ".corvin" / "local" / "mcp.json"      # the ENGINE's copy only - an adopted repo's own .mcp.json never runs (review R6)
     want = registry.mcp_sha(tenant_id=tenant_id, project_id=pid)   # set only while an MCP feature is on and the engine wrote the file
     mcp_ok = False
-    if want and _regular(mcp, root):
+    # read-only means no tool that writes (ADR-2317): the engine's MCP servers (forge_exec, acs_delegate, skill_create ...) are
+    # handed to the chat only with write access (REVIEW-0068 #4)
+    if want and access == "write" and _regular(mcp, root):
         import hashlib  # noqa: PLC0415
         mcp_ok = hashlib.sha256(mcp.read_bytes()).hexdigest() == want
     return {
         "project_id": pid,
-        "title": str(man.get("title") or pid)[:120],
+        "title": title,
         "add_dir": abs_root,
         "env": {RULES_ENV: "1"},
         "mcp_config": str(mcp) if mcp_ok else None,

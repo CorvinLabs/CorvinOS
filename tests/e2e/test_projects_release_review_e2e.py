@@ -41,7 +41,8 @@ class ReleaseReview(_Base):
     def test_r1_switching_off_the_mcp_feature_removes_the_engine_mcp_files_and_the_chat_stops_loading_them(self):
         from core.projects import attachment
         with self._ctx() as c:
-            plan, r = self._create(c, "Mcp off", features=["core", "claude", "acs"])
+            # write access: a read-only project never hands its MCP servers to a chat (REVIEW-0068 #4)
+            plan, r = self._create(c, "Mcp off", features=["core", "claude", "acs"], assistant_access="write")
             self.assertEqual(r.status_code, 201, r.text)
             pid = plan["project_id"]
             root = Path(c.own.get(f"{_URL}/{pid}").json()["path"])
@@ -74,6 +75,9 @@ class ReleaseReview(_Base):
             a = c.own.post(f"{_URL}/adopt", json={"location": str(repo)}, headers=self._h(c))
             self.assertEqual(a.status_code, 201, a.text)
             pid = a.json()["id"]
+            # write access, so the engine's copy would be handed over (REVIEW-0068 #4): the foreign file still never is
+            self.assertEqual(c.own.put(f"{_URL}/{pid}/settings", json={"assistant_access": "write", "confirm": True},
+                                       headers=self._h(c)).status_code, 200)
             sid = _chat(c)
             c.own.post(f"{_URL}/{pid}/attach", json={"session_id": sid}, headers=self._h(c))
             self.assertIsNone(attachment.spawn_parts("_default", sid, class_allows=lambda x: True)["mcp_config"],

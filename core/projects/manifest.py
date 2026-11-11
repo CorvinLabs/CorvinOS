@@ -34,6 +34,16 @@ DEFAULT_ACCESS = "read"
 WINDOWS_DEVICE_NAMES = frozenset({"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))})
 _TENANT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
 _MAX_BYTES = 64 * 1024
+#: C0/C1 control characters (line breaks, tab, NUL, ESC ...) and the Unicode line/paragraph separators
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def one_line(text: str, limit: int = 120) -> str:
+    """*text* as one plain line for a prompt: control characters and line breaks become spaces, leading markdown heading or
+    quote markers are dropped, runs of whitespace collapse (REVIEW-0066 m1)."""
+    t = _CONTROL.sub(" ", str(text))
+    t = re.sub(r"^[\s#>]+", "", t)
+    return re.sub(r"\s+", " ", t).strip()[:limit]
 
 
 class ManifestError(ValueError):
@@ -53,6 +63,9 @@ def validate(data: Any) -> dict[str, Any]:
     title = data.get("title", pid)
     if not isinstance(title, str) or not title.strip() or len(title) > 120:
         raise ManifestError("title must be a non-empty string of at most 120 characters")
+    if _CONTROL.search(title):
+        # a title is one line: it is rendered into the chat's system prompt (REVIEW-0066 m1)
+        raise ManifestError("title must be one line (no line break or control character)")
     tenant = data.get("tenant")
     if not isinstance(tenant, str) or not _TENANT_RE.match(tenant):
         raise ManifestError("tenant must name the owning tenant")

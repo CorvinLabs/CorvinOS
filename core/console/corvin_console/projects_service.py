@@ -1075,6 +1075,7 @@ def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
         return {**out, "directory_peers": [], "catalogue": {"available": False, "reason": "Corvin is built in; its features are fixed"}}
     # the Location section's hint-word warning (ADR-2321 Decision 15): only an own folder can carry one, a managed path is hint-free
     out["location_warnings"] = registry.location_warnings(Path(str(e["path"]))) if out.get("storage") == "own" else []
+    man: Any = {}
     try:
         man = manifest.load(Path(str(e["path"])))
         out["directory_peers"] = [str(x) for x in ((man.get("directory") or {}).get("peers") or [])]
@@ -1085,8 +1086,11 @@ def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
     except Unavailable as exc:
         return {**out, "catalogue": {"available": False, "reason": str(exc)}}
     act = out["active"]
+    offered = _offered(cat, man) if isinstance(man, dict) else None
     feats = []
     for fid in cat.order:
+        if offered is not None and fid not in offered and fid not in act:
+            continue                                    # not offered by the template: not a switch (REVIEW-0068 #4)
         f = cat.fragments[fid]
         feats.append({"id": fid, "title": f.title, "description": f.description, "active": fid in act,
                       "requires": list(f.requires), "suggests": list(f.suggests),
@@ -1094,6 +1098,13 @@ def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
                       "plugins": [{"plugin": p, "state": plugin_state(tenant_id, p)} for p in f.requires_plugins]})
     return {**out, "catalogue": {"available": True, "features": feats,
                                  "suggestions": F.suggestions(cat, act)}}
+
+
+def _offered(cat: Any, man: dict[str, Any]) -> Optional[set[str]]:
+    """The features the project's template offers, or None (no template, or one the catalogue does not hold: every feature)."""
+    tid = str(man.get("template") or "").split("@", 1)[0]
+    tpl = cat.templates.get(tid) if tid else None
+    return set(tpl.offered) if tpl is not None else None
 
 
 def _load_project(tenant_id: str, project_id: str) -> tuple[Path, dict[str, Any]]:
@@ -1122,6 +1133,12 @@ def set_features(tenant_id: str, project_id: str, changes: dict[str, bool], *, a
     unknown = [f for f in changes if f not in cat.fragments]
     if unknown:
         raise ProjectsError(f"unknown feature(s): {unknown}")
+    offered = _offered(cat, man)
+    if offered is not None:
+        # the template's `offered` holds on a switch as at plan time (REVIEW-0068 #4); switching off is always allowed
+        outside = sorted(f for f, on in changes.items() if on and f not in offered)
+        if outside:
+            raise Conflict(f"this project's template does not offer: {', '.join(outside)}", "not_offered", features=outside)
     if changes.get("core") is False:
         raise Conflict("core cannot be switched off", "core_required")
     active = set(manifest.active_features(man))

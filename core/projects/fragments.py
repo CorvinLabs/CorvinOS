@@ -135,6 +135,35 @@ def _safe_rel(rel: str, what: str) -> str:
     return rel
 
 
+#: file names a template never writes, at any depth: what git, the Claude CLI, direnv or Corvin read as configuration or as a grant
+_PROTECTED_NAMES = frozenset({"project.yaml", ".mcp.json", ".gitattributes", ".gitmodules", ".envrc"})
+#: folders a template never writes into, at any depth (``.github/workflows`` and ``kb/_meta`` as a pair)
+_PROTECTED_DIRS = frozenset({".git", ".claude", ".vscode"})
+#: the one engine-owned folder below ``.corvin/`` a fragment may seed (the acs fragment's notes); ``.corvin/local`` is generated
+_CORVIN_SEEDABLE = (".corvin", "forge")
+
+
+def _norm_part(part: str) -> str:
+    # Windows ignores trailing dots and spaces and case: ".GIT." is .git there
+    return part.rstrip(". ").casefold()
+
+
+def _safe_target(rel: str, what: str) -> str:
+    """A fragment file's ``dst``: a safe relative path (:func:`_safe_rel`) that names no control file (REVIEW-0066 m2) - nothing
+    below ``.git``, ``.claude`` or ``.vscode``, no ``.github/workflows``, nothing below ``.corvin`` except ``.corvin/forge/``, no
+    ``kb/_meta`` (the knowledge base's own configuration), and no ``project.yaml``, ``.mcp.json``, ``.gitattributes``,
+    ``.gitmodules`` or ``.envrc``. The console's own git calls are neutral, the operator's terminal git and claude are not."""
+    _safe_rel(rel, what)
+    parts = [_norm_part(x) for x in rel.replace("\\", "/").split("/") if x not in ("", ".")]
+    bad = (not parts or parts[-1] in _PROTECTED_NAMES or any(x in _PROTECTED_DIRS for x in parts[:-1])
+           or any(parts[i:i + 2] == [".github", "workflows"] for i in range(len(parts) - 1))
+           or any(parts[i:i + 2] == ["kb", "_meta"] for i in range(len(parts) - 1))
+           or (".corvin" in parts[:-1] and tuple(parts[:2]) != _CORVIN_SEEDABLE))
+    if bad:
+        raise FragmentError(f"{what}: {rel!r} names a protected file (git, Claude, editor or Corvin configuration)")
+    return rel
+
+
 def load_catalogue(src: Path) -> Catalogue:
     src = Path(src)
     fdir, tdir = src / "fragments", src / "templates"
@@ -151,7 +180,7 @@ def load_catalogue(src: Path) -> Catalogue:
             if not isinstance(f, dict) or f.get("kind") not in FILE_KINDS:
                 raise FragmentError(f"{fid}: every file needs a kind in {FILE_KINDS}")
             files.append({"src": _safe_rel(f.get("src"), f"{fid}.files.src"),
-                          "dst": _safe_rel(f.get("dst"), f"{fid}.files.dst"), "kind": f["kind"]})
+                          "dst": _safe_target(f.get("dst"), f"{fid}.files.dst"), "kind": f["kind"]})
         claude = raw.get("claude")
         if claude is not None:
             _safe_rel(claude, f"{fid}.claude")
