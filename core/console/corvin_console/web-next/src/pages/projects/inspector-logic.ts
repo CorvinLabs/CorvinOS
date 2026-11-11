@@ -155,7 +155,7 @@ export function settingsSections(d: ProjectDetail, ctx: { workspace?: WorkspaceS
     sec("location", location, hints),
   ];
   if (ok) out.push(sec("protection"), sec("chat"));
-  if (ok || d.state === "invalid") out.push(sec("maintenance", { repair: ok ? ON : off("Repair needs a readable project.yaml.") }));
+  if (ok || d.state === "invalid") out.push(sec("maintenance", { repair: ok ? ON : off("Repair needs a project.yaml that can be read and names this project; the health check says what to fix.") }));
   // Export always opens: its dialog says why a secret project cannot leave; a secret project is never duplicated either
   if (ok) out.push(sec("share", { export: ON, duplicate: d.classification === "secret" ? off("Secret projects cannot be duplicated.") : ON }));
   // Deleting files exists only for a project in the Corvin workspace whose folder is there (ADR-2321 Decision 6); an own folder

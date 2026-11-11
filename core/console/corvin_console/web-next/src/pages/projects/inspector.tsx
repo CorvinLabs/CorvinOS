@@ -243,7 +243,8 @@ function OverviewTab({ projectId, builtin, videosOn, csrf, onChanged }: { projec
           <p className={cn("text-sm font-medium", head.ok ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300")} data-testid="health-headline">
             {health.isLoading ? "Checking…" : head.text}
           </p>
-          {!builtin && (health.data?.checks ?? []).some((c) => !c.ok) && (
+          {/* a project.yaml that names another project is fixed by hand (its row says what to put back): Settings has no repair for it */}
+          {!builtin && (health.data?.checks ?? []).some((c) => !c.ok && c.id !== "manifest") && (
             <Link to={`/app/projects/${encodeURIComponent(projectId)}?tab=settings`} className="text-sm underline" data-testid="health-fix-link">Open Settings to repair</Link>
           )}
         </div>

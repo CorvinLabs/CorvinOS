@@ -264,7 +264,28 @@ class AdoptRenameMove(_Base):
             r = c.own.post(f"{_URL}/adopt", json={"location": str(root)}, headers=self._h(c))
             self.assertEqual(r.status_code, 409, r.text)
             self.assertEqual(self._records(c, "project.adopted", "beta"), [])
-            self.assertIn("already a project", r.text)
+            self.assertIn("already the project", r.text)
+
+    def test_the_refusal_and_the_health_row_say_what_to_put_back_and_following_them_works(self):
+        # REVIEW-0077 N19/N20: the refusal pointed at a repair that refuses this state, and the failed health row said "valid"
+        with self._ctx() as c:
+            pid, root = self._new(c)
+            y = root / "project.yaml"
+            good = y.read_text()
+            y.write_text(good.replace(f"id: {pid}", "id: beta"))
+            r = c.own.post(f"{_URL}/adopt", json={"location": str(root)}, headers=self._h(c))
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertIn(f"Put 'id: {pid}' back into project.yaml", r.text)
+            row = next(x for x in c.own.get(f"{_URL}/{pid}/health").json()["checks"] if x["id"] == "manifest")
+            self.assertFalse(row["ok"])
+            self.assertIn("'beta'", row["detail"])
+            self.assertIn(f"'id: {pid}'", row["detail"])
+            self.assertNotIn("matches the registry", row["detail"])
+            y.write_text(y.read_text().replace("id: beta", f"id: {pid}"))   # what the sentence says
+            self.assertNotIn("manifest", self._failed(c, pid))
+            y.write_text(good.replace("tenant: _default", "tenant: acme"))
+            row = next(x for x in c.own.get(f"{_URL}/{pid}/health").json()["checks"] if x["id"] == "manifest")
+            self.assertIn("another tenant", row["detail"])
 
     def test_a_successful_adopt_closes_its_request(self):
         with self._ctx() as c:

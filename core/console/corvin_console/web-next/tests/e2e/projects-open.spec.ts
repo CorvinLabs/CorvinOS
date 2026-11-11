@@ -149,3 +149,14 @@ test("when every check passes there is nothing to repair and no repair link", as
   await expect(page.getByTestId("health-headline")).toHaveText("Every check passes.");
   await expect(page.getByTestId("health-fix-link")).toHaveCount(0);
 });
+
+test("a project.yaml that names another project says what to put back and offers no repair it cannot do", async ({ page }) => {
+  await stub(page);
+  await page.route(new RegExp(`/v1/console/projects/${ID}/health$`), (r) => r.fulfill({ json: { project_id: ID, ok: false, checks: [
+    { id: "path_exists", ok: true, detail: "the project directory exists", at: "x" },
+    { id: "manifest", ok: false, detail: `project.yaml names the id 'beta', the list has '${ID}' - put 'id: ${ID}' back into project.yaml`, at: "x" }] } }));
+  await page.goto(`/console/app/projects/${ID}`);
+  await expect(page.getByTestId("health-headline")).toContainText("1 of 2 checks need attention.");
+  await expect(page.getByText(`put 'id: ${ID}' back into project.yaml`)).toBeVisible();
+  await expect(page.getByTestId("health-fix-link")).toHaveCount(0);
+});

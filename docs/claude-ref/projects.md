@@ -1258,7 +1258,12 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
 - **Rename** (`PUT /projects/{id}/title`): the title in `project.yaml` only; the id (registry key, KB scope label) never changes.
   The one-line title rule (`manifest.check_title`) runs before the `project.renamed` record, so a refused title (422) leaves
   no record (REVIEW-0074 N13). Adopt of a folder that already has `project.yaml` checks the per-tenant limit and whether the
-  folder is already registered (409 `already_registered`) before its record (REVIEW-0075 N14, REVIEW-0076 N17).
+  folder is already registered (409 `already_registered`) before its record (REVIEW-0075 N14, REVIEW-0076 N17); the
+  refusal names the registered project and says to put its id back into project.yaml or remove and re-add it - repair
+  refuses a project.yaml that names another project, so it is not offered. The health row `manifest` says which id or
+  tenant differs and what to put back, and the detail page shows no "Open Settings to repair" link when that is the only
+  failed check (REVIEW-0077 N19, N20). A chain failure between two opening records of `_audited` closes the ones already
+  open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
   feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,
   so a refusal by the step runner or the registry (a linked `docs/`, the limit, an already registered folder) never leaves a

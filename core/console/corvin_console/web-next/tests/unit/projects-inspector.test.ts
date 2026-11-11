@@ -133,7 +133,7 @@ describe("settings sections (T-0387)", () => {
   it("invalid: the doctor is shown but repair needs a readable project.yaml; no locate (the folder is where the list says)", () => {
     const i: ProjectDetail = { ...base, state: "invalid", reason: "project.yaml does not match the registry entry" };
     expect(ids(i)).toEqual(["general", "location", "maintenance", "danger"]);
-    expect(act(i, "maintenance", "repair")).toEqual({ enabled: false, note: "Repair needs a readable project.yaml." });
+    expect(act(i, "maintenance", "repair")).toEqual({ enabled: false, note: "Repair needs a project.yaml that can be read and names this project; the health check says what to fix." });
     expect(act(i, "location", "locate")).toBeUndefined();
   });
   it("a foreign workspace offers a new workspace in every state; an own folder with a hint word carries the warning", () => {

@@ -173,14 +173,30 @@ def _audit(tenant_id: str, event: str, **details: Any) -> None:
     _tt._chain(tenant_id, event, {k: v for k, v in details.items() if v is not None})
 
 
+def _clip(v: Any, n: int = 40) -> str:
+    """A value read from a project file, for a sentence: one line, at most ``n`` characters."""
+    t = " ".join(str(v).split())
+    return t if len(t) <= n else t[: n - 1] + "\u2026"
+
+
 @contextlib.contextmanager
 def _audited(tenant_id: str, event: str, *records: dict[str, Any]):
     """Audit-first with a closing record: ``outcome=requested`` for each record before the body, then ``applied`` when the body
     returns or ``error`` when it raises - so a refusal that only the body can see (the step runner, the registry under its lock)
     never leaves a bare record that reads like a change (REVIEW-0074 N13, REVIEW-0075 N14, REVIEW-0076 N15-N17). The opening
     record is fail-closed (no chain, no change); a chain failure on the closing one does not mask the body's own result."""
+    opened: list[dict[str, Any]] = []
     for r in records:
-        _audit(tenant_id, event, outcome="requested", **r)
+        try:
+            _audit(tenant_id, event, outcome="requested", **r)
+        except BaseException:
+            for o in opened:                       # a chain that fails between two opening records: close the ones already open
+                try:
+                    _audit(tenant_id, event, outcome="error", **o)
+                except _tt.AuditUnavailable:
+                    pass
+            raise
+        opened.append(r)
     outcome = "error"
     try:
         yield
@@ -886,9 +902,12 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
         # request (REVIEW-0075 N14 - a refusal at the limit used to leave a bare project.adopted in the chain)
         if len(registry.entries(tenant_id)) >= registry.MAX_PROJECTS:
             raise Conflict(f"at most {registry.MAX_PROJECTS} projects per tenant", "limit")
-        if registry.is_registered_path(tenant_id, loc):                       # e.g. a manifest whose id was edited (REVIEW-0076 N17)
-            raise Conflict("this folder is already a project; open it from the list (its project.yaml names another id: "
-                           "the health check repairs that)", "already_registered")
+        known = registry.registered_id_at(tenant_id, loc)                   # e.g. a manifest whose id was edited (REVIEW-0076 N17)
+        if known is not None:
+            # what actually helps (REVIEW-0077 N19): repair refuses a project.yaml that names another id, so it is not offered
+            raise Conflict(f"this folder is already the project '{known}' in the list, but its project.yaml names "
+                           f"'{_clip(man['id'])}'. Put 'id: {known}' back into project.yaml, or remove '{known}' from the list "
+                           "and add the folder again.", "already_registered")
         with _audited(tenant_id, "project.adopted", dict(project_id=man["id"], template=man.get("template"))):
             registry.register(tenant_id, man["id"], loc, man.get("template"))    # writes nothing in the project
         registry.set_protection(tenant_id, man["id"], manifest.legacy_class(man), manifest.DEFAULT_ACCESS)   # a manifest may RAISE the class, never grant itself write access
@@ -1945,7 +1964,15 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
         return {"project_id": project_id, "ok": False, "checks": checks}
     try:
         man = manifest.load(root)
-        add("manifest", man.get("tenant") == tenant_id and man.get("id") == project_id, "project.yaml is valid and matches the registry")
+        # the detail names what differs (REVIEW-0077 N20 - a failed row used to read "valid and matches the registry")
+        if man.get("id") != project_id:
+            add("manifest", False, f"project.yaml names the id '{_clip(man.get('id'))}', the list has '{project_id}' - put "
+                                   f"'id: {project_id}' back into project.yaml")
+        elif man.get("tenant") != tenant_id:
+            add("manifest", False, f"project.yaml names another tenant ('{_clip(man.get('tenant'))}') - put "
+                                   f"'tenant: {tenant_id}' back into project.yaml")
+        else:
+            add("manifest", True, "project.yaml is valid and matches the registry")
     except manifest.ManifestError as exc:
         add("manifest", False, str(exc))
         return {"project_id": project_id, "ok": False, "checks": checks}

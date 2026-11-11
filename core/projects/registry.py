@@ -1000,12 +1000,15 @@ PENDING_STATES = frozenset({"import"})
 
 
 
-def is_registered_path(tenant_id: str, path: Path) -> bool:
-    """Whether a registered project already lives at ``path`` (compared resolved, like :func:`register` does under its lock).
-    A read-only pre-check so a caller can refuse before it records anything; ``register`` still decides."""
+def registered_id_at(tenant_id: str, path: Path) -> Optional[str]:
+    """The id of the registered project that lives at ``path`` (compared resolved, like :func:`register` does under its lock),
+    or None. A read-only pre-check so a caller can refuse - and name the project - before it records anything; ``register``
+    still decides."""
     resolved = _resolve_forgiving(path)
-    return any(_resolve_forgiving(Path(str(e.get("path")))) == resolved
-               for e in load(tenant_id).get("projects", []) if isinstance(e, dict))
+    for e in load(tenant_id).get("projects", []):
+        if isinstance(e, dict) and _resolve_forgiving(Path(str(e.get("path")))) == resolved:
+            return str(e.get("id"))
+    return None
 
 def register(tenant_id: str, project_id: str, path: Path, template: Optional[str], *, pending: Optional[str] = None) -> dict[str, Any]:
     """Add an entry. ``pending="import"`` (ADR-2323 Decision 13 step 2, REVIEW-0061 M12) is the only state an import writes
