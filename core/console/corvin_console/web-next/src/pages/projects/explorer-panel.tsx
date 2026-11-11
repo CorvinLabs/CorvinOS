@@ -156,7 +156,7 @@ export function ExplorerPanel({ projectId, title, onClose, onOpenChanges }: { pr
             : <p className="text-xs text-muted-foreground" data-testid="explorer-tasks-error">The board could not be read just now.</p>)}
           <ul className="space-y-1">
             {running.map((t) => (
-              <li key={t.id}><Link to={`/app/initiatives?scope=project:${encodeURIComponent(projectId)}`} className="block truncate rounded border px-2 py-1 text-sm hover:bg-muted" data-testid="explorer-task">{t.title}</Link></li>
+              <li key={t.id}><Link to={`/app/initiatives?scope=project:${encodeURIComponent(projectId)}&item=${encodeURIComponent(t.id)}`} className="block truncate rounded border px-2 py-1 text-sm hover:bg-muted" data-testid="explorer-task">{t.title}</Link></li>
             ))}
           </ul>
         </section>

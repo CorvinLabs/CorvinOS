@@ -65,6 +65,8 @@ test("the menu gets one new entry and the explorer opens on the snapshot, then s
   await expect(page.getByTestId("explorer-now-empty")).toBeVisible();
   await expect(page.getByTestId("explorer-tasks-empty")).toHaveCount(0);
   await expect(page.getByTestId("explorer-task")).toHaveText("T-0012 Fix VAT rounding");         // only the task that is in progress
+  // the row opens THAT task on the project's board, not the whole board (REVIEW-0074 N12)
+  await expect(page.getByTestId("explorer-task")).toHaveAttribute("href", /\/app\/initiatives\?scope=project:alpha&item=kb%3A1$/);
 });
 
 test("a turn is followed live: working card, tool rows collapse, file rows link, finish, filters", async ({ page }) => {

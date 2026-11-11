@@ -1256,6 +1256,8 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   feature are read from what is on disk, nothing else is written, `.git` included. Proven on a copy of the real
   `LLM_lie_detector` repository (every file hashed before and after; only `project.yaml` is new).
 - **Rename** (`PUT /projects/{id}/title`): the title in `project.yaml` only; the id (registry key, KB scope label) never changes.
+  The one-line title rule (`manifest.check_title`) runs before the `project.renamed` record, so a refused title (422) leaves
+  no record (REVIEW-0074 N13).
 - **Move** (`POST /projects/{id}/move`, body `location`): a same-disk rename to an absent or empty place the
   location rule allows (purpose `move`); never into itself, never over content, never across disks (409
   `cross_device`); renamed into the verified target parent's descriptor (REVIEW-0063 m4, § Grandfathering / From the
@@ -1344,7 +1346,7 @@ fixed full-width sheet. See "UI" below.
 The project menu has one more entry, **Explorer**, and a live dot on its button while an agent works on the project (the dot polls the cheap snapshot
 every 8 s; it never opens a stream). The panel shows, top to bottom: a status line in words (Live, Reconnecting, paused, could not connect), **Now**
 (one card per chat working on the project: current tool, elapsed time, tool count; finished chats collapse to a line), **Tasks in progress** (the project's
-board items), **Activity** (newest first, All / Tools / Files, repeated tool rows collapse to "x N", ids link to Tasks and the Knowledge Graph).
+board items; a row opens that item on the board, `?scope=project:<id>&item=<item id>`), **Activity** (newest first, All / Tools / Files, repeated tool rows collapse to "x N", ids link to Tasks and the Knowledge Graph).
 
 - **Channel** `core/projects/activity.py`: in memory, per (tenant, project), 300 events, lost on restart (`epoch` in every snapshot and in every event id
   `<epoch>:<seq>` makes a restart visible; the panel says so). A closed field set: a tool event carries `detail` derived by ONE function

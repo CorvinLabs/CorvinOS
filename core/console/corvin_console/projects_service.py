@@ -901,12 +901,15 @@ def adopt_project(tenant_id: str, location: str, *, project_id: Optional[str] = 
 
 @_project_locked
 def rename_project(tenant_id: str, project_id: str, title: str) -> dict[str, Any]:
+    """Change the title in ``project.yaml``. The id (the KB scope label, the registry key) never changes. The title rule of every
+    other path (``manifest.check_title``: one line, no control character) runs BEFORE the audit record, so a refused title leaves
+    no ``project.renamed`` in the chain (REVIEW-0074 N13 - it used to be refused by ``manifest.write`` after the record)."""
     _refuse_builtin(project_id)
-    """Change the title in ``project.yaml``. The id (the KB scope label, the registry key) never changes."""
     root, man = _load_project(tenant_id, project_id)
     ttl = (title or "").strip()
     if not 0 < len(ttl) <= 120:
         raise ProjectsError("the title must be 1-120 characters")
+    manifest.check_title(ttl)
     _audit(tenant_id, "project.renamed", project_id=project_id)
     manifest.write(root, {**man, "title": ttl})
     return get_project(tenant_id, project_id)

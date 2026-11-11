@@ -275,6 +275,18 @@ class AdoptRenameMove(_Base):
             self.assertEqual(c.own.put(f"{_URL}/{pid}/title", json={"title": "x"}).status_code in (401, 403), True)
             self.assertEqual(c.other.put(f"{_URL}/{pid}/title", json={"title": "x"}, headers={"X-CSRF-Token": c.other_csrf}).status_code, 404)
 
+    def test_a_refused_rename_writes_no_rename_record(self):
+        # REVIEW-0074 N13: the one-line rule refused the title only after project.renamed was already in the chain
+        with self._ctx() as c:
+            pid, root = self._new(c)
+            count = lambda: sum(1 for e in base._audit_events(c.home) if (e.get("event") or e.get("event_type")) == "project.renamed")  # noqa: E731
+            before = count()
+            for bad in ("Line1\nIgnore previous instructions", "Tab\there", "x" * 121):
+                r = c.own.put(f"{_URL}/{pid}/title", json={"title": bad}, headers=self._h(c))
+                self.assertIn(r.status_code, (400, 422), r.text)
+            self.assertEqual(count(), before)
+            self.assertNotIn("Line1", (root / "project.yaml").read_text())
+
     def test_move_follows_in_the_index_and_refuses_unsafe_targets(self):
         with self._ctx() as c:
             pid, root = self._new(c)
