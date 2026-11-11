@@ -95,6 +95,7 @@ _GIT_TIMEOUT = 300
 DETACHED_WARNING = "Git history needs a branch checked out"
 NO_COMMITS_WARNING = "The repository has no commits yet; git history is not included"
 UNREADABLE_WARNING = "Git history could not be read safely; it is not included"
+SHALLOW_WARNING = "The repository is a shallow clone; its history is incomplete and is not included"
 
 # Decision 17 (English, fixed)
 MESSAGES = {
@@ -195,7 +196,20 @@ def _zip_date(mtime: float) -> tuple[int, int, int, int, int, int]:
 
 
 def _git_base_env() -> dict[str, str]:
-    return changes._env()
+    # a shallow file hides a commit's parents from rev-list AND from bundle create, so the export would carry a history no
+    # repository can import; with it switched off both see every stored object (a parent that is really missing fails the
+    # bundle, which is refused). A repository that has one is left out with SHALLOW_WARNING first (REVIEW-0065 V1).
+    return dict(changes._env(), GIT_SHALLOW_FILE=os.devnull)
+
+
+def _is_shallow(repo: Path) -> bool:
+    """The repository has a ``shallow`` file (a shallow clone, or one written by hand). Read from the git directory the
+    calls are pinned to, never through git (the export's own env switches the file off)."""
+    r = _git(repo, "rev-parse", "--absolute-git-dir", timeout=30)
+    gd = r.stdout.decode("utf-8", "surrogateescape").strip() if r.returncode == 0 else ""
+    if not gd:
+        raise changes.ChangesError("the git directory could not be read")          # -> UNREADABLE_WARNING
+    return os.path.lexists(os.path.join(gd, "shallow"))
 
 
 def _git(repo: Path, *args: str, timeout: int = _GIT_TIMEOUT, stdin=None, stdout=subprocess.PIPE,
@@ -552,6 +566,9 @@ def _history_usable(repo: Path, warnings: list[str]) -> Optional[str]:
         warnings.append(UNREADABLE_WARNING)
         return None
     try:
+        if _is_shallow(repo):
+            warnings.append(SHALLOW_WARNING)
+            return None
         head = _head_branch(repo)
     except (changes.ChangesError, OSError, subprocess.TimeoutExpired):
         warnings.append(UNREADABLE_WARNING)

@@ -33,7 +33,15 @@ def _env() -> dict[str, str]:
     e = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     e.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "LC_ALL": "C",
               "GIT_NO_LAZY_FETCH": "1"})          # git >= 2.44; protocol.allow=never below is the guard for older gits)
+    e.update(_TRUE_HISTORY)
     return e
+
+
+#: git reads the objects as they are stored: no replace ref (``refs/replace/*``) swaps one object for another and no graft
+#: file rewrites a commit's parents. Both change what ``rev-list`` / ``cat-file`` see while ``git bundle create`` packs the
+#: stored objects, so the export's history gate scanned one history and exported another (REVIEW-0065 V1). A path that
+#: names no graft file (the null device) switches grafts off; ``core.useReplaceRefs=false`` in ``_FIXED`` repeats the first.
+_TRUE_HISTORY = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull}
 
 
 _EXEC_KEYS = (re.compile(r"^filter\..+\.(clean|smudge|process)$"),
@@ -48,7 +56,9 @@ _FIXED = (("core.fsmonitor", "false"), ("core.hooksPath", os.devnull), ("diff.ig
           # a partial clone fetches a missing object ON DEMAND from a remote the repository names (uploadpack / ext:: URL): no transport (review round 6)
           ("protocol.allow", "never"),
           # git log/show start gpg for a signed commit when this is on (round 9)
-          ("log.showSignature", "false"), ("commit.gpgSign", "false"))
+          ("log.showSignature", "false"), ("commit.gpgSign", "false"),
+          # the stored objects, never a replacement (REVIEW-0065 V1; GIT_NO_REPLACE_OBJECTS in the environment says the same)
+          ("core.useReplaceRefs", "false"))
 
 
 _FIXED_NAMES = frozenset(k.lower() for k, _ in _FIXED)       # the scan lists its own -c overrides too; they must not be blanked again
@@ -164,6 +174,8 @@ def neutral_git_env(repo: Path, base: dict[str, str]) -> dict[str, str]:
     # outranks both), and no lazy fetch on any path - the commit path's env did not carry it before (review round 7)
     env["GIT_ALLOW_PROTOCOL"] = "none"
     env["GIT_NO_LAZY_FETCH"] = "1"
+    # no replace refs, no grafts, whatever base the caller passes (the knowledge-base engine's env is not built by _env)
+    env.update(_TRUE_HISTORY)
     # The same entries in GIT_CONFIG_PARAMETERS (the older channel `-c` uses): a program that sets GIT_CONFIG_COUNT for itself and so
     # replaces the entries above - the knowledge-base engine does when it commits - still inherits these (review round 11)
     def _sq(t: str) -> str:

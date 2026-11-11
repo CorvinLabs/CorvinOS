@@ -633,6 +633,15 @@ checked out (detached HEAD: part not included, warning "Git history needs a bran
 `git bundle create <tmp> --branches --tags` - never `--all`, so remote-tracking refs, `refs/stash` and `refs/notes/*`
 stay home - and the build checks that `git bundle list-heads` of its own bundle names only `refs/heads/*`, `refs/tags/*`
 and `HEAD`; the object ids it lists are what the history gate scans. Every git call carries `changes.neutral_git_args` and `changes.neutral_git_env`.
+**The stored history, never a rewritten view (REVIEW-0065 V1).** Every git call on a project folder or bundle runs with
+`GIT_NO_REPLACE_OBJECTS=1` and `core.useReplaceRefs=false` (a `refs/replace/*` ref made `rev-list`/`cat-file` scan the
+replacement while `bundle create` packed the original - a committed token exported unscanned) and `GIT_GRAFT_FILE` set
+to the null device (an `info/grafts` line cut a commit out of both views and the export wrote a bundle no repository
+could import); `changes._env()` and `changes.neutral_git_env` both set them. A repository with a `shallow` file (a
+shallow clone, or one written by hand) leaves the part out with the warning "The repository is a shallow clone; its
+history is incomplete and is not included"; the export's own calls also set `GIT_SHALLOW_FILE` to the null device, so
+a shallow file written after that check is ignored by the bundle and the gate alike. The import accepts only
+`refs/heads/*` and `refs/tags/*` (`import_ref_ok`): a bundle naming `refs/replace/*` drops the part.
 
 ### Preview
 
