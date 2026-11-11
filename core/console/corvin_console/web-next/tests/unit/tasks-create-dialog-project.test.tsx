@@ -36,3 +36,32 @@ describe("the create dialog on a project's board", () => {
     expect((screen.getByLabelText("Parent") as HTMLSelectElement).value).toBe("e1");
   });
 });
+
+describe("on any board, the parent decides (REVIEW-0085 N36, N37)", () => {
+  const card = (id: string, kind: string, title: string, ref: string | null, labels: string[] = []) =>
+    ({ id, kind, title, deleted_at: null, external_ref: ref, labels }) as unknown as Item;
+  const MIXED = [
+    card("bi", "initiative", "I-01 · bound", "kb:U1"), card("be", "epic", "E-001 · bound", "kb:U2"),
+    card("mi", "initiative", "manual initiative", null),
+    card("at", "task", "T-0001 · alpha task", "kb:U3@alpha"), card("lt", "task", "T-0002 · legacy", "kb:U4", ["kb", "prj-t"]),
+  ];
+  const openAll = (defaultParent: Item | null = null) => render(<CreateDialog open onOpenChange={() => {}} items={MIXED}
+    defaultParent={defaultParent} busy={false} error={null} onCreate={vi.fn()} />);
+
+  it("a task is offered a KB epic or a manual initiative, never a KB initiative", () => {
+    openAll();
+    fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "task" } });
+    const parents = Array.from((screen.getByLabelText("Parent") as HTMLSelectElement).options).map((o) => o.value);
+    expect(parents).toContain("be");
+    expect(parents).toContain("mi");
+    expect(parents).not.toContain("bi");
+  });
+
+  it("Add child on a project's task from the All view says it has none - new and legacy references alike", () => {
+    openAll(MIXED[3]);
+    expect(screen.getByTestId("create-no-children").textContent).toContain("alpha's knowledge base");
+    cleanup();
+    openAll(MIXED[4]);
+    expect(screen.getByTestId("create-no-children").textContent).toContain("t's knowledge base");
+  });
+});

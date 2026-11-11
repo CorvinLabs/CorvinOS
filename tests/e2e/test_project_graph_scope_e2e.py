@@ -267,6 +267,12 @@ class ProjectGraphScopeE2E(unittest.TestCase):
                          "parent_id": epic.json()["id"], "priority": "high", "deadline": "2026-12-01", "assignee": "bob"}, headers=h)
             self.assertEqual(t.status_code, 201, t.text)
             self.assertEqual((t.json()["priority"], (t.json()["deadline"] or "")[:10], t.json()["assignee"]), ("high", "2026-12-01", "bob"))
+            # from the All view (no scope) a manual child of a project's KB card is refused like on the project's board (REVIEW-0085 N37)
+            for kind, parent in (("subtask", t.json()["id"]), ("story", r.json()["id"])):
+                x = own.post(f"{_TT}/items", json={"kind": kind, "title": "dangling", "parent_id": parent}, headers=h)
+                self.assertEqual(x.status_code, 409, (kind, x.text))
+            manual = own.post(f"{_TT}/items", json={"kind": "initiative", "title": "plain", "priority": "low"}, headers=h)
+            self.assertEqual(manual.status_code, 201, manual.text)
 
 
 if __name__ == "__main__":

@@ -326,6 +326,17 @@ def post_item(body: ItemCreate, rec: Annotated[session_auth.SessionRecord, Depen
                          parent_id=body.parent_id, description=body.description or "",
                          actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint)
             return _keep_local_fields(rec.tenant_id, made, body, rec)
+    if body.parent_id:
+        # a card of a PROJECT's knowledge base takes only that knowledge base's children, whichever board the request comes
+        # from: a manual child of it was missing from the project's board and dangled on the tenant's own (REVIEW-0085 N37)
+        from core.task_tracking import projection as _proj, store  # noqa: PLC0415
+
+        with store.connect(rec.tenant_id) as conn:
+            parent = _call(service._fetch, conn, rec.tenant_id, body.parent_id)
+        if _proj.project_of_card(parent) is not None:
+            raise HTTPException(status_code=409, detail={
+                "message": "a card of a project's knowledge base holds only that knowledge base's children: an epic under an "
+                           "initiative, a task under an epic", "kb_refused": True})
     return _call(service.create, rec.tenant_id, body, actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint)
 
 

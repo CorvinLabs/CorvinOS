@@ -1288,7 +1288,9 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   target; on a project board the parent list follows the knowledge base (an initiative for an epic, an epic for a task) and
   "Add child" under a task says the knowledge base holds no children of a task. Priority, deadline and assignee given at
   create are written onto the projected card right after `kb new` (`_keep_local_fields`, both boards). Without a scope
-  nothing changes (REVIEW-0083 N32, REVIEW-0084 N33-N35). A chain failure between two opening records of `_audited` closes the ones already
+  nothing changes (REVIEW-0083 N32, REVIEW-0084 N33-N35). The parent decides, not the board: a KB card takes only the
+  knowledge base's hierarchy as children, and a PROJECT's KB card takes nothing else - the dialog (`parentFits`, the
+  no-children notice) and `POST /items` (409) apply it from every view, the All view included (REVIEW-0085 N36, N37). A chain failure between two opening records of `_audited` closes the ones already
   open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
   feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,

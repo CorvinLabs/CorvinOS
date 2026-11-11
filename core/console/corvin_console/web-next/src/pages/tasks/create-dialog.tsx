@@ -12,6 +12,26 @@ export const PROJECT_KINDS: ItemKind[] = ["initiative", "epic", "task"];
 /** The knowledge base's own hierarchy: an epic under an initiative, a task under an epic (the server refuses anything else). */
 const KB_PARENT: Partial<Record<ItemKind, (ItemKind | null)[]>> = { initiative: [null], epic: ["initiative"], task: ["epic"] };
 
+const isKbCard = (i: Item) => (i.external_ref ?? "").startsWith("kb:");
+/** The project a KB card belongs to (`kb:<uid>@<project>`, or a legacy `prj-<id>` label), or null. */
+const projectOfCard = (i: Item): string | null => {
+  if (!isKbCard(i)) return null;
+  const at = (i.external_ref ?? "").split("@")[1];
+  if (at) return at;
+  const l = (i.labels ?? []).find((x) => x.startsWith("prj-"));
+  return l ? l.slice(4) : null;
+};
+
+/** Whether `p` can be the parent of a new `kind` - decided by the PARENT, not by the board that is open: a KB card takes only the
+ *  knowledge base's own hierarchy, and a project's KB card takes nothing else (the server refuses both - REVIEW-0085 N36, N37). */
+export function parentFits(kind: ItemKind, p: Item): boolean {
+  if (!(PARENT_RULES[kind] ?? []).includes(p.kind)) return false;
+  if (!isKbCard(p)) return true;
+  const kb = KB_PARENT[kind];
+  if (kb) return kb.includes(p.kind);
+  return projectOfCard(p) === null;                 // a manual child of the tenant's own KB card stays allowed
+}
+
 export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, error, onCreate, project = null }: {
   open: boolean; onOpenChange: (v: boolean) => void; items: Item[]; defaultParent: Item | null;
   busy: boolean; error: string | null; onCreate: (body: ItemCreateBody) => void;
@@ -39,9 +59,11 @@ export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, e
   }, [open, defaultParent]);
 
   const allowed = (project ? KB_PARENT[kind] : undefined) ?? PARENT_RULES[kind];
-  // a task in a project's knowledge base has no children: say so instead of turning the request into another item (REVIEW-0084 N33)
-  const noChildren = !!project && !!defaultParent && !["initiative", "epic"].includes(defaultParent.kind);
-  const parents = useMemo(() => items.filter((i) => !i.deleted_at && allowed.includes(i.kind)), [items, allowed]);
+  // a task in a project's knowledge base has no children: say so instead of turning the request into another item - on its own
+  // board and from any other view (REVIEW-0084 N33, REVIEW-0085 N37)
+  const parentProject = defaultParent ? projectOfCard(defaultParent) : null;
+  const noChildren = !!defaultParent && (!!project || parentProject !== null) && !["initiative", "epic"].includes(defaultParent.kind);
+  const parents = useMemo(() => items.filter((i) => !i.deleted_at && allowed.includes(i.kind) && parentFits(kind, i)), [items, allowed, kind]);
   // Switching the kind can make the chosen parent invalid — drop it rather than
   // keep an id the select cannot show (which left Create stuck disabled).
   useEffect(() => {
@@ -63,7 +85,7 @@ export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, e
         </DialogHeader>
         {noChildren ? (
           <div className="space-y-3">
-            <p className="text-sm" data-testid="create-no-children">A {kindMeta(defaultParent!.kind).label.toLowerCase()} in {project}'s knowledge base has no children. Add a task to its epic instead.</p>
+            <p className="text-sm" data-testid="create-no-children">A {kindMeta(defaultParent!.kind).label.toLowerCase()} in {project ?? parentProject}'s knowledge base has no children. Add a task to its epic instead.</p>
             <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button></DialogFooter>
           </div>
         ) : (
