@@ -1020,6 +1020,29 @@ def set_protection(tenant_id: str, project_id: str, classification: str, assista
         _save(tenant_id, data)
 
 
+_UID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def ensure_uid(tenant_id: str, project_id: str) -> str:
+    """The project's random 128-bit ``uid`` (ADR-2323 Decision 7, REVIEW-0061 m6) - the bundle's ``source_project_uid``. Written
+    into the registry entry the first time it is asked for (first export or duplicate); never derived from a path, a tenant or
+    a user name. Raises :class:`RegistryError` for an unknown project."""
+    import secrets as _secrets  # noqa: PLC0415
+    with _lock(tenant_id):
+        data = load(tenant_id)
+        lst = [e for e in data.get("projects", []) if isinstance(e, dict)]
+        for e in lst:
+            if e.get("id") == project_id:
+                uid = e.get("uid")
+                if isinstance(uid, str) and _UID_RE.match(uid):
+                    return uid
+                e["uid"] = _secrets.token_hex(16)
+                data["projects"] = lst
+                _save(tenant_id, data)
+                return e["uid"]
+    raise RegistryError("no such project")
+
+
 def set_mcp(*, tenant_id: str, project_id: str, sha: Optional[str]) -> None:
     """Record the sha256 of the MCP file the ENGINE wrote while an MCP feature is on (None = none active). A chat loads a project's MCP
     servers only when the file on disk still has this hash: a file that came with an adopted folder, or went stale, never runs."""

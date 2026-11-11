@@ -397,6 +397,76 @@ requested|applied|rebound|recovered|rekeyed|error - never a path or a workspace 
 `project.feature_files_removed` and `project.video_created` are registered with their tasks.
 `project.browse_refused` (WARNING; `reason_class`, `tenant_id` only - never a path or a name): § Picker.
 
+## Share: the project bundle `corvin.project-bundle` v1 (ADR-2323, E-058)
+
+One ZIP carries one project or a set (at most 20). `core/projects/bundle.py` builds and validates it;
+`core/projects/bundle_rules.py` holds the ONE protected-entry list both sides use; the container, ratio and secret
+validators are shared with the Forge Bundle (`core/bundle_common/`, ADR-2323 Decision 11).
+
+### Format (Decision 7)
+
+| Entry | What |
+|---|---|
+| `project-bundle.json` | the envelope, written LAST at the ZIP root: `format: "corvin.project-bundle"`, `format_version: 1`, `created_at`, `exporter {app, version}`, `origin: "unverified"`, `projects[]` |
+| `projects/<id>/project.yaml` | the manifest with the `tenant` key REMOVED, every other key as loaded |
+| `projects/<id>/<files…>` | the directory's regular files minus the never-list and the parts left out |
+| `projects/<id>/.corvin-export/git/history.bundle` | `git bundle create --branches --tags` of the project repository (part `git_history`) |
+| `projects/<id>/.corvin-export/git/docs-history.bundle` | the same for a nested `docs/` repository |
+
+Each project in the envelope: `id`, `title`, `template`, `role`, `classification` (the registry's protection record,
+authoritative), `docs_mode`, `features`, `export_id` (a ULID), `source_project_uid` (32 hex, random, written into the
+registry entry as `uid` on the first export by `registry.ensure_uid` - never derived from a path, tenant or user),
+`parts` (`files`, `kb`, `git_history`, `videos_index`, `generated`, each `{name, included, note?}`), `git {head,
+docs_head?}` (only with history), `left_out [{path, reason}]`, `files [{path, sha256, size}]` (every entry but the
+envelope, the git bundles included), `counts {files, bytes}`. Entries are `ZIP_DEFLATED` (the git bundles stored), mtimes
+as on disk, modes 0o644/0o755 only.
+
+### Never in a bundle (Decision 8) - `bundle_rules.protected_entry(rel)`
+
+| Path (case-insensitive, any depth) | `left_out` reason |
+|---|---|
+| a `.corvin` component (all of `.corvin/**`; repair re-seeds a fragment's `.corvin/` files) | `machine_local` |
+| a `.git` directory or file (a submodule gitfile) | `git_internal` |
+| another `registry.PROTECTED_COMPONENTS` component (`tenants`, `session_ledger`, `.corvin-ledger`, `cel_anchors`, `pending_notifications`) | `protected_name` |
+| `.mcp.json` | `machine_local` |
+| `ENGINE.json`, `docs/scripts/kb*.py` (an engine copy) | `engine_copy` |
+| `kb/graph/**` | `graph_cache` |
+| `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_ed25519*`, `secrets.*`, `credentials.*` | `secret_name` |
+
+The walk adds: a symlink or junction (target and contents never read) -> `link`; a regular file with `st_nlink > 1` ->
+`hard_link`; a directory on another filesystem -> `mount`; a CorvinOS `project.yaml` below the root (mapping,
+`schema: 1`, valid id) -> `nested_manifest`; a `generated` tree (`node_modules`, `.venv`, `__pycache__`, `build`,
+`dist`, `target`) unless the part is on -> `generated`; a name Windows cannot hold (device name, `:<>"|?*\`, control
+character, trailing dot/space, not UTF-8) or one that collides with an earlier entry after casefold/NFC ->
+`unportable_name`; a FIFO, socket or device -> `special_file`. The last two reasons keep the export inside its own V1.
+Files are opened with `O_NOFOLLOW` (Windows: after `fsutil.is_link`) and `fstat` must equal the walk's `os.lstat`
+(`st_dev`, `st_ino`, `st_size`; never `DirEntry.stat()`, which is zero on Windows); a file swapped for a link between the
+walk and the open is left out as `link`, never read. Text files (not an archive by content; no NUL in the first 8 KiB
+unless a UTF-16/32 BOM) are scanned for credential shapes while they are copied; a hit refuses `secret_shape` naming the
+path, never the match, and the ZIP (built through a private temp directory beside the target) is removed. A ZIP inside
+the project is a file: never opened, not scanned.
+
+### Limits (Decision 9)
+
+500 MiB compressed, 2 GiB uncompressed, 50 000 entries, 100:1 per entry above 1 MiB, envelope 4 MiB, 20 projects, path
+depth 64, entry name 1000 bytes (`bundle.LIMITS`). Above a limit: `too_large` naming the largest optional part to leave
+out (`generated`, `kb`, `git_history`, else `files`); 21 projects: `too_many`; a path too deep or too long:
+`path_too_long`.
+
+### Git history part
+
+Only when the directory is a repository whose `.git` lies inside it (`changes.repo_problem` is None), with a branch
+checked out (detached HEAD: part not included, warning "Git history needs a branch checked out") and at least one commit.
+`git bundle create <tmp> --branches --tags` - never `--all`, so remote-tracking refs, `refs/stash` and `refs/notes/*`
+stay home - and the build checks that `git bundle list-heads` of its own bundle names only `refs/heads/*`, `refs/tags/*`
+and `HEAD`. Every git call carries `changes.neutral_git_args` and `changes.neutral_git_env`.
+
+### Preview
+
+`bundle.preview(tenant, ids, parts)` walks the same way and writes nothing: per project the counts (equal to the built
+bundle's, git bundles aside), `left_out`, `parts`, `commits` (`rev-list --count HEAD`), `kb_entries`, plus the note
+"Archives inside the project are not checked for secrets."
+
 ## Console panel (T-0357)
 
 `/app/projects` (sidebar: Projects, below Tasks). **Two registrations** are needed and both exist: `PANELS`
