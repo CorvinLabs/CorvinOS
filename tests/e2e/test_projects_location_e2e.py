@@ -729,7 +729,7 @@ class MoveNamespaceHints(LocationBase):
 
     def test_the_hint_test_is_the_gate_s_own(self):
         from core.projects import hints
-        gate_dir = str(hints.GATE_PATH.parent)
+        gate_dir = str(hints.gate_path().parent)
         sys.path.insert(0, gate_dir)
         try:
             import path_gate  # noqa: PLC0415 - the way the hook's own tests import it
@@ -747,17 +747,23 @@ class MoveNamespaceHints(LocationBase):
 
     # AC4
     def test_an_unloadable_hint_source_refuses_managed_creates(self):
-        from core.projects import hints
+        from core.projects import hints, registry
         copy = self.tmp / "hooks" / "path_gate.py"
         copy.parent.mkdir()
-        shutil.copy2(hints.GATE_PATH, copy)
+        shutil.copy2(hints.gate_path(), copy)
         copy.rename(copy.with_name("path_gate.renamed"))
         with self._ctx() as c, mock.patch.object(hints, "GATE_PATH", copy):
             hints.reset()
             try:
-                r = self._plan(c, "Harmless name")
+                # REVIEW-0064 #1: refused under its own class (the id is not at fault), named in GET / and logged once
+                with self.assertLogs("corvin.projects", level="ERROR") as logged:
+                    r = self._plan(c, "Harmless name")
+                    again = self._plan(c, "Another name")
                 self.assertEqual(r.status_code, 422, r.text)
-                self.assertEqual(r.json()["detail"]["reason_class"], "hint_word")
+                self.assertEqual(r.json()["detail"], {"message": registry.SENTENCES["hint_source"], "reason_class": "hint_source"})
+                self.assertEqual(again.json()["detail"]["reason_class"], "hint_source")
+                self.assertEqual(len([m for m in logged.output if "hint_source" in m]), 1, logged.output)
+                self.assertIn("could not be loaded", c.own.get(_URL).json()["hint_source"])
                 own = self._plan(c, "Harmless name", location=str(self.tmp / "code" / "harmless"))
                 self.assertEqual(own.status_code, 200, "an own folder is never refused for the hint source")
             finally:

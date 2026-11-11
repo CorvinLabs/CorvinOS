@@ -1031,9 +1031,10 @@ def location_settings(tenant_id: str) -> dict[str, Any]:
     except (registry.ProjectPathError, OSError):
         workspace = "unavailable"
     st = registry.settings(tenant_id)
+    from core.projects import hints  # noqa: PLC0415
     return {"default_storage": st["default_storage"], "managed_root": st["managed_root"],
             "projects_root": str(registry.projects_root(tenant_id)), "projects_root_set": st["projects_root"] is not None,
-            "workspace": workspace}
+            "workspace": workspace, "hint_source": hints.available()}
 
 
 def _trashed_summary(e: dict[str, Any]) -> dict[str, Any]:

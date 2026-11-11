@@ -622,6 +622,8 @@ SENTENCES = {
     "wrong_manifest": "This folder does not hold this project.",
     "workspace_foreign": WORKSPACE_FOREIGN,
     "hint_word": "Commands that name this folder would be refused by the assistant's safety check; choose another id.",
+    "hint_source": ("The assistant's safety-check word list could not be loaded, so no new folder can be made in the Corvin "
+                    "workspace; run the project doctor, or choose your own folder."),
 }
 
 
@@ -948,7 +950,9 @@ def validate_location(tenant_id: str, raw: str, *, purpose: Optional[str] = None
         try:
             bad = any(hints.looks_protected(str(f)) for f in forms)
         except hints.HintSourceUnavailable:
-            bad = True                                        # cannot tell: refuse until the doctor's hint_source is fixed
+            # cannot tell (REVIEW-0064 #1): refused under its OWN class - the id is not at fault - until the doctor's
+            # hint_source check passes; an own folder only warns and is never refused for this
+            _refuse("hint_source")
         if bad:
             _refuse("hint_word")
     return resolved

@@ -366,7 +366,7 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 
 | Method, path | Purpose |
 |---|---|
-| `GET /` | the tenant's projects (state `ok`/`missing`/`invalid`, active features, `storage` `managed`/`own`/`builtin`, `display_path` `Corvin workspace › <id>` / `~/…` / OS form) + `default_storage`, `managed_root`, `projects_root`, `projects_root_set`, `workspace` (`ok`/`foreign`/`unavailable`); binds the managed workspace on read (ADR-2321) |
+| `GET /` | the tenant's projects (state `ok`/`missing`/`invalid`, active features, `storage` `managed`/`own`/`builtin`, `display_path` `Corvin workspace › <id>` / `~/…` / OS form) + `default_storage`, `managed_root`, `projects_root`, `projects_root_set`, `workspace` (`ok`/`foreign`/`unavailable`), `hint_source` (null, or why the path gate's hint test cannot be loaded - § Hint words), `trashed` (every trashed list entry, for the scope switcher - § Trash) and `trash_count`; binds the managed workspace on read (ADR-2321) |
 | `GET /templates` | templates, features (requires/suggests), the tenant plugins each needs and their state; `available:false` + reason when the template plugin is not enabled for the tenant |
 | `POST /plan` | `{template, title, [project_id, location, features, docs_mode, storage]}`: no project write; without `location` the place is `storage` when given (`managed`\|`root`, the wizard's step 2 - it replaces the tenant default for this one create; `root` without a stored projects folder is 409 `root_required`, another value 400), else `default_storage` (`<managed_root>/<id>` or `<projects_root>/<id>`); a `location` wins over `storage`; returns `location`, `storage`, the file list with owners, `pulled` dependencies, warnings, conflicts, plugin states, `plan_id` (15 min, in memory); audit `project.plan_created`; 422 `workspace_foreign` when the workspace belongs to another installation |
 | `POST /` | `{plan_id}`: re-validates location, catalogue version and plugins, then writes `project.yaml`, registers, applies, seeds the KB; 201 |
@@ -407,11 +407,20 @@ folder-browser routes (T-0391) and, last, a catch-all that answers 404 `not_foun
 `trash`, `export`, `exports`, `files` keep loading and answer detail, health and move.
 
 **Hint words (ADR-2321 Decision 2, REVIEW-0061 M5).** `core/projects/hints.py` loads `_looks_protected` from
-`corvin_operator/voice/hooks/path_gate.py` by file path (`importlib.util.spec_from_file_location`, once) - no copy
-of `_PROTECTED_HINTS`; a load failure raises `HintSourceUnavailable`. A NEW folder directly in the managed root
-(`create`/`move`/`import`) whose path the gate's test matches is refused 422 `hint_word` ("Commands that name this
-folder would be refused by the assistant's safety check; choose another id."); so is every managed create while the
-hint source cannot be loaded. An own folder only warns: the plan response carries `location_warnings: ["hint_word"]`
+the path gate by file path (`importlib.util.spec_from_file_location`, once) - no copy of `_PROTECTED_HINTS`. The file is
+`hints.gate_path()`: `<repo>/corvin_operator/voice/hooks/path_gate.py` in a checkout, else the wheel's vendored copy
+`<vendor_operator_root()>/voice/hooks/path_gate.py` (hatch_build.py vendors the hook to
+`corvin_core/_vendor/corvin_operator/voice/hooks/`; `corvin_core._operator_bootstrap.vendor_operator_root()` is the one
+place that knows that root - REVIEW-0064 #1, proven by `tests/e2e/test_projects_wheel_e2e.py`, which builds and installs
+the real wheel and creates a managed project over HTTP). A load failure raises `HintSourceUnavailable`. A NEW folder
+directly in the managed root (`create`/`move`/`import`) whose path the gate's test matches is refused 422 `hint_word`
+("Commands that name this folder would be refused by the assistant's safety check; choose another id."). While the hint
+source cannot be loaded, every such NEW managed folder is refused 422 `hint_source` instead ("The assistant's
+safety-check word list could not be loaded, so no new folder can be made in the Corvin workspace; run the project doctor,
+or choose your own folder.") - its own class, because the id is not at fault; `GET /projects` carries the reason in
+`hint_source`, the doctor's `hint_source` check fails and the console logs ONE error (`corvin.projects`) per gate file
+and process. Refusing stays right: without the list nobody can tell whether the new folder's path would make ordinary
+assistant commands fail closed; an own folder (which only warns) and every other operation keep working. An own folder only warns: the plan response carries `location_warnings: ["hint_word"]`
 and the sentence "The assistant may refuse some shell commands in a folder whose path contains '<word>'." in `warnings`.
 
 **External prerequisites are warnings, never a refusal** (`external_warnings`, plan response `warnings`):
