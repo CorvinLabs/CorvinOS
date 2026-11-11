@@ -558,7 +558,7 @@ Only when the directory is a repository whose `.git` lies inside it (`changes.re
 checked out (detached HEAD: part not included, warning "Git history needs a branch checked out") and at least one commit.
 `git bundle create <tmp> --branches --tags` - never `--all`, so remote-tracking refs, `refs/stash` and `refs/notes/*`
 stay home - and the build checks that `git bundle list-heads` of its own bundle names only `refs/heads/*`, `refs/tags/*`
-and `HEAD`. Every git call carries `changes.neutral_git_args` and `changes.neutral_git_env`.
+and `HEAD`; the object ids it lists are what the history gate scans. Every git call carries `changes.neutral_git_args` and `changes.neutral_git_env`.
 
 ### Preview
 
@@ -586,15 +586,22 @@ outcome=error` and `project.export_refused`, and nothing stays under `exports/`.
 loopback pinentry for `--passphrase-fd`); the plain ZIP is deleted. A large sparse file is stored, not deflated (a first
 MiB that deflates beyond 50:1, or a rebuild when an entry ends above 100:1), so every export passes its own V1.
 
-**Secrets in history (Decision 12, T-0410).** The `git_history` part is on by default and ships with its gate: before
-anything is written, `bundle.history_gate` runs `scan_history` on every repository whose history is included (the
-project and a nested `docs/`): `git rev-list --objects --branches --tags` - exactly the bundle's ref set, never `--all` -
-and ONE `git cat-file --batch` process, both under `neutral_git_args` + `neutral_git_env` (no filter, textconv, fsmonitor
-or hook runs; a test plants all of them). Every tree entry and blob path is judged by `bundle_rules.history_secret_path`
+**Secrets in history (Decision 12, T-0410).** The `git_history` part is on by default and ships with its gate. The refs
+are read ONCE (REVIEW-0063 M2): for every repository whose history is included (the project and a nested `docs/`) the
+build first writes `git bundle create --branches --tags` into its private temp directory, then reads the tips of THAT
+FILE (`git bundle list-heads`, object ids only) and `bundle.history_gate` runs `scan_history` on exactly those ids:
+`git rev-list --objects --stdin` fed with the ids - never a ref name, never `--all` - and ONE `git cat-file --batch`
+process, both under `neutral_git_args` + `neutral_git_env` (no filter, textconv, fsmonitor or hook runs; a test plants all
+of them). A commit made while the export runs is therefore either in the bundle and scanned, or in neither; the ZIP is
+opened only after every gate passed. The preview reads `refs/heads` + `refs/tags` once with `for-each-ref`. Every tree
+entry and blob path is judged by `bundle_rules.history_secret_path`
 (secret-name patterns, `.mcp.json`, `.corvin/local/**` - a fragment's tracked `.corvin/forge/README.md` or a `tenants`
-folder travels in the history, only the tree leaves them out), every blob <= 1 MiB by the shared credential scan. A hit
+folder travels in the history, only the tree leaves them out), every blob <= 1 MiB by the shared credential scan, and
+every commit and annotated tag object <= 1 MiB by the same scan over its message (the text after the header, so object
+ids and a commit's `gpgsig` stay out; a tag's PGP/SSH signature block is removed first; REVIEW-0063 m10). A hit
 refuses 409 `secret_in_history` "<path> in the git history looks like it contains a secret. Export without git history,
-or remove it from the history yourself." - the path only, never the commit or the match; history is never rewritten.
+or remove it from the history yourself." - the path only (for a message: "A commit message" / "A tag message"), never
+the commit or the match; history is never rewritten.
 Budget 200 000 objects / 2 GiB read, beyond -> `too_large` naming `git_history`. A commit reachable only from
 `refs/remotes/*` is not in the bundle and does not refuse. The preview reports `history_findings: n`, so the dialog can
 offer "Export without git history" before the request.

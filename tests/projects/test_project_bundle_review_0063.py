@@ -155,5 +155,91 @@ class OtherFilesystem(BundleBase):
                 self.assertNotIn(MARKER.encode(), zf.read(n), n)
 
 
+class HistoryGateRace(BundleBase):
+    """M2: the history gate scans exactly what the git bundle carries - a commit made between the scan and the bundle is never
+    exported unscanned."""
+
+    def _commit_token(self, root: Path) -> None:
+        (root / "leak.txt").write_text(f"token = {JWT}\n")
+        _commit_all(root, "add a token")
+        (root / "leak.txt").unlink()                    # history only: the file walk ran before and never saw it
+
+    def test_a_commit_made_right_before_the_bundle_is_written_is_scanned(self):
+        pid, root = self.project()
+        real = bundle._create_history_bundle
+        fired: list[int] = []
+
+        def hook(repo, target):
+            if Path(repo) == root and not fired:
+                self._commit_token(root)                # the old order: scan already done, the bundle not yet written
+                fired.append(1)
+            return real(repo, target)
+        with mock.patch.object(bundle, "_create_history_bundle", hook):
+            with self.assertRaises(bundle.BundleRefused) as cm:
+                self.build([pid], git_history=True)
+        self.assertTrue(fired)
+        self.assertEqual((cm.exception.reason_class, cm.exception.path), ("secret_in_history", "leak.txt"))
+        self.assertEqual([p for p in self.out.iterdir()], [])          # nothing remains
+
+    def test_a_commit_made_after_the_bundle_is_written_is_neither_bundled_nor_needed(self):
+        pid, root = self.project()
+        real = bundle._create_history_bundle
+
+        def hook(repo, target):
+            out = real(repo, target)
+            if Path(repo) == root:
+                self._commit_token(root)                # after the bundle: not in it, so the gate need not see it
+            return out
+        with mock.patch.object(bundle, "_create_history_bundle", hook):
+            z, _ = self.build([pid], git_history=True)
+        with zipfile.ZipFile(z) as zf:
+            (self.tmp / "h.bundle").write_bytes(zf.read(f"projects/{pid}/{bundle_rules.HISTORY_BUNDLE}"))
+        clone = self.tmp / "clone"
+        _gitc(self.tmp, "clone", "-q", str(self.tmp / "h.bundle"), str(clone))
+        self.assertNotIn("leak.txt", _gitc(clone, "log", "--all", "--name-only", "--format="))
+
+    def test_the_gate_is_called_with_the_tips_of_the_written_bundle(self):
+        pid, root = self.project()
+        seen: list[list[str]] = []
+
+        def gate(repo, prefix, revs=None):
+            seen.append(list(revs or []))
+            bundle.history_gate(repo, prefix, revs=revs)
+        bundle.build("_default", [pid], bundle.Parts(git_history=True), out=self.out / "g.zip", history_scan=gate)
+        head = _gitc(root, "rev-parse", "HEAD").strip()
+        self.assertEqual(len(seen), 1)
+        self.assertIn(head, seen[0])
+
+
+class MessageScan(BundleBase):
+    """m10: credential shapes in commit and annotated tag messages refuse the history like a file in it does."""
+
+    def test_a_token_in_a_commit_message_refuses_the_history(self):
+        pid, root = self.project()
+        _gitc(root, "commit", "-q", "--allow-empty", "-m", f"deploy\n\ntoken {JWT}")
+        with self.assertRaises(bundle.BundleRefused) as cm:
+            self.build([pid], git_history=True)
+        self.assertEqual((cm.exception.reason_class, cm.exception.path), ("secret_in_history", "A commit message"))
+        self.assertNotIn(JWT, cm.exception.message)
+        z, _ = self.build([pid], name="nohist.zip", git_history=False)       # the way out still works
+        self.assertTrue(z.is_file())
+
+    def test_a_key_in_an_annotated_tag_message_refuses_the_history(self):
+        pid, root = self.project()
+        _gitc(root, "tag", "-a", "v1", "-m", f"release\naws_access_key_id = {AWS}")
+        with self.assertRaises(bundle.BundleRefused) as cm:
+            self.build([pid], git_history=True)
+        self.assertEqual((cm.exception.reason_class, cm.exception.path), ("secret_in_history", "A tag message"))
+        pv = bundle.preview("_default", [pid], bundle.Parts())
+        self.assertEqual(pv["projects"][0]["history_findings"], 1)
+
+    def test_plain_messages_and_the_commit_header_do_not_refuse(self):
+        pid, root = self.project()
+        _gitc(root, "commit", "-q", "--allow-empty", "-m", "fix the parser\n\nSigned-off-by: t <t@example.invalid>")
+        _gitc(root, "tag", "-a", "v2", "-m", "release 2")
+        z, _ = self.build([pid], git_history=True)
+        self.assertIn(f"projects/{pid}/{bundle_rules.HISTORY_BUNDLE}", self.names(z))
+
+
 if __name__ == "__main__":
     unittest.main()

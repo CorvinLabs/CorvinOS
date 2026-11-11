@@ -198,12 +198,14 @@ def _git_base_env() -> dict[str, str]:
 
 
 def _git(repo: Path, *args: str, timeout: int = _GIT_TIMEOUT, stdin=None, stdout=subprocess.PIPE,
-         popen: bool = False):
+         popen: bool = False, input: Optional[bytes] = None):
     """Every git call of the bundle: ``neutral_git_args`` + ``neutral_git_env`` (no hooks, no filters, no transport)."""
     env = changes.neutral_git_env(repo, _git_base_env())
     argv = ["git", "--no-pager", "-C", str(repo), *changes.neutral_git_args(repo), *args]
     if popen:
         return subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+    if input is not None:
+        return subprocess.run(argv, capture_output=stdout is subprocess.PIPE, timeout=timeout, env=env, input=input)
     return subprocess.run(argv, capture_output=stdout is subprocess.PIPE, timeout=timeout, env=env, stdin=stdin)
 
 
@@ -562,31 +564,74 @@ def _history_usable(repo: Path, warnings: list[str]) -> Optional[str]:
     return head
 
 
-def _create_history_bundle(repo: Path, target: Path) -> None:
+_OID_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+
+
+def _create_history_bundle(repo: Path, target: Path) -> list[str]:
     """``git bundle create --branches --tags`` (never ``--all``: remote-tracking refs, stash and notes stay home, REVIEW-0062 N4)
-    and the self-check of its ref list."""
+    and the self-check of its ref list. Returns the object ids of the bundle's tips as ``git bundle list-heads`` reads them
+    FROM THE WRITTEN FILE: the history gate scans exactly these (REVIEW-0063 M2), so a ref moved while the bundle was written
+    is either in the file and scanned, or in neither."""
     r = _git(repo, "bundle", "create", str(target), "--branches", "--tags")
     if r.returncode != 0 or not target.is_file():
         raise BundleRefused("unreadable", detail="git could not write the history")
     heads = _git(repo, "bundle", "list-heads", str(target), timeout=60)
     if heads.returncode != 0:
         raise BundleRefused("unreadable", detail="git could not read its own history bundle")
+    oids: list[str] = []
     for line in heads.stdout.decode("utf-8", "replace").splitlines():
-        ref = line.split(" ", 1)[1] if " " in line else ""
+        oid, _sp, ref = line.partition(" ")
         if not (ref == "HEAD" or ref.startswith("refs/heads/") or ref.startswith("refs/tags/")):
             raise BundleRefused("unreadable", detail="the history bundle names a ref other than a branch or a tag")
+        if not _OID_RE.match(oid):
+            raise BundleRefused("unreadable", detail="the history bundle names an object id git did not write")
+        oids.append(oid)
+    if not oids:
+        raise BundleRefused("unreadable", detail="the history bundle names no branch")
+    return list(dict.fromkeys(oids))
+
+
+def _bundle_ref_oids(repo: Path) -> list[str]:
+    """The object ids of ``refs/heads/*`` and ``refs/tags/*`` read ONCE (the preview's ref set; the build scans the ids of
+    its own bundle instead)."""
+    r = _git(repo, "for-each-ref", "--format=%(objectname)", "refs/heads", "refs/tags", timeout=60)
+    if r.returncode != 0:
+        raise BundleRefused("unreadable", detail="git could not list the history")
+    return list(dict.fromkeys(x for x in r.stdout.decode("ascii", "replace").split() if _OID_RE.match(x)))
+
+
+#: where a credential shape in a commit or tag object is reported (Decision 12 names a path; a message has none)
+COMMIT_MESSAGE = "A commit message"
+TAG_MESSAGE = "A tag message"
+_SIG_BLOCK_RE = re.compile(rb"-----BEGIN (?:PGP|SSH) SIGNATURE-----.*?-----END (?:PGP|SSH) SIGNATURE-----\n?", re.S)
+
+
+def _message_of(kind: bytes, data: bytes) -> bytes:
+    """The free text of a commit or tag object (REVIEW-0063 m10): everything after the header (tree/parent/object ids, the
+    commit's ``gpgsig`` continuation lines stay out), with a tag's signature block removed."""
+    _head, sep, body = data.partition(b"\n\n")
+    if not sep:
+        return b""
+    return _SIG_BLOCK_RE.sub(b"", body) if kind == b"tag" else body
 
 
 # ── the history gate (T-0410, ADR-2323 Decision 12) ─────────────────────────────────────────────────────────────────────
 
-def scan_history(repo: Path, *, prefix: str = "", limit: int = 100) -> list[str]:
-    """Every object of ``rev-list --objects --branches --tags`` - exactly the refs the bundle carries - read through ONE
-    ``cat-file --batch`` process, both under ``neutral_git_args`` + ``neutral_git_env`` (no filter, textconv or hook can run).
-    A tree entry or blob path that ``bundle_rules.history_secret_path`` names, or a blob <= 1 MiB with a credential shape,
-    is a finding: its path (``prefix`` + path), never the commit or the match. Budget: ``max_history_objects`` objects and
-    ``max_history_read_bytes`` read; beyond -> ``too_large`` naming the ``git_history`` part."""
+def scan_history(repo: Path, *, prefix: str = "", limit: int = 100, revs: Optional[list[str]] = None) -> list[str]:
+    """Every object of ``rev-list --objects <revs>`` read through ONE ``cat-file --batch`` process, both under
+    ``neutral_git_args`` + ``neutral_git_env`` (no filter, textconv or hook can run). ``revs`` are object ids, never ref
+    names: the build passes the tips of its own written bundle (REVIEW-0063 M2); without them the ``refs/heads`` and
+    ``refs/tags`` ids are read once (the preview). A tree entry or blob path that ``bundle_rules.history_secret_path``
+    names, a blob <= 1 MiB with a credential shape, or a commit or tag message with one (REVIEW-0063 m10) is a finding: its
+    path (``prefix`` + path; a message is "A commit message" / "A tag message"), never the commit or the match. Budget:
+    ``max_history_objects`` objects and ``max_history_read_bytes`` read; beyond -> ``too_large`` naming ``git_history``."""
     import threading  # noqa: PLC0415
-    r = _git(repo, "rev-list", "--objects", "--branches", "--tags", timeout=_GIT_TIMEOUT)
+    tips = list(revs) if revs is not None else _bundle_ref_oids(repo)
+    if any(not _OID_RE.match(x) for x in tips):
+        raise BundleRefused("unreadable", detail="git could not list the history")
+    if not tips:
+        return []
+    r = _git(repo, "rev-list", "--objects", "--stdin", timeout=_GIT_TIMEOUT, input="".join(f"{x}\n" for x in tips).encode())
     if r.returncode != 0:
         raise BundleRefused("unreadable", detail="git could not list the history")
     objs: list[tuple[str, Optional[str]]] = []
@@ -600,7 +645,7 @@ def scan_history(repo: Path, *, prefix: str = "", limit: int = 100) -> list[str]
     findings: list[str] = []
 
     def found(path: str) -> None:
-        shown = prefix + path
+        shown = path if path in (COMMIT_MESSAGE, TAG_MESSAGE) else prefix + path
         if shown not in findings:
             findings.append(shown)
 
@@ -643,6 +688,12 @@ def scan_history(repo: Path, *, prefix: str = "", limit: int = 100) -> list[str]
                 for name in _tree_names(data, len(sha) // 2):
                     if bundle_rules.history_secret_path(base + name):
                         found(base + name)
+            elif kind in (b"commit", b"tag") and size <= LIMITS["max_history_blob_scan_bytes"]:
+                data = _read_exact(out, size)
+                try:
+                    _secrets.scan_bytes(_message_of(kind, data), "message")
+                except BundleCheckError:
+                    found(COMMIT_MESSAGE if kind == b"commit" else TAG_MESSAGE)
             else:
                 if kind == b"blob" and path and bundle_rules.history_secret_path(path):
                     found(path)
@@ -690,8 +741,8 @@ def _tree_names(data: bytes, idlen: int = 20) -> list[str]:
     return names
 
 
-def history_gate(repo: Path, prefix: str = "") -> None:
-    hits = scan_history(repo, prefix=prefix, limit=1)
+def history_gate(repo: Path, prefix: str = "", revs: Optional[list[str]] = None) -> None:
+    hits = scan_history(repo, prefix=prefix, limit=1, revs=revs)
     if hits:
         raise BundleRefused("secret_in_history", hits[0])
 
@@ -959,10 +1010,12 @@ def _write_zip(tenant_id, loaded, walks, parts: Parts, histories, tmp_zip: Path,
 
 def build(tenant_id: str, project_ids: list[str], parts: Parts, *, out: Path,
           progress: Optional[Callable[[int, int], None]] = None,
-          history_scan: Optional[Callable[[Path, str], None]] = None) -> BuildResult:
+          history_scan: Optional[Callable[..., None]] = None) -> BuildResult:
     """Build the bundle into *out* (written through a private temp file in the same directory; nothing remains on a
-    refusal). The history gate (T-0410, :func:`history_gate`; ``history_scan`` replaces it in tests only) runs on every
-    repository whose history is included, before anything is written."""
+    refusal). The history gate (T-0410, :func:`history_gate`; ``history_scan`` replaces it in tests only, called as
+    ``(repo, prefix, revs=...)``) runs on every repository whose history is included, AFTER its git bundle is written and
+    on exactly the tips that bundle lists (REVIEW-0063 M2: one read of the refs, never a second), before the ZIP is
+    opened."""
     out = Path(out)
     ids = _ids(project_ids)
     warnings: list[str] = []
@@ -982,7 +1035,7 @@ def build(tenant_id: str, project_ids: list[str], parts: Parts, *, out: Path,
             progress(done_files[0], done_files[1])
 
     try:
-        # git history first: bundles are created (and, with the T-0410 gate, scanned) before the ZIP is opened
+        # git history first: each bundle is written, then exactly its tips are scanned (T-0410 gate), before the ZIP is opened
         histories: dict[str, list[tuple[str, Path, str, str]]] = {}
         if parts.git_history:
             for (pid, root, _e, _m) in loaded:
@@ -993,9 +1046,9 @@ def build(tenant_id: str, project_ids: list[str], parts: Parts, *, out: Path,
                         if key == "head":
                             break
                         continue
-                    (history_scan or history_gate)(repo, "docs/" if key == "docs_head" else "")
                     target = work / f"{pid}-{key}.bundle"
-                    _create_history_bundle(repo, target)
+                    tips = _create_history_bundle(repo, target)
+                    (history_scan or history_gate)(repo, "docs/" if key == "docs_head" else "", revs=tips)
                     rows.append((inner, target, key, head))
                 histories[pid] = rows
         hist_bytes = sum(t.stat().st_size for rows in histories.values() for _i, t, _k, _h in rows)
