@@ -17,8 +17,15 @@ Scopes (ADR-2316): a tenant projects its bound KB (scope ``None``) and, later, o
 project (``payload["scope"] = <project id>``). Every item of a project carries the label
 ``prj-<id>``; the bound KB's items carry none. ``kb_items``, ``diff`` and ``apply`` only
 ever see the items of their own scope, so the orphan pass of one KB can never archive
-another KB's items. The reference form stays ``kb:<uid>`` (uids are ULIDs, unique across
-KBs). A KB cannot plant a ``prj-*`` label on its own items: such labels are dropped.
+another KB's items. A KB cannot plant a ``prj-*`` label on its own items: such labels are dropped.
+
+Stored reference (REVIEW-0066 M3): uids are unique WITHIN a KB, not across KBs - Duplicate and
+import-as-a-copy copy a project KB 1:1, and so does a hand-copied folder. The store keys
+``UNIQUE (tenant_id, external_ref)``, so the bound KB keeps ``kb:<uid>`` and a project scope stores
+``kb:<uid>@<scope>`` (:func:`store_ref`). Payloads, ``diff``/``apply`` and :func:`kb_items` keep
+speaking the payload form ``kb:<uid>``; :func:`kb_uid` gives the uid of either form. A project row
+written before this change (``kb:<uid>`` plus its ``prj-*`` label) is still found by its scope and
+updated in place - it is not re-created.
 """
 from __future__ import annotations
 
@@ -55,6 +62,20 @@ def scope_label(scope: Optional[str]) -> Optional[str]:
     return f"{SCOPE_PREFIX}{scope}" if scope else None
 
 
+def store_ref(ref: str, scope: Optional[str]) -> str:
+    """The ``external_ref`` a payload ref is stored under: ``kb:<uid>`` for the bound KB, ``kb:<uid>@<scope>`` for a project."""
+    return f"{ref}@{scope}" if scope else ref
+
+
+def kb_uid(external_ref: str) -> str:
+    """The KB uid of a stored reference (``kb:<uid>`` or ``kb:<uid>@<scope>``)."""
+    return external_ref.split(":", 1)[1].split("@", 1)[0]
+
+
+def _payload_ref(external_ref: str) -> str:
+    return external_ref.split("@", 1)[0]
+
+
 def in_scope(labels: Any, scope: Optional[str]) -> bool:
     """True when an item with these labels belongs to *scope* (``None``: carries no ``prj-*``)."""
     labels = labels if isinstance(labels, list) else []
@@ -83,15 +104,27 @@ def _desired(it: dict[str, Any], ref_to_id: dict[str, str], scope: Optional[str]
 
 
 def kb_items(tenant_id: str, namespace: str = "kb", scope: Optional[str] = None) -> dict[str, dict[str, Any]]:
-    """Every item of *namespace* in *scope*, deleted ones included, keyed by external_ref."""
+    """Every item of *namespace* in *scope*, deleted ones included, keyed by the PAYLOAD ref ``kb:<uid>`` (the scope suffix of
+    the stored ``external_ref`` removed; the row keeps its real ``external_ref``)."""
     if not store.exists(tenant_id):
         return {}
     prefix = f"{namespace}:"
     with store.connect(tenant_id) as conn:
         rows = conn.execute("SELECT * FROM items WHERE tenant_id=? AND external_ref LIKE ?",
                             (tenant_id, prefix.replace("_", "\\_") + "%")).fetchall()
-    out = {r["external_ref"]: service._row(r) for r in rows}
-    return {ref: row for ref, row in out.items() if in_scope(row.get("labels"), scope)}
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        row = service._row(r)
+        if not in_scope(row.get("labels"), scope):
+            continue
+        ext = row["external_ref"]
+        if "@" in ext and ext.split("@", 1)[1] != scope:
+            continue                                 # another scope's reference (a label edited by hand): never this scope's row
+        key = _payload_ref(ext)
+        if key in out and out[key]["external_ref"] == store_ref(key, scope):
+            continue                                 # the current form wins over a pre-REVIEW-0066 row of the same uid
+        out[key] = row
+    return out
 
 
 def diff(tenant_id: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -145,7 +178,7 @@ def apply(tenant_id: str, payload: dict[str, Any], *, actor: str = service.KB_AC
             body = ItemCreate(kind=want["kind"], title=want["title"], parent_id=want["parent_id"],
                               status=want["status"])
             row = service.create(tenant_id, body, actor=actor, source="kb",
-                                 extra={"external_ref": it["ref"], "category": "kb", "labels": want["labels"],
+                                 extra={"external_ref": store_ref(it["ref"], scope), "category": "kb", "labels": want["labels"],
                                         "status_reason": want["status_reason"]})
             ref_to_id[it["ref"]] = row["id"]
             counts["created"] += 1

@@ -627,11 +627,12 @@ def _project_sources_contained(docs: Path) -> bool:
         return False
 
 
-def project_kbs(tenant_id: str) -> list[tuple[str, Path]]:
+def project_kbs(tenant_id: str, *, only: str | None = None) -> list[tuple[str, Path]]:
     """``[(project_id, docs_path)]`` of this tenant's registered projects whose manifest names
     this tenant and turns ``kb`` on, and whose ``docs/`` is a knowledge base. Anything else is
     skipped (logged at debug), never guessed: a path resolving into ANOTHER tenant's home, a
-    manifest of another tenant, a duplicate id."""
+    manifest of another tenant, a duplicate id. ``only``: check just that registry entry (a request
+    names one project; the other projects' folders and .git walks are not touched - REVIEW-0066 M2)."""
     try:
         reg = json.loads(project_registry_path(tenant_id).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
@@ -650,6 +651,8 @@ def project_kbs(tenant_id: str) -> list[tuple[str, Path]]:
         pid = e.get("id") if isinstance(e, dict) else None
         raw = e.get("path") if isinstance(e, dict) else None
         if not isinstance(pid, str) or not _PROJECT_ID.match(pid) or pid in seen or not isinstance(raw, str):
+            continue
+        if only is not None and pid != only:
             continue
         if e.get("pending") or e.get("storage") == "trashed":
             continue                    # an import that is not applied yet (ADR-2323 D13, REVIEW-0061 M12); in the trash (ADR-2321 D12)
@@ -978,7 +981,7 @@ def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = ""
         raise KbTransitionRefused(f"board moves are paused: uncommitted knowledge-base edits {pending[:5]}")
     service._chain(tenant_id, "task_item.kb_transition", {**details, "outcome": "requested"})  # audit-first
     # `--opt=value`: a reason starting with "-" can never be read as another option
-    args = ["task", ref.split(":", 1)[1], to_kb, "--via=console", f"--actor={actor}"]
+    args = ["task", projection.kb_uid(ref), to_kb, "--via=console", f"--actor={actor}"]
     if reason:
         args.append(f"--reason={reason}")
     if dod:
@@ -1206,7 +1209,7 @@ def _kb_ref_of(tenant_id: str, item_id: str) -> tuple[str, str, Optional[str]]:
     ref = str(cur.get("external_ref") or "")
     if not ref.startswith(service.KB_REF_PREFIX):
         raise KbTransitionRefused("the parent is not a knowledge-base item")
-    return cur["kind"], ref.split(":", 1)[1], _scope_of_item(cur)
+    return cur["kind"], projection.kb_uid(ref), _scope_of_item(cur)
 
 
 def create_item(tenant_id: str, *, kind: str, title: str, parent_id: Optional[str] = None,

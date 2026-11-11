@@ -140,6 +140,33 @@ class ProjectionScopeE2E(unittest.TestCase):
             self.assertTrue(scoped, f"no scoped projection record among {len(recs)}")
             self.assertNotIn("scope", (scoped[-1].get("details") or {}).get("_dropped_fields", []))
 
+    def test_the_same_uids_in_two_project_scopes_both_reach_the_board(self):
+        """REVIEW-0066 M3: a copied KB carries the original's uids; a pre-change project row is updated in place."""
+        with _sandbox(self.tmp / "s") as (client, _csrf, _home, _):
+            from core.task_tracking import projection, store
+
+            first = projection.apply("_default", _export(self.proj, "alpha"))
+            second = projection.apply("_default", _export(self.proj, "alpha-copy"))
+            self.assertEqual((first["state"], second["state"]), ("ok", "ok"), (first, second))
+            self.assertEqual(second["created"], 4, second)
+            a, b = projection.kb_items("_default", scope="alpha"), projection.kb_items("_default", scope="alpha-copy")
+            self.assertEqual(set(a), set(b), "both scopes hold every uid under the payload ref")
+            self.assertTrue(all(r["external_ref"].endswith("@alpha-copy") for r in b.values()))
+            self.assertEqual(projection.diff("_default", _export(self.proj, "alpha")), [])
+            self.assertEqual(projection.diff("_default", _export(self.proj, "alpha-copy")), [])
+            ref = next(iter(a))
+            self.assertEqual(projection.kb_uid(a[ref]["external_ref"]), ref.split(":", 1)[1])
+
+            # a project row written before the change (kb:<uid> + its prj label) is found and kept, not re-created
+            with store.connect("_default") as conn:
+                conn.execute("UPDATE items SET external_ref = substr(external_ref, 1, instr(external_ref, '@') - 1) "
+                             "WHERE tenant_id='_default' AND external_ref LIKE '%@alpha'")
+                conn.commit()
+            ids = {k: v["id"] for k, v in projection.kb_items("_default", scope="alpha").items()}
+            again = projection.apply("_default", _export(self.proj, "alpha"))
+            self.assertEqual((again["created"], again["archived"]), (0, 0), again)
+            self.assertEqual({k: v["id"] for k, v in projection.kb_items("_default", scope="alpha").items()}, ids)
+
     def test_a_kb_cannot_plant_a_scope_label_and_invalid_scopes_are_refused(self):
         t = next((self.bound / "kb" / "tasks").glob(f"{self.bound_ids['t1']}-*.md"))
         t.write_text(t.read_text(encoding="utf-8").replace("title:", "labels: [prj-alpha, urgent]\ntitle:", 1),

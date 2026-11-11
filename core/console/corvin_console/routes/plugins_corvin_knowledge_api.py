@@ -76,22 +76,58 @@ def save_config(config: Dict[str, Any]) -> None:
 # KNOWLEDGE GRAPH DATA
 # ────────────────────────────────────────────────────────
 
-def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
+#: a graph file above this size is refused, never read (REVIEW-0066 M2): the bound Corvin-Knowledge graph is ~1.6 MB for ~2000
+#: entities, so 32 MiB leaves room for a large KB and still keeps one request from parsing a 95 MB file a project folder carries
+_GRAPH_MAX_BYTES = 32 * 1024 * 1024
+#: parsed graph files by (path, mtime_ns, size): a document read does not re-parse entities.jsonl on every click
+_JSONL_CACHE: "dict[str, tuple[tuple[int, int], List[Dict[str, Any]]]]" = {}
+_JSONL_CACHE_MAX = 8
+_JSONL_LOCK = __import__("threading").Lock()
+
+
+class GraphTooLarge(ValueError):
+    """A ``kb/graph`` file is larger than :data:`_GRAPH_MAX_BYTES`."""
+
+
+def _parse_jsonl(path: Path) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    if not path.exists():
-        return rows
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows
+
+
+def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    """The rows of one graph file; [] when it is absent or unreadable. Raises :class:`GraphTooLarge` above the size limit.
+    Cached by mtime and size - callers must not mutate the rows they get."""
     try:
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rows.append(json.loads(line))
-                except ValueError:
-                    continue
+        st = path.stat()
     except OSError:
-        return rows
+        return []
+    if st.st_size > _GRAPH_MAX_BYTES:
+        raise GraphTooLarge(f"{path.name} is too large to read ({st.st_size} bytes, the limit is {_GRAPH_MAX_BYTES})")
+    key, stamp = str(path), (st.st_mtime_ns, st.st_size)
+    with _JSONL_LOCK:
+        hit = _JSONL_CACHE.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+    try:
+        rows = _parse_jsonl(path)
+    except OSError:
+        return []
+    with _JSONL_LOCK:
+        _JSONL_CACHE.pop(key, None)
+        _JSONL_CACHE[key] = (stamp, rows)
+        while len(_JSONL_CACHE) > _JSONL_CACHE_MAX:
+            _JSONL_CACHE.pop(next(iter(_JSONL_CACHE)))
     return rows
 
 
@@ -102,7 +138,11 @@ def load_graph_data(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     resolves to a node that exists."""
     config = config or load_config()
     graph_dir = Path(config["repo_path"]).expanduser() / "kb" / "graph"
-    _entities_raw = _read_jsonl(graph_dir / "entities.jsonl")
+    try:
+        _entities_raw = _read_jsonl(graph_dir / "entities.jsonl")
+        _relations_raw = _read_jsonl(graph_dir / "relations.jsonl")
+    except GraphTooLarge as exc:
+        return {"entities": [], "relations": [], "duplicate_rows": 0, "graph_error": str(exc)}
     entities = [
         {
             "id": row.get("uid") or row.get("id", ""),
@@ -121,7 +161,7 @@ def load_graph_data(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             "to_id": row.get("dst", ""),
             "relation": row.get("rel", "relates_to"),
         }
-        for row in _read_jsonl(graph_dir / "relations.jsonl")
+        for row in _relations_raw
         if not row.get("external") and row.get("resolved")
     ]
     # entities.jsonl is append-only in practice (the sync writes new rows for
@@ -296,7 +336,7 @@ def _scoped_config(tenant_id: str, project: Optional[str]) -> Dict[str, Any]:
     config = effective_config(tenant_id)
     if project is None or project == "corvin":      # the built-in Corvin project IS the tenant's own graph (CONCEPT-0129)
         return config
-    for pid, docs in kb_projection.project_kbs(tenant_id):
+    for pid, docs in kb_projection.project_kbs(tenant_id, only=project):   # resolves (and walks the .git of) this project only
         if pid == project:
             return {**config, "repo_path": str(docs)}
     raise HTTPException(status_code=404, detail="no such project")
@@ -320,6 +360,8 @@ def graph_payload(tenant_id: str, project: Optional[str]) -> Dict[str, Any]:
         data = load_graph_data(config)
         if not (repo / "kb" / "graph" / "entities.jsonl").is_file():
             state = "missing"
+    if data.get("graph_error"):
+        state, error = "error", data.pop("graph_error")
     if state in ("ok", "built") and not data["entities"]:
         state = "empty"
     return {**data, "project": project, "repo_path": str(repo), "graph_state": state, "graph_error": error}
@@ -336,21 +378,26 @@ async def get_graph(session: Any = Depends(require_session),
 _DOC_MAX_BYTES = 512 * 1024
 
 
-def _split_frontmatter(text: str) -> tuple[Dict[str, Any], str]:
+def _split_frontmatter(text: str) -> tuple[Dict[str, Any], str, Optional[str]]:
+    """``(meta, body, error)``. The frontmatter is text a project folder controls: it is parsed WITHOUT aliases
+    (``core.projects.safe_yaml``, REVIEW-0066 M1) - an alias bomb of a few hundred bytes otherwise expands to hundreds of MB in
+    the JSON response. Unreadable or refused frontmatter is shown as text (the whole document), with the reason."""
     if not text.startswith("---"):
-        return {}, text
+        return {}, text, None
     parts = text.split("\n---", 1)
     if len(parts) != 2:
-        return {}, text
+        return {}, text, None
     head = parts[0][3:]
     body = parts[1].split("\n", 1)[1] if "\n" in parts[1] else ""
     try:
-        import yaml  # noqa: PLC0415
+        from core.projects import safe_yaml  # noqa: PLC0415
 
-        meta = yaml.safe_load(head) or {}
+        meta = safe_yaml.load(head) or {}
+    except safe_yaml.AliasRefused:
+        return {}, text, "the frontmatter uses YAML aliases, which are not shown; it is displayed as text"
     except Exception:  # noqa: BLE001 — unreadable frontmatter is shown as text, not an error
-        return {}, text
-    return (meta if isinstance(meta, dict) else {}), body
+        return {}, text, "the frontmatter is not valid YAML; it is displayed as text"
+    return (meta if isinstance(meta, dict) else {}), body, None
 
 
 def load_document(config: Dict[str, Any], key: str) -> Dict[str, Any]:
@@ -359,7 +406,11 @@ def load_document(config: Dict[str, Any], key: str) -> Dict[str, Any]:
     out, ``..`` or an absolute path elsewhere all fail that test)."""
     repo = Path(config["repo_path"]).expanduser()
     graph_dir = repo / "kb" / "graph"
-    rows = [r for r in _read_jsonl(graph_dir / "entities.jsonl") if (r.get("uid") or r.get("id"))]
+    try:
+        rows = [r for r in _read_jsonl(graph_dir / "entities.jsonl") if (r.get("uid") or r.get("id"))]
+        rel_rows = _read_jsonl(graph_dir / "relations.jsonl")
+    except GraphTooLarge as exc:
+        raise HTTPException(status_code=413, detail=f"the knowledge graph is too large to read: {exc}") from None
     by_node: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         by_node[r.get("uid") or r.get("id")] = r
@@ -385,7 +436,7 @@ def load_document(config: Dict[str, Any], key: str) -> Dict[str, Any]:
         text = resolved.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         raise HTTPException(status_code=404, detail="document not found") from None
-    meta, body = _split_frontmatter(text)
+    meta, body, fm_error = _split_frontmatter(text)
 
     node = row.get("uid") or row.get("id")
 
@@ -398,7 +449,7 @@ def load_document(config: Dict[str, Any], key: str) -> Dict[str, Any]:
 
     outgoing: List[Dict[str, Any]] = []
     incoming: List[Dict[str, Any]] = []
-    for rel in _read_jsonl(graph_dir / "relations.jsonl"):
+    for rel in rel_rows:
         if rel.get("external") or not rel.get("resolved"):
             continue
         if rel.get("src") == node and (x := _ref(rel.get("dst", ""), rel.get("rel", "relates_to"))):
@@ -409,7 +460,8 @@ def load_document(config: Dict[str, Any], key: str) -> Dict[str, Any]:
         "entity": {"id": node, "label": row.get("id") or node, "type": row.get("type", ""),
                    "title": row.get("title", ""), "status": row.get("status", ""),
                    "realization": row.get("realization", "")},
-        "frontmatter": json.loads(json.dumps(meta, default=str)),
+        "frontmatter": json.loads(json.dumps(meta, default=str)),     # bounded: no aliases (above), at most _DOC_MAX_BYTES of text
+        **({"frontmatter_error": fm_error} if fm_error else {}),
         "markdown": body,
         "outgoing": outgoing,
         "incoming": incoming,
@@ -419,7 +471,9 @@ def load_document(config: Dict[str, Any], key: str) -> Dict[str, Any]:
 @router.get("/doc/{key}")
 async def get_document(key: str, session: Any = Depends(require_session),
                        project: Optional[str] = Query(default=None, max_length=28)) -> Dict[str, Any]:
-    return load_document(_scoped_config(getattr(session, "tenant_id", "_default"), project), key)
+    tenant_id = getattr(session, "tenant_id", "_default")
+    # off the event loop (REVIEW-0066 M2): the project lookup walks that project's .git, the read parses entities.jsonl
+    return await asyncio.to_thread(lambda: load_document(_scoped_config(tenant_id, project), key))
 
 
 _GIT_ENV_KEEP = ("PATH", "HOME", "LANG", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND")

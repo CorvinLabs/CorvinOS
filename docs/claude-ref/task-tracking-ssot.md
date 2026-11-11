@@ -157,7 +157,9 @@ doing it — was invisible. Two run sources and one writer close that:
 Initiatives, epics and tasks are authored in **Corvin-Knowledge** (`kb/initiatives`,
 `kb/epics`, `kb/tasks`, Markdown + frontmatter, one immutable `uid` each). The store
 holds a **projection** of them — items with `external_ref = kb:<uid>`, `category: kb`,
-label `kb`. One way only: nothing reads a status back into the KB.
+label `kb`. One way only: nothing reads a status back into the KB. A project KB's items
+(label `prj-<id>`) are stored as `kb:<uid>@<id>`, because a duplicated project KB carries the
+original's uids (REVIEW-0066 M3; `projection.store_ref`/`kb_uid`, docs/claude-ref/projects.md).
 
 - **Projector** `corvin_console/kb_projection.py`, started by BOTH hosts
   (`corvin_console.app`, `corvin_gateway.app`), tenant `CORVIN_KB_TENANT` (default

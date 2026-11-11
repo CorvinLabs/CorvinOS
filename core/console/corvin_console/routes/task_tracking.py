@@ -162,7 +162,7 @@ def get_items(
             pid = scope.split(":", 1)[1]
             if pid == "corvin":                       # the built-in Corvin project IS the tenant's own board (CONCEPT-0129)
                 pid = None
-            elif pid not in {p for p, _ in kb_projection.project_kbs(rec.tenant_id)}:
+            elif pid not in {p for p, _ in kb_projection.project_kbs(rec.tenant_id, only=pid)}:
                 raise HTTPException(status_code=404, detail="no such project")
             want = pid
         else:

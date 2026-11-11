@@ -1128,6 +1128,43 @@ class Duplicate(ApplyBase):
             self.assertEqual(self.stagings(c), [])
             self.assertNotIn(JWT[:12], self.chain_text(c))
 
+    # REVIEW-0066 M3: the copy's KB carries the original's uids 1:1; both boards must still show their own items
+    def test_a_duplicated_kb_project_reaches_the_board_next_to_the_original(self):
+        with self.ctx() as c:
+            pid, root = self.make(c, "Boarded")
+            _commit_all(root, "initial")
+            kb_projection = c.svc.kb_projection
+            kb_projection.sync_projects("_default")
+            orig = c.own.get("/v1/console/task-tracking/items", params={"scope": f"project:{pid}"})
+            self.assertEqual(orig.status_code, 200, orig.text[:300])
+            orig_items = {it["title"]: it for it in orig.json()["items"]}
+            self.assertTrue(orig_items, "the original's KB items are on the board")
+            r = self.dup(c, pid, project_id="boarded-copy")
+            self.assertEqual(r.status_code, 201, r.text[:500])
+            kb_projection.sync_projects("_default")                   # one projector tick
+            kb_projection.sync_projects("_default")
+            st = kb_projection.project_status("_default")
+            self.assertNotEqual((st.get("boarded-copy") or {}).get("state"), "error", st)
+            copy = c.own.get("/v1/console/task-tracking/items", params={"scope": "project:boarded-copy"}).json()
+            copy_items = {it["title"]: it for it in copy["items"]}
+            self.assertEqual(set(copy_items), set(orig_items), "the copy's board shows its own items")
+            self.assertTrue(all(it["project"] == "boarded-copy" for it in copy["items"]))
+            again = {it["title"]: it for it in c.own.get("/v1/console/task-tracking/items",
+                                                       params={"scope": f"project:{pid}"}).json()["items"]}
+            self.assertEqual({t: it["id"] for t, it in again.items()}, {t: it["id"] for t, it in orig_items.items()},
+                             "the original's items are untouched")
+            # a board move on the copy is a KB transition in the COPY's KB, never the original's
+            task = next(it for it in copy["items"] if it["kind"] == "task" and it["status"] == "open")
+            mv = c.own.post(f"/v1/console/task-tracking/items/{task['id']}/kb-transition",
+                            json={"to": "in_progress"}, headers=c.h)
+            self.assertEqual(mv.status_code, 200, mv.text[:500])
+            after_copy = {it["id"]: it for it in c.own.get("/v1/console/task-tracking/items",
+                                                         params={"scope": "project:boarded-copy"}).json()["items"]}
+            after_orig = {it["title"]: it for it in c.own.get("/v1/console/task-tracking/items",
+                                                            params={"scope": f"project:{pid}"}).json()["items"]}
+            self.assertEqual(after_copy[task["id"]]["status"], "in_progress")
+            self.assertEqual(after_orig[task["title"]]["status"], "open")
+
     def test_duplicate_needs_csrf(self):
         with self.ctx() as c:
             pid, _ = self.make(c, "Csrf", template="plain")

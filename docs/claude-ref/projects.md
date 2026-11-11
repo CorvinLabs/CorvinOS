@@ -1094,6 +1094,23 @@ Pure decisions in `pages/projects/scope.ts` (`tests/unit/projects-scope.test.ts`
   lock per KB folder (`graph_lock`). A folder whose git does not ignore `kb/graph/` is refused with that reason.
 - **Card moves** still use the existing board path (`kbTransition` → `/kb-transition`); the server resolves the
   project from the card's label (proven over HTTP in `tests/e2e/test_project_kb_writes_e2e.py`).
+- **Opening a document** (`GET /doc/{key}`, REVIEW-0066 M1/M2) runs off the event loop (`asyncio.to_thread`); with
+  `?project=` it resolves that ONE registry entry (`kb_projection.project_kbs(tenant, only=<id>)`), never every project's
+  folder and `.git`. `entities.jsonl`/`relations.jsonl` are parsed once per change (cache by mtime and size, 8 files) and
+  a graph file above 32 MiB is refused (`/doc` 413 "the knowledge graph is too large to read", `/graph` `graph_state:
+  error` with the reason) instead of being read. The frontmatter is text a project folder controls: it is parsed by
+  `core.projects.safe_yaml` (a SafeLoader that refuses the first YAML alias, and with it a `<<` merge on one), because
+  `safe_load` + `json.dumps` expanded a 469-byte alias bomb to 593 MB. A refused or invalid frontmatter answers
+  `frontmatter: {}` + `frontmatter_error` and the whole text as `markdown`. `project.yaml` is parsed the same way
+  (`manifest.parse`). Proof: `tests/e2e/test_kg_document_review_0066_e2e.py`.
+- **The same KB uid in two project scopes** (REVIEW-0066 M3). Duplicate and import-as-a-copy copy a project KB 1:1, so
+  its uids equal the original's; a hand-copied folder does the same. The board keys `UNIQUE (tenant_id, external_ref)`,
+  so a project scope stores `external_ref = kb:<uid>@<project id>` (`projection.store_ref`); the bound KB keeps
+  `kb:<uid>`. Payloads, `diff`, `apply` and `kb_items` speak `kb:<uid>`; `projection.kb_uid` gives the uid of either form
+  (the board move and the parent lookup use it). A project row written before the change (`kb:<uid>` + `prj-<id>`) is
+  found by its scope and updated in place, never re-created. Proof: `tests/e2e/test_projects_share_e2e.py`
+  (`Duplicate::test_a_duplicated_kb_project_reaches_the_board_next_to_the_original`, over HTTP: duplicate, one tick,
+  both boards, a move on the copy changes only the copy) and `tests/e2e/test_projection_scope_e2e.py`.
 
 Proof: `tests/e2e/projects-scope.spec.ts` (6 browser tests on the served bundle, endpoints stubbed),
 `tests/e2e/test_project_graph_scope_e2e.py` (2, real routes: on-demand build, staleness, empty KB, refused folder,

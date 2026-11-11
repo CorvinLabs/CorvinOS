@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 
+from . import safe_yaml
 from .fsutil import atomic_write, is_link, read_text_any, write_at
 
 SCHEMA = 1
@@ -95,7 +96,7 @@ def is_new_id_allowed(pid: str) -> bool:
 
 def parse(text: str) -> dict[str, Any]:
     try:
-        data = yaml.safe_load(text)
+        data = safe_yaml.load(text)          # no aliases: an imported project.yaml is text the console did not write (REVIEW-0066 M1)
     except (yaml.YAMLError, ValueError, TypeError, RecursionError, OverflowError) as exc:
         # an impossible date (2024-02-30) is a plain ValueError from the YAML constructor - never a 500 for the whole list
         raise ManifestError(f"project.yaml is not valid YAML: {type(exc).__name__}") from None
