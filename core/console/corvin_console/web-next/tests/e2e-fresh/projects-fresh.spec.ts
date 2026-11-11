@@ -13,7 +13,10 @@ import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 const ROOT = process.env.CORVIN_FRESH_ROOT ?? "/tmp/corvin-fresh-install";
-const PROJECTS = path.join(ROOT, "projects");
+// The backend's HOME is the throwaway $ROOT/user (scripts/start-fresh-install-backend.sh). /tmp itself is a system prefix to the
+// location rule (ADR-2321 D10), the own home's subtree is not, so the projects folder is a non-hidden, uniquely named directory there.
+const USER_HOME = path.join(ROOT, "user");
+const PROJECTS = path.join(USER_HOME, `projects-e2e-${process.pid}-${Date.now().toString(36)}`);
 const API = "/v1/console";
 const LIST = `${API}/api/v1/marketplace/default-plugins`;
 
@@ -30,6 +33,14 @@ async function enabled(page: Page, indexId: string): Promise<boolean> {
 }
 
 test.describe.serial("projects on a fresh install", () => {
+  test.beforeAll(() => {
+    expect(fs.existsSync(USER_HOME), "the harness must start the backend with HOME=$ROOT/user").toBe(true);
+    expect(fs.existsSync(PROJECTS)).toBe(false);
+  });
+  test.afterAll(() => {
+    if (PROJECTS.startsWith(path.join(USER_HOME, "projects-e2e-"))) fs.rmSync(PROJECTS, { recursive: true, force: true });
+  });
+
   test("the standard plugins a project needs are provisioned by boot alone", async ({ page }) => {
     await login(page);
     for (const id of ["plugin:buildin-knowledge_management-corvin_knowledge", "plugin:buildin-knowledge_management-project_templates"]) {

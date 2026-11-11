@@ -9,6 +9,11 @@
 #     and the INDEX from raw.githubusercontent.com (routes/marketplace.py);
 #   * CORVIN_HOME / XDG_CONFIG_HOME / the audit anchor key are empty
 #     throwaway paths, so nothing touches the live install or its audit chain;
+#   * HOME (and XDG_DATA/STATE/CACHE_HOME below it) is a throwaway user home, $ROOT/user: the
+#     managed project workspaces (<data>/corvin/projects) and every folder the specs choose land
+#     there, never in the operator's real home. The location rule (ADR-2321 D10) refuses /tmp as
+#     a system prefix but accepts the subtree of the own home when that home lies below one, so a
+#     spec picks its projects folder as a non-hidden directory under $ROOT/user;
 #   * CORVIN_MARKETPLACE_ROOT / CORVIN_MARKETPLACE_INDEX are UNSET — setting either
 #     would short-circuit the GitHub path this test exists to prove.
 #
@@ -28,7 +33,7 @@ case "$ROOT" in
   *) echo "refusing CORVIN_FRESH_ROOT=$ROOT (must live under /tmp/corvin-fresh-install* or /tmp/corvin-e2e-fresh*)" >&2; exit 1 ;;
 esac
 rm -rf "$ROOT"
-mkdir -p "$ROOT/CorvinOS" "$ROOT/home/tenants/_default/global" "$ROOT/xdg"
+mkdir -p "$ROOT/CorvinOS" "$ROOT/home/tenants/_default/global" "$ROOT/xdg" "$ROOT/user"
 # Source: the WORKING TREE (tracked + untracked, not ignored) so the E2E can verify a change
 # before it is committed; CORVIN_FRESH_SOURCE=head exports the last commit instead (CI).
 # Either way it is a plain file export: no .git, and no sibling Corvin-Marketplace.
@@ -62,6 +67,10 @@ if [ -n "${CORVIN_FRESH_MARKETPLACE_REF:-}" ]; then
   echo "fresh backend: plugin source from Corvin-Marketplace@$CORVIN_FRESH_MARKETPLACE_REF (pre-push mode)" >&2
 fi
 export CORVIN_HOME="$ROOT/home"
+export HOME="$ROOT/user"
+export XDG_DATA_HOME="$ROOT/user/.local/share"
+export XDG_STATE_HOME="$ROOT/user/.local/state"
+export XDG_CACHE_HOME="$ROOT/user/.cache"
 export XDG_CONFIG_HOME="$ROOT/xdg"
 export CORVIN_AUDIT_ANCHOR_KEY="$ROOT/home/audit-anchor.key"
 # FORGE_ROOT stays UNSET: the boot tripwire refuses any redirect of the audit chain

@@ -126,7 +126,13 @@ live state per entry: `offered`, `installed`, `enabled`, `installed_version`.
   sidebar entry is CorvinTV, the panel API answers with the default chain, uninstall sticks. Run together with
   `video-producer-lifecycle.spec.ts`:
   `cd core/console/corvin_console/web-next && npx playwright test -c playwright.fresh-install.config.ts`
-  (needs network and a built SPA — `scripts/console-deploy.sh`).
+  (needs network and a built SPA — `scripts/console-deploy.sh`). The harness
+  (`web-next/scripts/start-fresh-install-backend.sh`) gives the backend a throwaway `CORVIN_HOME`
+  (`$ROOT/home`) AND a throwaway user `HOME` (`$ROOT/user`, with `XDG_DATA/STATE/CACHE_HOME` below it), so
+  managed project workspaces never land in the operator's real `~/.local/share/corvin/projects`. A spec that
+  needs a projects folder picks a non-hidden, uniquely named directory under `$ROOT/user`
+  (`projects-fresh.spec.ts`): `/tmp` itself is a system prefix to the location rule (ADR-2321 D10), the own
+  home's subtree is not, even when that home lies below `/tmp`.
 * `core/console/corvin_console/web-next/tests/e2e-fresh/knowledge-graph-default.spec.ts` — fresh instance:
   boot alone installs AND enables the Knowledge Graph (vetted, no consent), creates and binds
   `<tenant>/knowledge` without a restart or a click, no "enable the plugin" banner, work created with its
