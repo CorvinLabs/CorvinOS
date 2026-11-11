@@ -11,6 +11,7 @@ A project's files are the user's: nothing here deletes one.
 """
 from __future__ import annotations
 
+import contextlib
 import errno
 import json
 import os
@@ -2039,3 +2040,401 @@ def _record_recent(tenant_id: str, path: Any) -> None:
         browse.record_recent(tenant_id, str(path))
     except Exception:  # noqa: BLE001
         pass
+
+
+# ── Share: export (ADR-2323 Decisions 4, 12, 15, 17; T-0397) ──────────────────────────────────────────────────────────────
+# Class gate first (secret never, confidential only with the confirmation), then one of TWO export slots (429 at once, never
+# waiting), then the walk sizes the export: <= 100 MiB is built in the request's worker thread (the route awaits it through
+# asyncio.to_thread) and streamed; above it is a background job on loop_health.share_pool() with its files under
+# <tenant_home>/projects/exports/<job_id>/ (0o700 dir, 0o600 files, 24 h TTL, swept by the projector tick and by every export
+# request). A passphrase encrypts with gpg (symmetric AES256, passphrase on stdin, a private GNUPGHOME); the plain ZIP is
+# deleted. Audit: project.exported requested (audit-first) / applied per project / error, project.export_refused.
+
+EXPORT_SYNC_MAX_BYTES = 100 << 20
+EXPORT_TTL_S = 24 * 3600.0
+EXPORT_SLOTS = 2
+_export_slots = threading.BoundedSemaphore(EXPORT_SLOTS)
+_running_jobs: set[tuple[str, str]] = set()
+_running_lock = threading.Lock()
+#: REVIEW-0062 N11: the git_history part ships with its secret scan (T-0410)
+GIT_HISTORY_AVAILABLE = False
+HISTORY_UNAVAILABLE = "Git history export is not available yet."
+EXPORT_MESSAGES = {
+    "classification": "Secret projects cannot be exported.",
+    "confirm_required": "This project is confidential. Confirm that you want to export it.",
+    "busy": "Two exports are already running; try again in a moment.",
+    "gpg_missing": "A passphrase needs gpg, which is not installed on this machine. Export without one or install gpg.",
+    "gpg_failed": "The bundle could not be encrypted; nothing was exported.",
+}
+_JOB_ID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+_JOB_FILE = "job.json"
+
+
+class Busy(ProjectsError):
+    status = 429
+    reason_class = "busy"
+
+
+def _bundle():
+    from core.projects import bundle  # noqa: PLC0415
+    return bundle
+
+
+def _share_root(tenant_id: str, kind: str) -> Path:
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+    from core.tenants import validate_tenant_id  # noqa: PLC0415
+    return tenant_home(validate_tenant_id(tenant_id)) / "projects" / kind
+
+
+def _private_dir(d: Path) -> Path:
+    """Create *d* 0o700 (and its parents), never through a link."""
+    for p in [*reversed(d.parents[:2]), d]:
+        if is_link(p):
+            raise UnsafePath("a share directory is a link")
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if is_link(d):
+        raise UnsafePath("a share directory is a link")
+    with contextlib.suppress(OSError):
+        os.chmod(d, 0o700)
+    return d
+
+
+def _write_job(d: Path, state: dict[str, Any]) -> None:
+    from core.projects.fsutil import atomic_write  # noqa: PLC0415
+    atomic_write(d / _JOB_FILE, (json.dumps(state, sort_keys=True) + "\n").encode("utf-8"), mode=0o600, owned=True)
+
+
+def _read_job(d: Path) -> Optional[dict[str, Any]]:
+    p = d / _JOB_FILE
+    if is_link(d) or is_link(p):
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _sweep_dir(tenant_id: str, kind: str, ttl_s: float, now: float, limit: int = 200) -> int:
+    """Remove this tenant's share directories older than *ttl_s* (bounded; never through a link; a job still running in this
+    process is kept)."""
+    root = _share_root(tenant_id, kind)
+    if not root.is_dir() or is_link(root):
+        return 0
+    removed = 0
+    try:
+        with os.scandir(root) as it:
+            ents = [e for _, e in zip(range(limit), it)]
+    except OSError:
+        return 0
+    for e in ents:
+        if e.is_symlink() or dirent_is_junction(e) or not e.is_dir(follow_symlinks=False):
+            continue
+        with _running_lock:
+            if (tenant_id, e.name) in _running_jobs:
+                continue
+        st = _read_job(Path(e.path)) or {}
+        created = st.get("created_ts")
+        try:
+            created = float(created) if created is not None else os.lstat(e.path).st_mtime
+        except (OSError, TypeError, ValueError):
+            continue
+        if now - created > ttl_s:
+            shutil.rmtree(e.path, ignore_errors=True)
+            removed += 1
+    return removed
+
+
+def sweep_share(tenant_id: str, *, busy: bool = False, now: Optional[float] = None) -> dict[str, int]:
+    """The projector tick's sweeper (ADR-2323 Decisions 12, 13): expired export jobs and import stagings of the tenant. Skipped
+    while the host is saturated; bounded to 200 directories per kind and tick."""
+    if busy:
+        return {"exports": 0, "stagings": 0}
+    now = time.time() if now is None else now
+    return {"exports": _sweep_dir(tenant_id, "exports", EXPORT_TTL_S, now),
+            "stagings": _sweep_dir(tenant_id, "import_staging", IMPORT_STAGING_TTL_S, now)}
+
+
+def _parts_of(body: Optional[dict[str, Any]]) -> Any:
+    b = _bundle()
+    body = body or {}
+    return b.Parts(kb=bool(body.get("kb", True)), git_history=bool(body.get("git_history", True)),
+                   generated=bool(body.get("generated", False)))
+
+
+def _parts_str(rows: list[dict[str, Any]]) -> str:
+    return ",".join(r["name"] for r in rows if r.get("included"))
+
+
+def _export_refused(tenant_id: str, reason_class: str, project_id: Optional[str] = None) -> None:
+    try:
+        _tt._chain(tenant_id, "project.export_refused", {"reason_class": reason_class,
+                                                        **({"project_id": project_id} if project_id else {})})
+    except Exception:  # noqa: BLE001 - a refusal has no effect to protect
+        pass
+
+
+def _refusal_error(tenant_id: str, r: Any, project_id: Optional[str] = None) -> ProjectsError:
+    """A ``bundle.BundleRefused`` as the service error the routes translate (and its audit record)."""
+    _export_refused(tenant_id, r.reason_class, r.project_id or project_id)
+    if r.reason_class == "not_found":
+        return NotFound(r.message)
+    extra = {"part": r.part} if r.part else {}
+    if r.path:
+        extra["path"] = r.path
+    return Conflict(r.message, r.reason_class, **extra)
+
+
+def _gate_projects(tenant_id: str, project_ids: list[str], confirm: bool) -> None:
+    for pid in project_ids:
+        if not isinstance(pid, str) or not manifest.PROJECT_ID_RE.match(pid):
+            raise NotFound("no such project")
+        e = registry.get(tenant_id, pid)
+        if e is None or e.get("pending"):
+            raise NotFound("no such project")
+        prot = registry.protection(tenant_id, pid)
+        cls = prot.get("classification") if prot else None
+        if cls not in manifest.CLASSES:
+            try:
+                cls = manifest.legacy_class(manifest.load(Path(e["path"])))
+            except (manifest.ManifestError, KeyError, TypeError):
+                cls = manifest.DEFAULT_CLASS
+        if cls == "secret":
+            _export_refused(tenant_id, "classification", pid)
+            raise Conflict(EXPORT_MESSAGES["classification"], "classification")
+        if cls == "confidential" and not confirm:
+            _export_refused(tenant_id, "confirm_required", pid)
+            raise Conflict(EXPORT_MESSAGES["confirm_required"], "confirm_required")
+
+
+def gpg_available() -> bool:
+    return shutil.which("gpg") is not None
+
+
+def export_preview(tenant_id: str, project_ids: list[str], parts: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """The export dialog's numbers (``bundle.preview``) plus ``gpg``: whether a passphrase can be offered."""
+    b = _bundle()
+    for pid in project_ids:
+        if not isinstance(pid, str) or not manifest.PROJECT_ID_RE.match(pid) or registry.get(tenant_id, pid) is None:
+            raise NotFound("no such project")
+    try:
+        out = b.preview(tenant_id, project_ids, _parts_of(parts), history_available=GIT_HISTORY_AVAILABLE)
+    except b.BundleRefused as r:
+        if r.reason_class == "not_found":
+            raise NotFound(r.message) from None
+        raise Conflict(r.message, r.reason_class, **({"part": r.part} if r.part else {})) from None
+    out["gpg"] = gpg_available()
+    return out
+
+
+def _encrypt(zpath: Path, passphrase: str) -> Path:
+    gpg = shutil.which("gpg")
+    if gpg is None:
+        raise Conflict(EXPORT_MESSAGES["gpg_missing"], "gpg_missing")
+    home = _private_dir(zpath.parent / "gnupg")
+    out = zpath.with_name(zpath.name + ".gpg")
+    try:
+        r = subprocess.run([gpg, "--homedir", str(home), "--batch", "--yes", "--no-tty", "--pinentry-mode", "loopback",
+                            "--symmetric", "--cipher-algo", "AES256", "--passphrase-fd", "0", "-o", str(out), str(zpath)],
+                           input=passphrase.encode("utf-8"), capture_output=True, timeout=1800)
+    except (OSError, subprocess.TimeoutExpired):
+        r = None
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+    try:
+        zpath.unlink()
+    except OSError:
+        pass
+    if r is None or r.returncode != 0 or not out.is_file():
+        with contextlib.suppress(OSError):
+            out.unlink()
+        raise Conflict(EXPORT_MESSAGES["gpg_failed"], "gpg_failed")
+    with contextlib.suppress(OSError):
+        os.chmod(out, 0o600)
+    return out
+
+
+def _filename(project_ids: list[str]) -> str:
+    day = time.strftime("%Y%m%d", time.gmtime())
+    return f"corvin-project-{project_ids[0]}-{day}.zip" if len(project_ids) == 1 else f"corvin-projects-{day}.zip"
+
+
+def _do_build(tenant_id: str, ids: list[str], parts: Any, jobdir: Path, passphrase: Optional[str],
+              progress=None) -> tuple[Path, Any]:
+    b = _bundle()
+    out = jobdir / _filename(ids)
+    res = b.build(tenant_id, ids, parts, out=out, progress=progress, **_history_gate())
+    path = out
+    if passphrase:
+        path = _encrypt(out, passphrase)
+    for p in res.envelope["projects"]:
+        _audit(tenant_id, "project.exported", outcome="applied", project_id=p["id"], files=p["counts"]["files"],
+               parts=_parts_str(p["parts"]))
+    return path, res
+
+
+def _history_gate() -> dict[str, Any]:
+    """The history secret scan of T-0410 (none while the part is unavailable)."""
+    return {}
+
+
+def export_projects(tenant_id: str, project_ids: list[str], parts: Optional[dict[str, Any]] = None, *, confirm: bool = False,
+                    passphrase: Optional[str] = None) -> dict[str, Any]:
+    """Export one project or a set. Answers ``{kind: "file", path, filename, media, warnings, cleanup}`` (<= 100 MiB, built
+    here - the route runs this in a worker thread) or ``{kind: "job", job_id, warnings}`` (a background job)."""
+    b = _bundle()
+    ids = list(dict.fromkeys(project_ids or []))
+    _sweep_dir(tenant_id, "exports", EXPORT_TTL_S, time.time())                 # request-time sweep of the tenant's own jobs
+    if not ids:
+        raise NotFound("no such project")
+    if len(ids) > b.LIMITS["max_projects"]:
+        _export_refused(tenant_id, "too_many")
+        raise Conflict(b.MESSAGES["too_many"], "too_many")
+    _gate_projects(tenant_id, ids, confirm)
+    if passphrase and not gpg_available():
+        _export_refused(tenant_id, "gpg_missing")
+        raise Conflict(EXPORT_MESSAGES["gpg_missing"], "gpg_missing")
+    pr = _parts_of(parts)
+    warnings: list[str] = []
+    if pr.git_history and not GIT_HISTORY_AVAILABLE:
+        warnings.append(HISTORY_UNAVAILABLE)
+        pr = b.Parts(kb=pr.kb, git_history=False, generated=pr.generated)
+    if not _export_slots.acquire(blocking=False):
+        _export_refused(tenant_id, "busy")
+        raise Busy(EXPORT_MESSAGES["busy"])
+    handed_over = False
+    try:
+        try:
+            pv = b.preview(tenant_id, ids, pr, history_available=GIT_HISTORY_AVAILABLE)
+        except b.BundleRefused as r:
+            raise _refusal_error(tenant_id, r) from None
+        size = sum(p["counts"]["bytes"] for p in pv["projects"])
+        rows = pv["projects"][0]["parts"] if len(ids) == 1 else []
+        job_id = b.new_ulid()
+        jobdir = _private_dir(_share_root(tenant_id, "exports") / job_id)
+        base = {"files": sum(p["counts"]["files"] for p in pv["projects"]), "parts": _parts_str(rows) or "files",
+                **({"project_id": ids[0]} if len(ids) == 1 else {})}
+        state = {"state": "running", "created_ts": time.time(), "progress": {"files": 0, "bytes": 0}, "kind": "export"}
+        _write_job(jobdir, state)
+        try:
+            _audit(tenant_id, "project.exported", outcome="requested", **base)              # audit-first
+        except BaseException:
+            shutil.rmtree(jobdir, ignore_errors=True)
+            raise
+        if size <= EXPORT_SYNC_MAX_BYTES:
+            try:
+                path, res = _do_build(tenant_id, ids, pr, jobdir, passphrase)
+            except b.BundleRefused as r:
+                shutil.rmtree(jobdir, ignore_errors=True)
+                _exported_error(tenant_id, base)
+                raise _refusal_error(tenant_id, r) from None
+            except BaseException:
+                shutil.rmtree(jobdir, ignore_errors=True)
+                _exported_error(tenant_id, base)
+                raise
+            warnings += res.warnings
+            return {"kind": "file", "path": path, "filename": path.name, "cleanup": jobdir, "warnings": warnings,
+                    "media": "application/pgp-encrypted" if path.suffix == ".gpg" else "application/zip"}
+        from . import loop_health  # noqa: PLC0415
+        with _running_lock:
+            _running_jobs.add((tenant_id, job_id))
+        try:
+            loop_health.share_pool().submit(_run_export_job, tenant_id, job_id, ids, pr, jobdir, passphrase, base, state)
+        except RuntimeError:
+            with _running_lock:
+                _running_jobs.discard((tenant_id, job_id))
+            shutil.rmtree(jobdir, ignore_errors=True)
+            _exported_error(tenant_id, base)
+            raise
+        handed_over = True
+        return {"kind": "job", "job_id": job_id, "warnings": warnings}
+    finally:
+        if not handed_over:
+            _export_slots.release()
+
+
+def _exported_error(tenant_id: str, base: dict[str, Any]) -> None:
+    try:
+        _audit(tenant_id, "project.exported", outcome="error", **base)
+    except _tt.AuditUnavailable:
+        pass
+
+
+def _run_export_job(tenant_id: str, job_id: str, ids: list[str], parts: Any, jobdir: Path, passphrase: Optional[str],
+                    base: dict[str, Any], state: dict[str, Any]) -> None:
+    b = _bundle()
+    last = [0.0]
+
+    def progress(files: int, nbytes: int) -> None:
+        now = time.monotonic()
+        if now - last[0] >= 1.0:
+            last[0] = now
+            state["progress"] = {"files": files, "bytes": nbytes}
+            with contextlib.suppress(OSError):
+                _write_job(jobdir, state)
+    try:
+        try:
+            path, res = _do_build(tenant_id, ids, parts, jobdir, passphrase, progress)
+            state.update(state="done", file=path.name, warnings=res.warnings,
+                         progress={"files": res.counts["files"], "bytes": res.counts["bytes"]},
+                         media="application/pgp-encrypted" if path.suffix == ".gpg" else "application/zip")
+        except b.BundleRefused as r:
+            _exported_error(tenant_id, base)
+            _export_refused(tenant_id, r.reason_class, r.project_id)
+            state.update(state="error", reason_class=r.reason_class, message=r.message)
+        except Conflict as exc:
+            _exported_error(tenant_id, base)
+            _export_refused(tenant_id, exc.reason_class)
+            state.update(state="error", reason_class=exc.reason_class, message=str(exc))
+        except Exception as exc:  # noqa: BLE001 - the job reports, never raises into the pool
+            _exported_error(tenant_id, base)
+            state.update(state="error", reason_class="error", message=f"The export failed ({type(exc).__name__}).")
+        if state["state"] != "done":
+            for f in jobdir.iterdir():
+                if f.name != _JOB_FILE:
+                    shutil.rmtree(f, ignore_errors=True) if f.is_dir() and not is_link(f) else f.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            _write_job(jobdir, state)
+    finally:
+        passphrase = None
+        with _running_lock:
+            _running_jobs.discard((tenant_id, job_id))
+        _export_slots.release()
+
+
+def _job_dir(tenant_id: str, job_id: str) -> Path:
+    if not isinstance(job_id, str) or not _JOB_ID_RE.match(job_id):
+        raise NotFound("no such export")
+    d = _share_root(tenant_id, "exports") / job_id
+    if is_link(d) or not d.is_dir():
+        raise NotFound("no such export")
+    return d
+
+
+def export_job(tenant_id: str, job_id: str) -> dict[str, Any]:
+    d = _job_dir(tenant_id, job_id)
+    st = _read_job(d)
+    if st is None or st.get("kind") != "export":
+        raise NotFound("no such export")
+    out: dict[str, Any] = {"state": st.get("state"), "progress": st.get("progress") or {"files": 0, "bytes": 0}}
+    if st.get("state") == "done":
+        out["download_url"] = f"/v1/console/projects/-/exports/{job_id}/file"
+        out["warnings"] = st.get("warnings") or []
+    if st.get("state") == "error":
+        out["reason_class"] = st.get("reason_class")
+        out["message"] = st.get("message")
+    return out
+
+
+def export_job_file(tenant_id: str, job_id: str) -> dict[str, Any]:
+    d = _job_dir(tenant_id, job_id)
+    st = _read_job(d)
+    if st is None or st.get("state") != "done" or not isinstance(st.get("file"), str):
+        raise NotFound("no such export")
+    p = d / Path(st["file"]).name
+    if is_link(p) or not p.is_file():
+        raise NotFound("no such export")
+    return {"path": p, "filename": p.name, "media": st.get("media") or "application/zip"}
+
+
+IMPORT_STAGING_TTL_S = 3600.0

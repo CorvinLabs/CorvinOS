@@ -494,8 +494,30 @@ def preview(tenant_id: str, project_ids: list[str], parts: Parts, *, history_ava
     return {"projects": out, "notes": list(NOTES), "warnings": list(dict.fromkeys(warnings))}
 
 
+class _Restow(Exception):
+    """An entry deflated beyond the 100:1 rule of V1 (a sparse file, a run of zeros): the ZIP is written again with that entry
+    stored, so an export always passes its own V1."""
+
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.name = name
+
+
+def _compresses_too_well(size: int, head: bytes) -> bool:
+    """A large file whose first MiB deflates beyond 50:1 is stored, not deflated (a sparse file would break V1's 100:1)."""
+    if size < LIMITS["ratio_check_min_bytes"] or not head:
+        return False
+    import zlib  # noqa: PLC0415
+    return len(head) > 50 * len(zlib.compress(head, 1))
+
+
+def _ratio_breach(size: int, packed: int) -> bool:
+    return size >= LIMITS["ratio_check_min_bytes"] and size > LIMITS["max_compression_ratio"] * max(packed, 1)
+
+
 def _read_into(zf: zipfile.ZipFile, name: str, f: _File, scanner: Optional[_secrets.StreamScanner],
-               sniff_cb: Callable[[bytes], Optional[_secrets.StreamScanner]], progress_cb) -> tuple[Optional[str], int]:
+               sniff_cb: Callable[[bytes], Optional[_secrets.StreamScanner]], progress_cb,
+               stored: frozenset = frozenset()) -> tuple[Optional[str], int]:
     """Copy one file into the ZIP without following a link. Returns ``(sha256, size)`` or ``(None, 0)`` when the file turned
     out to be a link / changed since the walk (the entry is then not written)."""
     try:
@@ -506,8 +528,9 @@ def _read_into(zf: zipfile.ZipFile, name: str, f: _File, scanner: Optional[_secr
         st = os.fstat(fd)
         if (st.st_dev, st.st_ino, st.st_size) != (f.dev, f.ino, f.size) or not stat.S_ISREG(st.st_mode):
             return None, 0
+        b0 = os.read(fd, min(_CHUNK, f.size)) if f.size else b""
         info = zipfile.ZipInfo(name, date_time=_zip_date(f.mtime))
-        info.compress_type = zipfile.ZIP_DEFLATED
+        info.compress_type = zipfile.ZIP_STORED if name in stored or _compresses_too_well(f.size, b0) else zipfile.ZIP_DEFLATED
         info.external_attr = ((0o100755 if f.mode & 0o111 else 0o100644) & 0xFFFF) << 16
         info.file_size = f.size
         h = hashlib.sha256()
@@ -516,7 +539,10 @@ def _read_into(zf: zipfile.ZipFile, name: str, f: _File, scanner: Optional[_secr
         sc = scanner
         with zf.open(info, "w", force_zip64=f.size > (1 << 30)) as dst:
             while n < f.size:
-                b = os.read(fd, min(_CHUNK, f.size - n))
+                if b0:
+                    b, b0 = b0, b""
+                else:
+                    b = os.read(fd, min(_CHUNK, f.size - n))
                 if not b:
                     break
                 if first:
@@ -532,9 +558,89 @@ def _read_into(zf: zipfile.ZipFile, name: str, f: _File, scanner: Optional[_secr
             sc = sniff_cb(b"")
         if sc is not None:
             sc.close()
+        if info.compress_type == zipfile.ZIP_DEFLATED and _ratio_breach(n, info.compress_size):
+            raise _Restow(name)
         return h.hexdigest(), n
     finally:
         os.close(fd)
+
+
+def _write_zip(tenant_id, loaded, walks, parts: Parts, histories, tmp_zip: Path, stored: frozenset, tick, done_files) -> dict:
+    envelope_projects = []
+    fd = os.open(tmp_zip, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_BINARY, 0o600)
+    with os.fdopen(fd, "wb") as raw, zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+        for (pid, root, e, man), w in zip(loaded, walks):
+            listed: list[dict[str, Any]] = []
+            left = list(w.left_out)
+            prefix = f"{PROJECTS_PREFIX}{pid}/"
+            for f in w.files:
+                name = prefix + f.rel
+                if f.rel == manifest.FILE:
+                    data = _manifest_bytes(man)
+                    try:
+                        _secrets.scan_bytes(data, f.rel)
+                    except BundleCheckError:
+                        raise BundleRefused("secret_shape", f.rel, project_id=pid) from None
+                    info = zipfile.ZipInfo(name, date_time=_zip_date(f.mtime))
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    info.external_attr = (0o100644 & 0xFFFF) << 16
+                    zf.writestr(info, data)
+                    listed.append({"path": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
+                    done_files[0] += 1
+                    tick(len(data))
+                    continue
+
+                def sniff(head: bytes, _rel=f.rel) -> Optional[_secrets.StreamScanner]:
+                    return _secrets.StreamScanner(_rel) if is_text(head) else None
+                try:
+                    sha, size = _read_into(zf, name, f, None, sniff, tick, stored)
+                except BundleCheckError:
+                    raise BundleRefused("secret_shape", f.rel, project_id=pid) from None
+                if sha is None:
+                    left.append({"path": f.rel, "reason": "link"})      # swapped or changed since the walk: never read
+                    continue
+                listed.append({"path": name, "sha256": sha, "size": size})
+                done_files[0] += 1
+            git: dict[str, str] = {}
+            for inner, target, key, head in histories.get(pid, []):
+                name = prefix + inner
+                h = hashlib.sha256()
+                size = 0
+                info = zipfile.ZipInfo(name, date_time=_zip_date(time.time()))
+                info.compress_type = zipfile.ZIP_STORED            # a pack is already compressed
+                info.external_attr = (0o100644 & 0xFFFF) << 16
+                info.file_size = target.stat().st_size
+                with open(target, "rb") as src, zf.open(info, "w", force_zip64=info.file_size > (1 << 30)) as dst:
+                    while True:
+                        b = src.read(_CHUNK)
+                        if not b:
+                            break
+                        h.update(b)
+                        dst.write(b)
+                        size += len(b)
+                        tick(len(b))
+                listed.append({"path": name, "sha256": h.hexdigest(), "size": size})
+                git[key] = head
+            left.sort(key=lambda r: r["path"])
+            proj = {**_project_head(tenant_id, pid, man, e), "export_id": new_ulid(),
+                    "source_project_uid": registry.ensure_uid(tenant_id, pid),
+                    "parts": _parts_rows(w, parts, git, None), "left_out": left, "files": listed,
+                    "counts": {"files": len(listed), "bytes": sum(x["size"] for x in listed)}}
+            if git:
+                proj["git"] = git
+            envelope_projects.append(proj)
+        envelope = {"format": FORMAT, "format_version": FORMAT_VERSION,
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "exporter": {"app": "corvinos", "version": _version()}, "origin": "unverified",
+                    "projects": envelope_projects}
+        raw_env = json.dumps(envelope, ensure_ascii=False, sort_keys=False, indent=1).encode("utf-8")
+        if len(raw_env) > LIMITS["max_envelope_bytes"]:
+            raise BundleRefused("too_large", part="files")
+        info = zipfile.ZipInfo(ENVELOPE_NAME, date_time=_zip_date(time.time()))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.external_attr = (0o100644 & 0xFFFF) << 16
+        zf.writestr(info, raw_env)
+    return envelope
 
 
 def build(tenant_id: str, project_ids: list[str], parts: Parts, *, out: Path,
@@ -581,80 +687,19 @@ def build(tenant_id: str, project_ids: list[str], parts: Parts, *, out: Path,
         hist_bytes = sum(t.stat().st_size for rows in histories.values() for _i, t, _k, _h in rows)
         _check_totals(walks, extra_bytes=hist_bytes, extra_entries=sum(len(r) for r in histories.values()),
                       history_bytes=hist_bytes)
-        envelope_projects = []
-        fd = os.open(tmp_zip, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_BINARY, 0o600)
-        with os.fdopen(fd, "wb") as raw, zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-            for (pid, root, e, man), w in zip(loaded, walks):
-                listed: list[dict[str, Any]] = []
-                left = list(w.left_out)
-                prefix = f"{PROJECTS_PREFIX}{pid}/"
-                for f in w.files:
-                    name = prefix + f.rel
-                    if f.rel == manifest.FILE:
-                        data = _manifest_bytes(man)
-                        try:
-                            _secrets.scan_bytes(data, f.rel)
-                        except BundleCheckError:
-                            raise BundleRefused("secret_shape", f.rel, project_id=pid) from None
-                        info = zipfile.ZipInfo(name, date_time=_zip_date(f.mtime))
-                        info.compress_type = zipfile.ZIP_DEFLATED
-                        info.external_attr = (0o100644 & 0xFFFF) << 16
-                        zf.writestr(info, data)
-                        listed.append({"path": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
-                        done_files[0] += 1
-                        tick(len(data))
-                        continue
-
-                    def sniff(head: bytes, _rel=f.rel) -> Optional[_secrets.StreamScanner]:
-                        return _secrets.StreamScanner(_rel) if is_text(head) else None
-                    try:
-                        sha, size = _read_into(zf, name, f, None, sniff, tick)
-                    except BundleCheckError:
-                        raise BundleRefused("secret_shape", f.rel, project_id=pid) from None
-                    if sha is None:
-                        left.append({"path": f.rel, "reason": "link"})      # swapped or changed since the walk: never read
-                        continue
-                    listed.append({"path": name, "sha256": sha, "size": size})
-                    done_files[0] += 1
-                git: dict[str, str] = {}
-                for inner, target, key, head in histories.get(pid, []):
-                    name = prefix + inner
-                    h = hashlib.sha256()
-                    size = 0
-                    info = zipfile.ZipInfo(name, date_time=_zip_date(time.time()))
-                    info.compress_type = zipfile.ZIP_STORED            # a pack is already compressed
-                    info.external_attr = (0o100644 & 0xFFFF) << 16
-                    info.file_size = target.stat().st_size
-                    with open(target, "rb") as src, zf.open(info, "w", force_zip64=info.file_size > (1 << 30)) as dst:
-                        while True:
-                            b = src.read(_CHUNK)
-                            if not b:
-                                break
-                            h.update(b)
-                            dst.write(b)
-                            size += len(b)
-                            tick(len(b))
-                    listed.append({"path": name, "sha256": h.hexdigest(), "size": size})
-                    git[key] = head
-                left.sort(key=lambda r: r["path"])
-                proj = {**_project_head(tenant_id, pid, man, e), "export_id": new_ulid(),
-                        "source_project_uid": registry.ensure_uid(tenant_id, pid),
-                        "parts": _parts_rows(w, parts, git, None), "left_out": left, "files": listed,
-                        "counts": {"files": len(listed), "bytes": sum(x["size"] for x in listed)}}
-                if git:
-                    proj["git"] = git
-                envelope_projects.append(proj)
-            envelope = {"format": FORMAT, "format_version": FORMAT_VERSION,
-                        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "exporter": {"app": "corvinos", "version": _version()}, "origin": "unverified",
-                        "projects": envelope_projects}
-            raw_env = json.dumps(envelope, ensure_ascii=False, sort_keys=False, indent=1).encode("utf-8")
-            if len(raw_env) > LIMITS["max_envelope_bytes"]:
-                raise BundleRefused("too_large", part="files")
-            info = zipfile.ZipInfo(ENVELOPE_NAME, date_time=_zip_date(time.time()))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = (0o100644 & 0xFFFF) << 16
-            zf.writestr(info, raw_env)
+        stored: set[str] = set()
+        for _attempt in range(64):
+            try:
+                envelope = _write_zip(tenant_id, loaded, walks, parts, histories, tmp_zip, frozenset(stored), tick, done_files)
+                break
+            except _Restow as rs:
+                stored.add(rs.name)
+                with contextlib.suppress(OSError):
+                    tmp_zip.unlink()
+                done_files[0] = done_files[1] = 0
+        else:
+            raise BundleRefused("too_large", part="files")
+        envelope_projects = envelope["projects"]
         if tmp_zip.stat().st_size > LIMITS["max_compressed_bytes"]:
             sizes = {k: v for w in walks for k, v in w.part_bytes.items() if k in ("generated", "kb")}
             if hist_bytes:

@@ -26,6 +26,7 @@ This module, wired from the console lifespan:
 * ``host_saturated`` — asked ONLY by optional background work (the KB projector's
   cadence, starting a new SkillForge fork). Audit, tripwires, the integrity scan, the
   learning brake (anomaly monitor) and canary rollback never ask it;
+* ``share_pool`` / ``prewarm_share_pool`` — the 2-thread pool of background project exports (ADR-2323)
 * ``browse_pool`` / ``prewarm_browse_pool`` — the folder browser's dedicated 4-thread pool
   (ADR-2322 Decision 8), pre-warmed after the default pool; listings never use the default
   executor;
@@ -206,8 +207,33 @@ def browse_pool() -> ThreadPoolExecutor:
 async def prewarm_browse_pool(*, gap_s: float = PREWARM_GAP_S, hold_max_s: float = PREWARM_HOLD_MAX_S) -> int:
     """Start the browse pool's threads ahead of demand (each warm-up call holds its thread until all are running, so the pool
     really grows to ``BROWSE_POOL_WORKERS``). Returns the number of distinct threads."""
-    pool = browse_pool()
-    n = BROWSE_POOL_WORKERS
+    return await _prewarm_pool(browse_pool(), BROWSE_POOL_WORKERS, gap_s=gap_s, hold_max_s=hold_max_s)
+
+
+# ── the project-share pool (ADR-2323 Decision 12): background export jobs ──────
+
+#: threads of the export-job pool: equal to the two export slots, so an admitted job never waits for a thread
+SHARE_POOL_WORKERS = 2
+
+_share_pool: Optional[ThreadPoolExecutor] = None
+_share_pool_lock = threading.Lock()
+
+
+def share_pool() -> ThreadPoolExecutor:
+    """The long-lived pool background project exports run on (never a thread per request); pre-warmed from both hosts'
+    lifespan by :func:`prewarm_share_pool`."""
+    global _share_pool
+    with _share_pool_lock:
+        if _share_pool is None:
+            _share_pool = ThreadPoolExecutor(max_workers=SHARE_POOL_WORKERS, thread_name_prefix="corvin-share")
+        return _share_pool
+
+
+async def prewarm_share_pool(*, gap_s: float = PREWARM_GAP_S, hold_max_s: float = PREWARM_HOLD_MAX_S) -> int:
+    return await _prewarm_pool(share_pool(), SHARE_POOL_WORKERS, gap_s=gap_s, hold_max_s=hold_max_s)
+
+
+async def _prewarm_pool(pool: ThreadPoolExecutor, n: int, *, gap_s: float, hold_max_s: float) -> int:
     cond = threading.Condition()
     seen: set[int] = set()
 
@@ -542,6 +568,12 @@ async def _prewarm_then_watch() -> None:
         raise
     except Exception:  # noqa: BLE001
         log.warning("loop health: folder-browser pool pre-warm failed", exc_info=True)
+    try:
+        log.info("loop health: project-share pool pre-warmed (%d threads)", await prewarm_share_pool())
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        log.warning("loop health: project-share pool pre-warm failed", exc_info=True)
     try:
         start_watchdog(asyncio.get_running_loop())
     except Exception:  # noqa: BLE001

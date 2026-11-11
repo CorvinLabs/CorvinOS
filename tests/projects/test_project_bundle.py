@@ -417,6 +417,19 @@ class Build(BundleBase):
                 self.assertNotIn(piece, u1)
         self.assertRegex(self.envelope(z1)["projects"][0]["export_id"], r"^[0-9A-HJKMNP-TV-Z]{26}$")
 
+    def test_a_sparse_tail_is_stored_so_the_export_passes_its_own_v1_ratio_rule(self):
+        pid, root = self.project()
+        with open(root / "disk.img", "wb") as f:
+            f.write(os.urandom(1 << 20))
+            f.truncate(201 << 20)                         # 1 MiB random, then 200 MiB of zeros: the probe says deflate
+        with open(root / "zeros.img", "wb") as f:
+            f.truncate(5 << 20)                           # all zeros: the probe says store
+        z, _ = self.build([pid], git_history=False)
+        with zipfile.ZipFile(z) as zf:
+            types = {i.filename.rsplit("/", 1)[-1]: i.compress_type for i in zf.infolist()}
+        self.assertEqual((types["disk.img"], types["zeros.img"]), (zipfile.ZIP_STORED, zipfile.ZIP_STORED))
+        self.assertTrue(bundle.validate(z, None)["ok"])
+
     def test_unportable_names_special_files_and_case_collisions_are_left_out(self):
         pid, root = self.project()
         if POSIX:

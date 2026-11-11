@@ -355,6 +355,10 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 | `GET /-/browse?path&purpose[&project_id][&hidden=1][&page]` | one page of a server folder's DIRECTORIES with the location rule's verdict for `path` + `purpose` (§ Picker); 422 `path_rule`, 429 `throttled`, 200 `slow` |
 | `PUT /-/browse/favourites` | `{paths}` (CSRF): replaces the favourites (at most 10, each by the input rule; else 422 `path_rule` "At most 10 favourites."); answers `{places}` = the favourite rows |
 | `DELETE /-/browse/recent` | (CSRF) "Clear recent places"; answers `{places}` |
+| `POST /-/export` | `{project_ids (1-20), parts?: {git_history, generated, kb}, confirm?, passphrase? (8-128)}` (CSRF): 200 the file (<= 100 MiB) or 202 `{job_id, warnings}`; 409 `classification`/`confirm_required`/`secret_shape`/`secret_in_history`/`too_large`/`gpg_missing`, 429 `busy`, 404 an unknown or other tenant's project (§ Share) |
+| `GET /-/export/preview?ids=a,b[&parts=kb,git_history,generated]` | the preview (counts, `left_out`, parts, commits, `kb_entries`, notes) plus `gpg: bool`; writes nothing |
+| `GET /-/exports/{job_id}` | `{state: running/done/error, progress {files, bytes}, download_url?, warnings?, reason_class?, message?}`; another tenant's job is 404 |
+| `GET /-/exports/{job_id}/file` | the finished file (kept until the 24 h TTL) |
 | `POST /{id}/move` | `{location}`: same-disk rename only; a rename that fails with `EXDEV` (Windows error 17) answers 409 `cross_device` ("The new place is on another disk. Export the project and import it there, or copy the folder yourself and use Locate folder."), tree and index unchanged, `project.blocked reason_class=cross_device`; moving into/out of the managed root sets `storage` |
 
 **Collection namespace `/projects/-/…` (ADR-2321 Decision 16, REVIEW-0061 M4).** `manifest.RESERVED_IDS` is NOT extended
@@ -466,6 +470,35 @@ and `HEAD`. Every git call carries `changes.neutral_git_args` and `changes.neutr
 `bundle.preview(tenant, ids, parts)` walks the same way and writes nothing: per project the counts (equal to the built
 bundle's, git bundles aside), `left_out`, `parts`, `commits` (`rev-list --count HEAD`), `kb_entries`, plus the note
 "Archives inside the project are not checked for secrets."
+
+### Export - service and routes (Decisions 4, 12, 15, 17; T-0397)
+
+`projects_service.export_projects(tenant, ids, parts, *, confirm, passphrase)`, in this order: request-time sweep of the
+tenant's expired jobs; class gate per project from the registry's protection record (`secret` -> 409 `classification`
+"Secret projects cannot be exported."; `confidential` without `confirm: true` -> 409 `confirm_required` "This project is
+confidential. Confirm that you want to export it."); a passphrase without `gpg` -> 409 `gpg_missing`; one of TWO export
+slots (`threading.BoundedSemaphore(2)`, none free -> 429 `busy` at once, never waiting); the walk sizes the export; audit
+`project.exported outcome=requested` (audit-first, fail-closed 503); <= 100 MiB uncompressed -> built in the worker thread
+the route awaits (`asyncio.to_thread`) and streamed back (`application/zip`, or `application/pgp-encrypted` for
+`….zip.gpg`; `Content-Disposition: attachment; filename=corvin-project-<id>-<yyyymmdd>.zip`, a set
+`corvin-projects-<yyyymmdd>.zip`), its temp directory removed after the response; above -> 202 `{job_id, warnings}` and
+a job on `loop_health.share_pool()` (2 long-lived threads, pre-warmed from both hosts' lifespan) with `job.json` and the
+file under `<tenant_home>/projects/exports/<job_id>/` (dir 0o700, files 0o600), TTL 24 h, swept by the projector tick
+(`projects_service.sweep_share`, bounded, skipped while `loop_health.host_saturated()`) and by every export request.
+A refusal of the build (`secret_shape`, `too_large`, …) answers 409 with the Decision 17 sentence, `project.exported
+outcome=error` and `project.export_refused`, and nothing stays under `exports/`. Passphrase (8-128 chars): `gpg --homedir
+<private temp> --batch --pinentry-mode loopback --symmetric --cipher-algo AES256 --passphrase-fd 0` (gpg 2.x needs the
+loopback pinentry for `--passphrase-fd`); the plain ZIP is deleted. A large sparse file is stored, not deflated (a first
+MiB that deflates beyond 50:1, or a rebuild when an entry ends above 100:1), so every export passes its own V1.
+
+Until the history scan (T-0410) the `git_history` part is unavailable: the preview reports `{name: "git_history",
+included: false, note: "unavailable"}` and an export asked for it builds without it and says "Git history export is not
+available yet." (header `X-Corvin-Export-Warnings`, or `warnings` of the 202 body).
+
+Audit (both registered in `EVENT_SEVERITY` and `_EVENT_ALLOWLIST`): `project.exported` INFO {`project_id`, `files`,
+`parts` (comma-joined included part names), `outcome` requested/applied/error, `tenant_id`} - one requested per export,
+one applied per project; `project.export_refused` WARNING {`reason_class`, `project_id`?, `tenant_id`}. Never a path or a
+title.
 
 ### Validation V1-V6 - `bundle.validate(path, known) -> BundleReport` (Decision 10, T-0398)
 

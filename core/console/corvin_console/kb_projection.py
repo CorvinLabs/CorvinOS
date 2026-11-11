@@ -1121,6 +1121,12 @@ def _loop(tenant_id: str, stop: threading.Event) -> None:
         except Exception as exc:  # noqa: BLE001 -- a project pass never stops the bound KB's loop
             log.warning("kb project projection failed: %s", exc)
         try:
+            # ADR-2323 Decisions 12/13: expired export jobs and import stagings (bounded; skipped while saturated)
+            from corvin_console import projects_service as _ps  # noqa: PLC0415 - projects_service imports this module
+            _ps.sweep_share(tenant_id, busy=busy)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("project share sweep failed: %s", exc)
+        try:
             periodic(tenant_id)
         except Exception as exc:  # noqa: BLE001
             log.warning("kb periodic loop failed: %s", exc)

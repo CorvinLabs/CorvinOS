@@ -335,6 +335,81 @@ async def browse_clear_recent(rec: SessCsrf) -> dict:
     return await _favourite_rows(rec)
 
 
+# ── share: export (ADR-2323 Decision 12, T-0397) ──────────────────────────────────────────────────────────────────────────
+# The service does the work in a worker thread the route awaits (asyncio.to_thread): the class gate, one of two export slots
+# (429 at once), the walk, and either the build (<= 100 MiB, streamed back as a file) or a background job (202).
+
+class ExportParts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    git_history: bool = True
+    generated: bool = False
+    kb: bool = True
+
+
+class ExportBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_ids: list[Annotated[str, Field(min_length=1, max_length=28)]] = Field(min_length=1, max_length=20)
+    parts: Optional[ExportParts] = None
+    confirm: bool = False
+    passphrase: Optional[str] = Field(default=None, min_length=8, max_length=128)
+
+
+def _warn_header(warnings: list[str]) -> dict[str, str]:
+    text = " ".join(w for w in warnings if w.isascii())
+    return {"X-Corvin-Export-Warnings": text} if text else {}
+
+
+def _file_answer(res: dict) -> Any:
+    from fastapi.responses import FileResponse  # noqa: PLC0415
+    from starlette.background import BackgroundTask  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+    cleanup = res.get("cleanup")
+    bg = BackgroundTask(shutil.rmtree, str(cleanup), True) if cleanup else None
+    return FileResponse(str(res["path"]), media_type=res["media"], filename=res["filename"],
+                        headers=_warn_header(res.get("warnings") or []), background=bg)
+
+
+@collection.post("/export")
+async def export_projects(body: ExportBody, rec: SessCsrf) -> Any:
+    from fastapi.responses import JSONResponse  # noqa: PLC0415
+    parts = body.parts.model_dump() if body.parts is not None else None
+    res = await asyncio.to_thread(_call, svc.export_projects, rec.tenant_id, list(body.project_ids), parts,
+                                  confirm=body.confirm, passphrase=body.passphrase)
+    if res["kind"] == "job":
+        return JSONResponse(status_code=202, content={"job_id": res["job_id"], "warnings": res["warnings"]})
+    return _file_answer(res)
+
+
+def _ids_param(ids: str) -> list[str]:
+    out = [x for x in (ids or "").split(",") if x]
+    if not out or len(out) > 20 or any(len(x) > 28 for x in out):
+        raise HTTPException(status_code=422, detail={"message": "name 1 to 20 projects", "reason_class": "invalid"})
+    return out
+
+
+@collection.get("/export/preview")
+async def export_preview(rec: Sess, ids: str = "", parts: Optional[str] = None) -> dict:
+    """``parts``: the comma-separated optional parts to include (``kb``, ``git_history``, ``generated``); absent = defaults."""
+    chosen = None
+    if parts is not None:
+        on = {x for x in parts.split(",") if x}
+        if not on <= {"kb", "git_history", "generated"}:
+            raise HTTPException(status_code=422, detail={"message": "unknown part", "reason_class": "invalid"})
+        chosen = {"kb": "kb" in on, "git_history": "git_history" in on, "generated": "generated" in on}
+    return await asyncio.to_thread(_call, svc.export_preview, rec.tenant_id, _ids_param(ids), chosen)
+
+
+@collection.get("/exports/{job_id}")
+async def export_job(job_id: str, rec: Sess) -> dict:
+    return await asyncio.to_thread(_call, svc.export_job, rec.tenant_id, job_id)
+
+
+@collection.get("/exports/{job_id}/file")
+async def export_job_file(job_id: str, rec: Sess) -> Any:
+    res = await asyncio.to_thread(_call, svc.export_job_file, rec.tenant_id, job_id)
+    return _file_answer(res)
+
+
 @collection.api_route("/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], include_in_schema=False)
 def _collection_unknown(rest: str, rec: Sess) -> dict:
     raise HTTPException(status_code=404, detail={"message": "no such collection route", "reason_class": "not_found"})

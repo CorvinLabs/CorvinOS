@@ -828,6 +828,9 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2322 Decision 11: a refused folder-browser request (reason_class only - never a path or a name)
     "project.browse_refused":       "WARNING",
     "project.video_created":        "INFO",
+    # ADR-2323 Decisions 12/15: sharing a project (project ids, counts and closed vocabularies - never a path, title or match)
+    "project.exported":             "INFO",
+    "project.export_refused":       "WARNING",
     # ADR-0103 — A2A Network Membership Attestation.
     # Metadata only — SesT bytes, instruction, pairing cert body NEVER in chain.
     # Allow-list: instance_id, sest_fp_prefix (16 hex chars), pairing_id,
@@ -3827,6 +3830,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "project.relocated": frozenset({"project_id", "outcome", "tenant_id"}),
     # ADR-2322 Decision 11: never a path, never a name
     "project.browse_refused": frozenset({"reason_class", "tenant_id"}),
+    # ADR-2323 Decision 15: parts = comma-joined closed part vocabulary; never a path, a title, a file name or a match
+    "project.exported": frozenset({"project_id", "files", "parts", "outcome", "tenant_id"}),
+    "project.export_refused": frozenset({"reason_class", "project_id", "tenant_id"}),
     "task_item.kb_create": frozenset({
         "kind", "outcome", "kb_id", "actor_kind", "sid_fingerprint", "tenant_id",
         "scope",   # ADR-2316: the project scope (a project id, never a path)
