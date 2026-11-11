@@ -121,7 +121,7 @@ export default function ProjectInspectorPage() {
             <p className="text-sm" data-testid="inspector-not-ready">{st.detail || "This project cannot be opened right now."}</p>
           </CardContent></Card>
           {/* a missing or unusable project keeps the settings that do not need its folder: Locate folder, Remove from the list */}
-          {!d.builtin && <SettingsSections d={d} onRemoved={onRemoved} />}
+          {!d.builtin && <SettingsSections d={d} onRemoved={onRemoved} onNotice={setNotice} />}
         </>
       )}
 
@@ -167,7 +167,7 @@ export default function ProjectInspectorPage() {
               case "directory": return <DirectoryTab d={d} />;
               case "compute": return <ComputeTab id={d.id} />;
               case "features": return <FeaturesTab d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />;
-              case "settings": return <SettingsSections d={d} onRemoved={onRemoved} />;
+              case "settings": return <SettingsSections d={d} onRemoved={onRemoved} onNotice={setNotice} />;
             }
           })()}
           </div>

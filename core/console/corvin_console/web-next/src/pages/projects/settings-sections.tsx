@@ -29,7 +29,9 @@ const LIST = ["projects", "list"] as const;
 /** The typed confirmation for a new workspace; the words are the action, so they cannot be typed by accident. */
 export const REKEY_CONFIRM = "new workspace";
 
-export function SettingsSections({ d, onRemoved }: { d: ProjectDetail; onRemoved: (msg: string) => void }) {
+/** `onNotice`: a confirmation that must outlive this tree - a successful "Locate folder" makes the project usable again, and the detail page
+ * then draws a different branch, which unmounts the box that said "Found." (live picker spec, review round 2 of the initiative). */
+export function SettingsSections({ d, onRemoved, onNotice }: { d: ProjectDetail; onRemoved: (msg: string) => void; onNotice?: (msg: string) => void }) {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
   const qc = useQueryClient();
@@ -49,7 +51,7 @@ export function SettingsSections({ d, onRemoved }: { d: ProjectDetail; onRemoved
   const body = (id: SectionId, actions: Partial<Record<string, ActionGate>>, notes: string[]): ReactNode => {
     switch (id) {
       case "general": return <General d={d} csrf={csrf} rename={actions.rename} onChanged={changed} />;
-      case "location": return <Location d={d} csrf={csrf} actions={actions} notes={notes} where={list.data} onChanged={changed} />;
+      case "location": return <Location d={d} csrf={csrf} actions={actions} notes={notes} where={list.data} onChanged={changed} onNotice={onNotice} />;
       case "protection": return <ProtectionSection d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />;
       case "chat": return <AttachSection d={d} csrf={csrf} />;
       case "maintenance": return <Maintenance d={d} csrf={csrf} repair={actions.repair} />;
@@ -118,9 +120,9 @@ function General({ d, csrf, rename, onChanged }: { d: ProjectDetail; csrf: strin
   );
 }
 
-function Location({ d, csrf, actions, notes, where, onChanged }: {
+function Location({ d, csrf, actions, notes, where, onChanged, onNotice }: {
   d: ProjectDetail; csrf: string; actions: Partial<Record<string, ActionGate>>; notes: string[];
-  where?: { projects_root: string; projects_root_set?: boolean }; onChanged: () => void;
+  where?: { projects_root: string; projects_root_set?: boolean }; onChanged: () => void; onNotice?: (msg: string) => void;
 }) {
   const w = whereLabel(d, { projects_root: where?.projects_root, projects_root_set: where?.projects_root_set });
   const [opened, setOpened] = useState<string | null>(null);
@@ -159,21 +161,23 @@ function Location({ d, csrf, actions, notes, where, onChanged }: {
         <p key={n} className="rounded border border-amber-600/50 p-2 text-sm" data-testid="location-warning">{n}</p>
       ))}
       {actions.move && <MoveFlow d={d} csrf={csrf} onChanged={onChanged} />}
-      {actions.locate && <LocateBox d={d} csrf={csrf} onChanged={onChanged} />}
+      {actions.locate && <LocateBox d={d} csrf={csrf} onChanged={onChanged} onNotice={onNotice} />}
       {actions.rekey && <RekeyBox csrf={csrf} onChanged={onChanged} />}
     </div>
   );
 }
 
 /** "Folder missing": point the list at the folder that now holds this project, chosen in the picker. Moves nothing. */
-function LocateBox({ d, csrf, onChanged }: { d: ProjectDetail; csrf: string; onChanged: () => void }) {
+function LocateBox({ d, csrf, onChanged, onNotice }: { d: ProjectDetail; csrf: string; onChanged: () => void; onNotice?: (msg: string) => void }) {
   const [picking, setPicking] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const mut = useMutation({
     mutationFn: (loc: string) => relocateProject(d.id, loc, csrf),
     onSuccess: (r) => {
       const warn = (r.warnings ?? []).filter(Boolean);
-      setMsg(`Found. The list now points at the new folder.${warn.length ? ` Note: ${warn.join(" ")}` : ""}`);
+      const text = `Found. The list now points at the new folder.${warn.length ? ` Note: ${warn.join(" ")}` : ""}`;
+      setMsg(text);
+      onNotice?.(text);                     // the box itself disappears once the project is usable again: the page keeps the confirmation
       onChanged();
     },
     onError: (e) => setMsg(explain(e)),

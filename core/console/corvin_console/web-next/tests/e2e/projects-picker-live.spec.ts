@@ -154,7 +154,8 @@ test("the picker on the running console: refusals, verdict before confirm, adopt
     await expect(picker.getByTestId("picker-verdict-text")).toHaveText("Can be used", { timeout: 20_000 });
     await shot(page, "live-locate-picker-1280");
     await picker.getByTestId("picker-choose").click();
-    await expect(page.getByTestId("locate-note")).toContainText("Found.", { timeout: 60_000 });
+    // once the folder is found the project is usable again and the locate box leaves the page; the confirmation stays on the detail page
+    await expect(page.getByTestId("feature-notice").or(page.getByTestId("locate-note")).first()).toContainText("Found.", { timeout: 60_000 });
     await expect.poll(async () => (await list(req)).projects.find((p) => p.id === ID), { timeout: 20_000 })
       .toMatchObject({ path: path.join(BASE, `${ID}-renamed`), state: "ok" });
 
