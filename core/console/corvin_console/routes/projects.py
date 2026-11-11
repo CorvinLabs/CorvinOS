@@ -510,6 +510,30 @@ async def import_verdict(staging_id: str, rec: Sess, project: str = "", location
     return await asyncio.to_thread(_call, svc.import_verdict, rec.tenant_id, staging_id, project, location, project_id)
 
 
+class ApplyParts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    git_history: bool = True
+    kb: bool = True
+
+
+class ApplyBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project: Optional[str] = Field(default=None, min_length=1, max_length=28)
+    project_id: Optional[str] = Field(default=None, min_length=1, max_length=28)
+    location: Optional[str] = Field(default=None, min_length=1, max_length=1000)
+    parts: Optional[ApplyParts] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+@collection.post("/import/{staging_id}/apply", status_code=201)
+async def import_apply(staging_id: str, body: ApplyBody, rec: SessCsrf) -> dict:
+    """Import, second half (ADR-2323 Decision 13, T-0400/T-0411/T-0412): in an awaited worker thread, one of two apply slots
+    (429 ``busy`` at once), under the project lock of the new id. 201 with ``{project, warnings, notes, origin}``."""
+    return await asyncio.to_thread(_call, svc.import_apply, rec.tenant_id, staging_id, project=body.project,
+                                   project_id=body.project_id, location=body.location,
+                                   parts=body.parts.model_dump() if body.parts is not None else None, title=body.title)
+
+
 @collection.delete("/import/{staging_id}", status_code=204)
 async def import_cancel(staging_id: str, rec: SessCsrf) -> None:
     from fastapi import Response  # noqa: PLC0415
@@ -554,6 +578,27 @@ def get_structure(project_id: str, rec: Sess, depth: int = 2) -> dict:
 @router.get("/{project_id}/health")
 def get_health(project_id: str, rec: Sess) -> dict:
     return _call(svc.health, rec.tenant_id, project_id)
+
+
+class DuplicateParts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    git_history: bool = True
+    kb: bool = True
+    generated: bool = False
+
+
+class DuplicateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: str = Field(min_length=1, max_length=28)
+    location: Optional[str] = Field(default=None, min_length=1, max_length=1000)
+    parts: Optional[DuplicateParts] = None
+
+
+@router.post("/{project_id}/duplicate", status_code=201)
+async def duplicate(project_id: str, body: DuplicateBody, rec: SessCsrf) -> dict:
+    """Duplicate = export to a private staging + apply (ADR-2323 Decision 14, T-0401), in an awaited worker thread."""
+    return await asyncio.to_thread(_call, svc.duplicate_project, rec.tenant_id, project_id, new_id=body.project_id,
+                                   location=body.location, parts=body.parts.model_dump() if body.parts is not None else None)
 
 
 @router.put("/{project_id}/features")

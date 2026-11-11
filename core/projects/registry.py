@@ -909,7 +909,15 @@ def get(tenant_id: str, project_id: str) -> Optional[dict[str, Any]]:
     return None
 
 
-def register(tenant_id: str, project_id: str, path: Path, template: Optional[str]) -> dict[str, Any]:
+PENDING_STATES = frozenset({"import"})
+
+
+def register(tenant_id: str, project_id: str, path: Path, template: Optional[str], *, pending: Optional[str] = None) -> dict[str, Any]:
+    """Add an entry. ``pending="import"`` (ADR-2323 Decision 13 step 2, REVIEW-0061 M12) is the only state an import writes
+    before its tree is in place: ``rebuild``, the projector, the chat attachment and every scope list skip such an entry, and
+    :func:`set_pending` clears it when the import is applied."""
+    if pending is not None and pending not in PENDING_STATES:
+        raise RegistryError("invalid pending state")
     if not manifest.PROJECT_ID_RE.match(project_id) or project_id in manifest.RESERVED_IDS:
         raise ProjectPathError("invalid project id")
     resolved = _resolve_forgiving(path)
@@ -926,10 +934,33 @@ def register(tenant_id: str, project_id: str, path: Path, template: Optional[str
             raise RegistryError(f"at most {MAX_PROJECTS} projects per tenant")
         entry = {"id": project_id, "path": str(resolved), "template": template or "",
                  "added_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "storage": storage_of(tenant_id, resolved)}
+        if pending is not None:
+            entry["pending"] = pending
         data["projects"] = lst + [entry]
         data.setdefault("schema", SCHEMA)
         _save(tenant_id, data)
     return entry
+
+
+def set_pending(tenant_id: str, project_id: str, pending: Optional[str]) -> None:
+    """Set or (``None``) clear an entry's ``pending`` state. Raises :class:`RegistryError` for an unknown project."""
+    if pending is not None and pending not in PENDING_STATES:
+        raise RegistryError("invalid pending state")
+    with _lock(tenant_id):
+        data = load(tenant_id)
+        lst = [e for e in data.get("projects", []) if isinstance(e, dict)]
+        hit = False
+        for e in lst:
+            if e.get("id") == project_id:
+                hit = True
+                if pending is None:
+                    e.pop("pending", None)
+                else:
+                    e["pending"] = pending
+        if not hit:
+            raise RegistryError("no such project")
+        data["projects"] = lst
+        _save(tenant_id, data)
 
 
 def unregister(tenant_id: str, project_id: str) -> bool:

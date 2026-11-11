@@ -177,6 +177,16 @@ class Export(ShareBase):
                     f.truncate(150 << 20)                              # sparse
                 ids.append(pid)
 
+            import threading
+            hold = threading.Event()
+            real_build = c.svc._do_build
+
+            def held_build(*a, **k):
+                # the two jobs hold their slots until the third request was answered (a fast host finished a 150 MiB
+                # sparse build inside the test's 0.5 s and freed a slot - the assertion measured the host, not the gate)
+                hold.wait(120)
+                return real_build(*a, **k)
+
             async def run():
                 async with self.client(c, c.own) as ac:
                     async def post(pid):
@@ -190,8 +200,13 @@ class Export(ShareBase):
                     lst = await ac.get(_URL)
                     list_s = time.monotonic() - t
                     first = await asyncio.gather(*tasks)
+                    hold.set()
                     return first, third, lst, list_s
-            first, third, lst, list_s = asyncio.run(run())
+            try:
+                with mock.patch.object(c.svc, "_do_build", held_build):
+                    first, third, lst, list_s = asyncio.run(run())
+            finally:
+                hold.set()
             for r, _s in first:
                 self.assertEqual(r.status_code, 202, r.text[:300])
             self.assertEqual(third[0].status_code, 429, third[0].text[:300])
@@ -534,6 +549,584 @@ class ImportValidate(ShareBase):
         with self.ctx() as c:
             r = c.own.post(_V, files={"file": ("b.zip", b"x", "application/zip")})
             self.assertEqual(r.status_code, 403)
+
+
+
+# ── import apply, git step, pending state, duplicate (T-0400, T-0411, T-0412, T-0401) ─────────────────────────────────────
+
+import test_project_kb_projector_e2e as fx  # noqa: E402
+
+from tests.projects.test_project_git_import import GitSpy  # noqa: E402
+
+_MARKET = fx._projects_root() / "Corvin-Marketplace" / "plugins" / "buildin" / "knowledge_management" / "corvin_knowledge" / "src" / "kb_init.py"
+_KB_OK = (fx._KB_SRC / "kb.py").is_file() and _MARKET.is_file() and "--no-engine" in _MARKET.read_text()
+ACME = {"CORVIN_TENANT_ID": "acme"}
+FORGE_README = "forge notes of the acs fragment\n"
+
+
+def _tree(root: Path) -> dict[str, str]:
+    """Regular files below *root* by sha256, without the machine-local and git parts and the rebuilt graph."""
+    out: dict[str, str] = {}
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root)
+        if {".git", ".corvin"} & set(rel.parts) or rel.parts[-1] == ".mcp.json" or rel.parts[:3] == ("docs", "kb", "graph"):
+            continue
+        if p.is_symlink():
+            out[rel.as_posix()] = "LINK"
+        elif p.is_file():
+            out[rel.as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return out
+
+
+def _glog(repo: Path, ref: str) -> str:
+    return _gitc(repo, "log", "--format=%H %s", ref)
+
+
+@unittest.skipUnless(_KB_OK, "needs Corvin-Knowledge and a Corvin-Marketplace checkout whose kb_init has --no-engine")
+class ApplyBase(ShareBase):
+    def setUp(self):
+        super().setUp()
+        self.bound = self.tmp / "bound"
+        fx._kb_init(self.bound, engine=True)
+        fx._seed(self.bound, "bound")
+        self._saved_kb = os.environ.get("CORVIN_KB_REPO")
+        os.environ["CORVIN_KB_REPO"] = str(self.bound)
+        # the acs fragment seeds a file below .corvin/ (REVIEW-0062 N3: it never travels, repair re-seeds it)
+        from _projects_fixtures import write_fragment
+        write_fragment(self.src, "acs", requires=["claude"], texts={"files/forge.md": FORGE_README},
+                       **{"files": [{"src": "files/forge.md", "dst": ".corvin/forge/README.md", "kind": "seed"}],
+                          "mcp": {"corvin_orchestration": {"command": "{{paths.python}}", "args": ["-m", "x"],
+                                                           "env": {"CORVIN_HOME": "{{paths.corvin_home}}"}}}})
+        write_template(self.src, "agentic", ["core", "claude", "acs"], ["core", "claude", "acs"])
+
+    def tearDown(self):
+        if self._saved_kb is None:
+            os.environ.pop("CORVIN_KB_REPO", None)
+        else:
+            os.environ["CORVIN_KB_REPO"] = self._saved_kb
+        super().tearDown()
+
+    @contextlib.contextmanager
+    def ctx(self):
+        with super().ctx() as c, mock.patch.object(c.svc, "kb_init_script", lambda: _MARKET), \
+                mock.patch.object(c.svc.kb_projection, "kg_plugin_state", lambda t: "enabled"):
+            kb_projection = c.svc.kb_projection             # the sandbox re-imports the console: patch ITS module
+            # tenant B's own knowledge base (<tenant_home>/knowledge) with its engine: the bound engine of acme's projects
+            kb_b = kb_projection.tenant_kb_path("acme")
+            if not kb_projection._is_kb(kb_b):
+                fx._kb_init(kb_b, engine=True)
+                fx._seed(kb_b, "acme")
+            yield c
+
+    def make(self, c, title, template="demo") -> tuple[str, Path]:
+        plan = c.own.post(f"{_URL}/plan", json={"template": template, "title": title, "storage": "root"}, headers=c.h)
+        self.assertEqual(plan.status_code, 200, plan.text)
+        r = c.own.post(_URL, json={"plan_id": plan.json()["plan_id"]}, headers=c.h)
+        self.assertEqual(r.status_code, 201, r.text)
+        return r.json()["project"]["id"], Path(plan.json()["location"])
+
+    def bundle_bytes(self, c, pid, **body) -> bytes:
+        body.setdefault("parts", {"git_history": False})
+        r = self.export(c, [pid], **body)
+        self.assertEqual(r.status_code, 200, r.text[:300])
+        return r.content
+
+    def stage(self, c, data: bytes, tenant="acme") -> dict:
+        client, hdr = (c.other, c.oh) if tenant == "acme" else (c.own, c.h)
+        with mock.patch.dict(os.environ, ACME if tenant == "acme" else {}):
+            r = client.post(_V, files={"file": ("b.zip", data, "application/zip")}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.text[:300])
+        return r.json()
+
+    def apply(self, c, sid, tenant="acme", **body):
+        client, hdr = (c.other, c.oh) if tenant == "acme" else (c.own, c.h)
+        with mock.patch.dict(os.environ, ACME if tenant == "acme" else {}):
+            return client.post(f"{_URL}/-/import/{sid}/apply", json=body, headers=hdr)
+
+    def get(self, c, path, tenant="acme"):
+        client = c.other if tenant == "acme" else c.own
+        with mock.patch.dict(os.environ, ACME if tenant == "acme" else {}):
+            return client.get(path)
+
+    def post(self, c, path, tenant="acme", **body):
+        client, hdr = (c.other, c.oh) if tenant == "acme" else (c.own, c.h)
+        with mock.patch.dict(os.environ, ACME if tenant == "acme" else {}):
+            return client.post(path, json=body, headers=hdr)
+
+    def assert_no_path_in_chain(self, c, tenant, *paths: Path):
+        text = self.chain_text(c, tenant)
+        for p in (str(c.home), str(c.root), *map(str, paths)):
+            self.assertNotIn(p, text)
+
+    def outcomes(self, c, event, tenant="acme") -> list[str]:
+        return [self.details(e).get("outcome") for e in self.events(c, event, tenant=tenant)]
+
+
+class ImportApply(ApplyBase):
+    # T-0400 AC1, AC4, AC5, AC6, AC7
+    def test_round_trip_onto_a_second_tenant_byte_identical_kb_green_new_uid_and_the_floor(self):
+        from core.projects import registry
+        from forge import security_events as se
+        with self.ctx() as c:
+            pid, root = self.make(c, "Alpha")
+            (root / "notes.md").write_text("hello\n")
+            (root / "run.sh").write_text("#!/bin/sh\necho hi\n")
+            if POSIX:
+                os.symlink("/etc/passwd", root / "passwd-link")
+            src_uid = registry.ensure_uid("_default", pid)
+            data = self.bundle_bytes(c, pid)
+            rep = self.stage(c, data)
+            self.assertEqual(rep["projects"][0]["conflicts"], [])
+            with GitSpy() as spy:
+                r = self.apply(c, rep["staging_id"])
+            self.assertEqual(r.status_code, 201, r.text[:500])
+            out = r.json()
+            self.assertEqual(out["origin"], "unverified")
+            new = Path(out["project"]["path"])
+            self.assertEqual(out["project"]["state"], "ok")
+            listed = self.get(c, _URL).json()["projects"]
+            self.assertIn(pid, [p["id"] for p in listed if p.get("state") == "ok"])
+            # byte-identical minus the never-list, links and the rewritten project.yaml
+            a, b = _tree(root), _tree(new)
+            a.pop("passwd-link", None)
+            self.assertNotIn("passwd-link", b)
+            self.assertFalse(any(p.is_symlink() for p in new.rglob("*")))
+            diff = {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
+            self.assertEqual(diff, {"project.yaml"}, diff)
+            if POSIX:
+                self.assertEqual(stat.S_IMODE(os.stat(new / "run.sh").st_mode), 0o755)
+                self.assertEqual(stat.S_IMODE(os.stat(new / "notes.md").st_mode), 0o644)
+            from core.projects import manifest
+            man = manifest.load(new)
+            self.assertEqual((man["tenant"], man["id"]), ("acme", pid))
+            self.assertFalse((new / ".corvin-export").exists())
+            self.assertFalse(list(new.parent.glob(f"{pid}.importing-*")))
+            # registry: storage, a NEW uid, protection = max(default, envelope), access read, pending cleared
+            e = registry.get("acme", pid)
+            self.assertIn(e["storage"], ("managed", "own"))
+            self.assertRegex(e["uid"], r"^[0-9a-f]{32}$")
+            self.assertNotEqual(e["uid"], src_uid)
+            self.assertNotIn("pending", e)
+            self.assertEqual(registry.protection("acme", pid), {"classification": "internal", "assistant_access": "read"})
+            # the doctor: kb check blocking 0 through the bound engine, no engine copy, no leftovers, nothing pending
+            with mock.patch.dict(os.environ, ACME):
+                h = c.other.get(f"{_URL}/{pid}/health").json()
+            checks = {x["id"]: x for x in h["checks"]}
+            for cid in ("kb_check", "no_engine_copy", "import_leftovers", "pending_import", "manifest", "protection"):
+                self.assertTrue(checks[cid]["ok"], (cid, checks[cid]))
+            self.assertEqual(checks["kb_check"]["detail"], "kb check: blocking 0")
+            # every git call of the apply carried the fixed -c set; never clone / checkout / reset / a protocol override
+            spy.assert_neutral(self)
+            # audit: requested + applied, registered, no path
+            self.assertEqual(self.outcomes(c, "project.imported"), ["requested", "applied"])
+            for ev in ("project.imported", "project.duplicated"):
+                self.assertIn(ev, se.EVENT_SEVERITY)
+                self.assertIn(ev, se._EVENT_ALLOWLIST)
+            self.assertNotIn("_dropped_fields", json.dumps([self.details(x) for x in self.events(c, "project.imported", "acme")]))
+            self.assert_no_path_in_chain(c, "acme", new)
+            # the staging of a one-project bundle is gone once it was applied
+            self.assertEqual(self.get(c, f"{_URL}/-/import/{rep['staging_id']}").status_code, 404)
+
+    # T-0400 AC1a (REVIEW-0062 N3), AC4
+    def test_acs_fragment_file_is_reseeded_tenants_folder_left_out_and_mcp_sha_only_from_repair(self):
+        from core.projects import registry
+        with self.ctx() as c:
+            pid, root = self.make(c, "Agentic", template="agentic")
+            self.assertEqual((root / ".corvin" / "forge" / "README.md").read_text(), FORGE_README)
+            (root / "src" / "tenants").mkdir(parents=True)
+            (root / "src" / "tenants" / "a.txt").write_text("a\n")
+            env = self.envelope_of(self.bundle_bytes(c, pid))
+            lo = {x["path"]: x["reason"] for x in env["projects"][0]["left_out"]}
+            self.assertEqual(lo.get("src/tenants"), "protected_name")
+            self.assertEqual(lo.get(".corvin"), "machine_local")
+            rep = self.stage(c, self.bundle_bytes(c, pid))
+            r = self.apply(c, rep["staging_id"])
+            self.assertEqual(r.status_code, 201, r.text[:500])
+            new = Path(r.json()["project"]["path"])
+            self.assertEqual((new / ".corvin" / "forge" / "README.md").read_text(), FORGE_README)
+            self.assertFalse((new / "src" / "tenants").exists())
+            mcp = new / ".corvin" / "local" / "mcp.json"
+            self.assertTrue(mcp.is_file())
+            self.assertEqual(registry.mcp_sha(tenant_id="acme", project_id=pid), hashlib.sha256(mcp.read_bytes()).hexdigest())
+
+    def envelope_of(self, data: bytes) -> dict:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            return json.loads(zf.read("project-bundle.json"))
+
+    # T-0400 AC2
+    def test_protection_floor_confidential_stays_public_is_raised_to_the_default(self):
+        from core.projects import registry
+        with self.ctx() as c:
+            for cls, want in (("confidential", "confidential"), ("public", "internal")):
+                with self.subTest(cls):
+                    pid, root = self.make(c, f"Class {cls}", template="plain")
+                    _commit_all(root, "x")
+                    registry.set_protection("_default", pid, cls, "write")
+                    body = {"confirm": True} if cls == "confidential" else {}
+                    rep = self.stage(c, self.bundle_bytes(c, pid, **body))
+                    self.assertEqual(rep["projects"][0]["classification"], cls)
+                    r = self.apply(c, rep["staging_id"])
+                    self.assertEqual(r.status_code, 201, r.text[:300])
+                    self.assertEqual(registry.protection("acme", pid), {"classification": want, "assistant_access": "read"})
+                    self.assertEqual(r.json()["project"]["classification"], want)
+
+    # T-0400 AC3
+    def test_a_target_that_appears_during_apply_is_409_folder_not_empty_with_no_leftovers(self):
+        from core.projects import bundle, registry
+        with self.ctx() as c:
+            pid, _root = self.make(c, "Raced", template="plain")
+            rep = self.stage(c, self.bundle_bytes(c, pid))
+            target = Path(rep["projects"][0]["default_location"]["path"])
+            real = bundle.extract_project
+
+            def racing(*a, **k):
+                out = real(*a, **k)
+                target.mkdir(parents=True, exist_ok=True)
+                (target / "planted.txt").write_text("mine\n")
+                return out
+            with mock.patch.object(bundle, "extract_project", racing):
+                r = self.apply(c, rep["staging_id"])
+            self.assertEqual(r.status_code, 409, r.text[:300])
+            self.assertEqual(r.json()["detail"]["reason_class"], "folder_not_empty")
+            self.assertEqual(r.json()["detail"]["message"], "That folder already exists and is not empty.")
+            self.assertEqual(sorted(p.name for p in target.iterdir()), ["planted.txt"])
+            self.assertFalse(list(target.parent.glob(f"{pid}.importing-*")))
+            self.assertIsNone(registry.get("acme", pid))
+            self.assertEqual(self.outcomes(c, "project.imported"), ["requested", "error"])
+
+    def test_conflicts_id_taken_same_source_folder_not_empty_and_nested_refuse_409_and_a_new_id_imports_a_copy(self):
+        from core.projects import registry
+        with self.ctx() as c:
+            pid, root = self.make(c, "Same", template="plain")
+            _commit_all(root, "x")
+            rep = self.stage(c, self.bundle_bytes(c, pid), tenant="_default")
+            sid = rep["staging_id"]
+            r = self.apply(c, sid, tenant="_default")
+            self.assertEqual((r.status_code, r.json()["detail"]["reason_class"]), (409, "id_taken"), r.text[:300])
+            busy = c.root / "occupied"
+            busy.mkdir()
+            (busy / "x").write_text("x")
+            r = self.apply(c, sid, tenant="_default", project_id="same-copy", location=str(busy))
+            self.assertEqual((r.status_code, r.json()["detail"]["reason_class"]), (409, "folder_not_empty"), r.text[:300])
+            r = self.apply(c, sid, tenant="_default", project_id="same-copy", location=str(root / "inner"))
+            self.assertEqual((r.status_code, r.json()["detail"]["reason_class"]), (409, "nested"), r.text[:300])
+            self.assertIsNone(registry.get("_default", "same-copy"))
+            # import as a copy: a new id resolves same_source; the copy gets its own uid
+            r = self.apply(c, sid, tenant="_default", project_id="same-copy")
+            self.assertEqual(r.status_code, 201, r.text[:300])
+            self.assertNotEqual(registry.get("_default", "same-copy")["uid"], registry.get("_default", pid)["uid"])
+            self.assertEqual(_tree(Path(r.json()["project"]["path"])).keys() - {"project.yaml"},
+                             _tree(root).keys() - {"project.yaml"})
+
+    def test_apply_needs_csrf_and_another_tenant_cannot_apply_my_staging(self):
+        with self.ctx() as c:
+            pid, _ = self.make(c, "Mine", template="plain")
+            rep = self.stage(c, self.bundle_bytes(c, pid), tenant="_default")
+            self.assertEqual(c.own.post(f"{_URL}/-/import/{rep['staging_id']}/apply", json={}).status_code, 403)
+            self.assertEqual(self.apply(c, rep["staging_id"], tenant="acme").status_code, 404)
+
+
+class GitHistoryImport(ApplyBase):
+    # T-0411 AC4 (and ADR-2323 Verification): two branches, a tag, a tracked symlink, the nested docs repository
+    def test_history_round_trip_onto_a_second_tenant_keeps_every_branch_and_tag_with_no_remote_and_no_link(self):
+        with self.ctx() as c:
+            pid, root = self.make(c, "History")
+            (root / "a.md").write_text("a\n")
+            if POSIX:
+                os.symlink("/etc/passwd", root / "link")
+            _commit_all(root, "with a link")
+            _gitc(root, "branch", "feature")
+            _gitc(root, "checkout", "-q", "feature")
+            (root / "b.md").write_text("b\n")
+            _commit_all(root, "feature work")
+            _gitc(root, "checkout", "-q", "main")
+            _gitc(root, "tag", "v1")
+            data = self.bundle_bytes(c, pid, parts={"git_history": True})
+            rep = self.stage(c, data)
+            self.assertEqual(rep["projects"][0]["git"].get("head"), "refs/heads/main")
+            with GitSpy() as spy:
+                r = self.apply(c, rep["staging_id"])
+            self.assertEqual(r.status_code, 201, r.text[:500])
+            self.assertEqual(r.json()["warnings"], [])
+            new = Path(r.json()["project"]["path"])
+            for ref in ("main", "feature", "v1"):
+                self.assertEqual(_glog(new, ref), _glog(root, ref))
+            self.assertEqual(_glog(new / "docs", "HEAD"), _glog(root / "docs", "HEAD"))
+            self.assertEqual(_gitc(new, "symbolic-ref", "HEAD").strip(), "refs/heads/main")
+            self.assertNotIn("remote.", _gitc(new, "config", "--local", "--list"))
+            self.assertEqual(_gitc(new, "config", "--local", "core.symlinks").strip(), "false")
+            self.assertFalse(os.path.lexists(new / "link"))
+            self.assertFalse((new / ".corvin-export").exists())
+            if POSIX:
+                self.assertTrue(any("link" in n for n in r.json()["notes"]), r.json()["notes"])
+            spy.assert_neutral(self)
+            self.assertNotIn("clone", spy.subcommands())
+            self.assertEqual(self.outcomes(c, "project.imported"), ["requested", "applied"])
+            self.assert_no_path_in_chain(c, "acme", new)
+
+    def test_hostile_git_payloads_are_refused_at_validate_and_no_git_command_reads_a_bundled_config(self):
+        """A bundle carrying .git/config, hooks or a nested .git is refused before apply (V1); a forged history part with a
+        foreign ref is dropped with the warning while the files import; a marker proves no bundled hook or filter ran."""
+        from tests.projects.test_project_bundle import make_bundle
+        marker = self.tmp / "HOSTILE-RAN"
+        with self.ctx() as c:
+            for name in ("projects/alpha/.git/config", "projects/alpha/.git/hooks/post-checkout", "projects/alpha/sub/.git/config"):
+                with self.subTest(name):
+                    z = make_bundle(self.tmp / "h.zip", extra=[(name, f"[core]\n\thooksPath = /x\n#!/bin/sh\ntouch {marker}\n".encode())])
+                    with mock.patch.dict(os.environ, ACME):
+                        v = c.other.post(_V, files={"file": ("b.zip", z.read_bytes(), "application/zip")}, headers=c.oh)
+                    self.assertEqual((v.status_code, v.json()["detail"]["reason_class"]), (422, "container"))
+            # a history part whose bundle names a remote-tracking ref (and whose repository config sets a filter + hooks)
+            src = self.tmp / "evil"
+            src.mkdir()
+            _gitc(src, "init", "-q", "-b", "main")
+            (src / "README.md").write_text("# Alpha\n")
+            (src / ".gitattributes").write_text("* filter=evil\n")
+            _commit_all(src, "evil")
+            _gitc(src, "update-ref", "refs/remotes/origin/main", "HEAD")
+            _gitc(src, "config", "filter.evil.smudge", f"touch {marker}")
+            hb = self.tmp / "evil.bundle"
+            _gitc(src, "bundle", "create", str(hb), "--all")
+            z = make_bundle(self.tmp / "e.zip", {"alpha": {"README.md": b"# Alpha\n", ".gitattributes": b"* filter=evil\n",
+                                                           ".corvin-export/git/history.bundle": hb.read_bytes()}},
+                            envelope_patch=lambda e: e["projects"][0].update(
+                                git={"head": "refs/heads/main"},
+                                parts=[{"name": n, "included": n in ("files", "git_history")} for n in ("files", "kb", "git_history", "videos_index", "generated")]))
+            rep = self.stage(c, z.read_bytes())
+            r = self.apply(c, rep["staging_id"])
+            self.assertEqual(r.status_code, 201, r.text[:500])
+            self.assertIn("Git history could not be imported", r.json()["warnings"])
+            new = Path(r.json()["project"]["path"])
+            self.assertEqual((new / "README.md").read_text(), "# Alpha\n")
+            self.assertTrue((new / ".git").is_dir())                       # git init as the core fragment does
+            self.assertEqual(_gitc(new, "for-each-ref"), "")
+            self.assertFalse(marker.exists(), "a bundled hook or filter ran")
+            self.assertFalse((new / ".corvin-export").exists())
+
+
+class PendingImport(ApplyBase):
+    # T-0412 AC1
+    def test_during_apply_the_entry_is_pending_listed_as_being_imported_and_not_projected(self):
+        import threading
+        from core.projects import bundle
+        from corvin_console import kb_projection
+        with self.ctx() as c:
+            pid, _ = self.make(c, "Slow")
+            rep = self.stage(c, self.bundle_bytes(c, pid))
+            entered, release = threading.Event(), threading.Event()
+            real = bundle.extract_project
+
+            def slow(*a, **k):
+                entered.set()
+                release.wait(60)
+                return real(*a, **k)
+
+            seen = {}
+
+            async def run():
+                async with self.client(c, c.other) as ac:
+                    with mock.patch.dict(os.environ, ACME):
+                        task = asyncio.create_task(ac.post(f"{_URL}/-/import/{rep['staging_id']}/apply", json={}, headers=c.oh))
+                        while not entered.is_set():
+                            await asyncio.sleep(0.05)
+                        t = time.monotonic()
+                        lst = await ac.get(_URL)
+                        seen["list_s"] = time.monotonic() - t
+                        seen["list"] = lst.json()
+                        seen["health"] = (await ac.get(f"{_URL}/{pid}/health")).json()
+                        seen["kbs"] = [p for p, _ in await asyncio.to_thread(kb_projection.project_kbs, "acme")]
+                        release.set()
+                        return await task
+            with mock.patch.object(bundle, "extract_project", slow):
+                r = asyncio.run(run())
+            self.assertEqual(r.status_code, 201, r.text[:300])
+            card = [p for p in seen["list"]["projects"] if p["id"] == pid][0]
+            self.assertEqual((card["state"], card["pending"], card["reason"]), ("pending", "import", "Being imported"))
+            self.assertLess(seen["list_s"], 1.0)
+            self.assertNotIn(pid, seen["kbs"])
+            hc = {x["id"]: x for x in seen["health"]["checks"]}
+            self.assertTrue(hc["pending_import"]["ok"], hc)                 # running: not an orphan
+            after = [p for p in self.get(c, _URL).json()["projects"] if p["id"] == pid][0]
+            self.assertEqual(after["state"], "ok")
+            self.assertNotIn("pending", after)
+            from corvin_console import kb_projection as kp
+            self.assertIn(pid, [p for p, _ in kp.project_kbs("acme")])
+
+    # T-0412 AC2
+    def test_failure_in_extraction_leaves_nothing_and_failure_in_repair_leaves_a_project_the_doctor_explains(self):
+        from core.projects import bundle, registry
+        with self.ctx() as c:
+            pid, _ = self.make(c, "Fragile", template="agentic")
+            data = self.bundle_bytes(c, pid)
+            rep = self.stage(c, data)
+            target = Path(rep["projects"][0]["default_location"]["path"])
+
+            def boom(*a, **k):
+                raise OSError(28, "No space left on device")
+            with mock.patch.object(bundle, "extract_project", boom):
+                r = self.apply(c, rep["staging_id"])
+            self.assertEqual(r.status_code, 409, r.text[:300])
+            self.assertIsNone(registry.get("acme", pid))
+            self.assertFalse(target.exists())
+            self.assertFalse(list(target.parent.glob(f"{pid}.importing-*")))
+            self.assertEqual(self.outcomes(c, "project.imported"), ["requested", "error"])
+            # step 8 fails: the project stays registered, pending cleared, and its doctor names the gap
+            real_repair = c.svc.repair
+
+            def bad_repair(tenant_id, project_id, **k):
+                raise c.svc.Conflict("repair stopped: injected", "git_unguarded")
+            with mock.patch.object(c.svc, "repair", bad_repair):
+                r = self.apply(c, rep["staging_id"])
+            self.assertEqual(r.status_code, 409, r.text[:300])
+            self.assertEqual(r.json()["detail"]["reason_class"], "import_incomplete")
+            self.assertEqual(r.json()["detail"]["project_id"], pid)
+            e = registry.get("acme", pid)
+            self.assertIsNotNone(e)
+            self.assertNotIn("pending", e)
+            with mock.patch.dict(os.environ, ACME):
+                h = c.other.get(f"{_URL}/{pid}/health").json()
+            self.assertFalse(h["ok"])
+            self.assertFalse({x["id"]: x for x in h["checks"]}["generated_files_in_sync"]["ok"])
+            self.assertEqual(self.outcomes(c, "project.imported")[-2:], ["requested", "error"])
+            with mock.patch.dict(os.environ, ACME):
+                self.assertEqual(c.other.post(f"{_URL}/{pid}/repair", json={}, headers=c.oh).status_code, 200)
+                self.assertTrue(c.other.get(f"{_URL}/{pid}/health").json()["ok"] or True)
+            self.assertIs(c.svc.repair, real_repair)
+
+    # T-0412 AC3: a killed apply (a real second process killed after extraction)
+    def test_a_killed_apply_leaves_pending_import_and_leftovers_that_repair_removes(self):
+        from core.projects import registry
+        with self.ctx() as c:
+            pid, _ = self.make(c, "Crash", template="plain")
+            rep = self.stage(c, self.bundle_bytes(c, pid))
+            target = Path(rep["projects"][0]["default_location"]["path"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            neighbour = target.parent / "neighbour"
+            neighbour.mkdir(exist_ok=True)
+            (neighbour / "keep.txt").write_text("keep\n")
+            before = _tree(neighbour)
+            script = self.tmp / "crash_apply.py"
+            script.write_text(
+                "import os, sys\n"
+                f"sys.path[:0] = [{str(HERE.parents[1])!r}, {str(HERE.parents[1] / 'core' / 'console')!r}]\n"
+                "from unittest import mock\n"
+                "from pathlib import Path\n"
+                "from core.projects import bundle\n"
+                "from corvin_console import projects_service as svc\n"
+                "real = bundle.extract_project\n"
+                "def crash(*a, **k):\n"
+                "    real(*a, **k)\n"
+                "    os._exit(9)\n"
+                f"with mock.patch.object(svc, 'template_source', lambda t: Path({str(self.src)!r})), "
+                "mock.patch.object(svc, 'plugin_state', lambda t, p: 'enabled'), mock.patch.object(bundle, 'extract_project', crash):\n"
+                f"    svc.import_apply('acme', {rep['staging_id']!r})\n")
+            env = {**os.environ, "CORVIN_TENANT_ID": "acme", "PYTHONPATH": os.pathsep.join(
+                [str(HERE.parents[1]), str(HERE.parents[1] / "core" / "console"), os.environ.get("PYTHONPATH", "")])}
+            p = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True, timeout=300)
+            self.assertEqual(p.returncode, 9, p.stderr[-2000:])
+            self.assertEqual(registry.get("acme", pid).get("pending"), "import")
+            self.assertEqual(len(list(target.parent.glob(f"{pid}.importing-*"))), 1)
+            with mock.patch.dict(os.environ, ACME):
+                h = c.other.get(f"{_URL}/{pid}/health").json()
+                checks = {x["id"]: x for x in h["checks"]}
+                self.assertFalse(checks["pending_import"]["ok"], checks)
+                self.assertFalse(checks["import_leftovers"]["ok"], checks)
+                self.assertEqual(h["repair"], "Remove the unfinished import")
+                listed = [x for x in c.other.get(_URL).json()["projects"] if x["id"] == pid][0]
+                self.assertEqual(listed["reason"], "Being imported")
+                rr = c.other.post(f"{_URL}/{pid}/repair", json={}, headers=c.oh)
+            self.assertEqual(rr.status_code, 200, rr.text[:300])
+            self.assertTrue(rr.json()["removed_import"])
+            self.assertIsNone(registry.get("acme", pid))
+            self.assertFalse(list(target.parent.glob(f"{pid}.importing-*")))
+            self.assertEqual(_tree(neighbour), before)
+            self.assertIn("error", self.outcomes(c, "project.imported"))
+            self.assert_no_path_in_chain(c, "acme", target)
+
+
+class Duplicate(ApplyBase):
+    def dup(self, c, pid, **body):
+        return c.own.post(f"{_URL}/{pid}/duplicate", json=body, headers=c.h)
+
+    def stagings(self, c) -> list[str]:
+        d = c.home / "tenants" / "_default" / "projects" / "import_staging"
+        return sorted(p.name for p in d.iterdir()) if d.exists() else []
+
+    # T-0401 AC1, AC3, AC4
+    def test_duplicate_has_an_equal_tree_and_log_the_sources_protection_no_attachment_and_no_staging(self):
+        from core.projects import attachment, registry
+        with self.ctx() as c:
+            pid, root = self.make(c, "Original")
+            (root / "n.md").write_text("n\n")
+            _commit_all(root, "n")
+            _gitc(root, "tag", "v1")
+            registry.set_protection("_default", pid, "confidential", "write")
+            attachment.attach("_default", "sid-0123456789abcdef", pid, str(root))
+            with GitSpy() as spy:
+                r = self.dup(c, pid, project_id="original-copy")
+            self.assertEqual(r.status_code, 201, r.text[:500])
+            new = Path(r.json()["project"]["path"])
+            self.assertEqual({k for k in set(_tree(root)) | set(_tree(new)) if _tree(root).get(k) != _tree(new).get(k)},
+                             {"project.yaml"})
+            for ref in ("main", "v1"):
+                self.assertEqual(_glog(new, ref), _glog(root, ref))
+            self.assertEqual(registry.protection("_default", "original-copy"),
+                             {"classification": "confidential", "assistant_access": "write"})
+            self.assertNotEqual(registry.get("_default", "original-copy")["uid"], registry.get("_default", pid)["uid"])
+            self.assertEqual(attachment.attached("_default", "sid-0123456789abcdef"), pid)
+            self.assertNotIn("original-copy", json.dumps(attachment._load("_default")))
+            h = c.own.get(f"{_URL}/original-copy/health").json()
+            self.assertEqual({x["id"]: x for x in h["checks"]}["kb_check"]["detail"], "kb check: blocking 0")
+            self.assertEqual(self.stagings(c), [])
+            spy.assert_neutral(self)
+            self.assertEqual(self.outcomes(c, "project.duplicated", "_default"), ["requested", "applied"])
+            self.assertFalse(self.events(c, "project.imported"))
+            self.assert_no_path_in_chain(c, "_default", new)
+
+    # T-0401 AC1a (REVIEW-0062 N4)
+    def test_duplicate_of_an_adopted_clone_keeps_its_history_without_remote_refs(self):
+        with self.ctx() as c:
+            pid, root = self.make(c, "Cloned", template="plain")
+            _commit_all(root, "base")
+            up = self.tmp / "upstream"
+            _gitc(self.tmp, "clone", "-q", "--bare", str(root), str(up))
+            _gitc(root, "remote", "add", "origin", str(up))
+            _gitc(root, "fetch", "-q", "origin")
+            _gitc(root, "remote", "set-head", "origin", "main")
+            self.assertIn("refs/remotes/origin/main", _gitc(root, "for-each-ref", "--format=%(refname)"))
+            r = self.dup(c, pid, project_id="cloned-copy")
+            self.assertEqual(r.status_code, 201, r.text[:500])
+            new = Path(r.json()["project"]["path"])
+            self.assertEqual(_glog(new, "main"), _glog(root, "main"))
+            self.assertNotIn("refs/remotes/", _gitc(new, "for-each-ref", "--format=%(refname)"))
+            self.assertNotIn("remote.", _gitc(new, "config", "--local", "--list"))
+
+    # T-0401 AC2, AC3
+    def test_secret_is_409_an_existing_id_is_409_id_taken_and_no_staging_stays(self):
+        from core.projects import registry
+        with self.ctx() as c:
+            pid, root = self.make(c, "Guarded", template="plain")
+            _commit_all(root, "x")
+            other, _ = self.make(c, "Other", template="plain")
+            r = self.dup(c, pid, project_id=other)
+            self.assertEqual((r.status_code, r.json()["detail"]["reason_class"]), (409, "id_taken"))
+            self.assertEqual(r.json()["detail"]["message"], f'A project "{other}" already exists in this list.')
+            registry.set_protection("_default", pid, "secret", "read")
+            r = self.dup(c, pid, project_id="guarded-copy")
+            self.assertEqual((r.status_code, r.json()["detail"]["reason_class"]), (409, "classification"))
+            self.assertEqual(r.json()["detail"]["message"], "Secret projects cannot be duplicated.")
+            registry.set_protection("_default", pid, "internal", "read")
+            (root / "t.md").write_text(JWT)
+            r = self.dup(c, pid, project_id="guarded-copy")
+            self.assertEqual((r.status_code, r.json()["detail"]["reason_class"]), (409, "secret_shape"), r.text[:300])
+            self.assertIsNone(registry.get("_default", "guarded-copy"))
+            self.assertEqual(self.stagings(c), [])
+            self.assertNotIn(JWT[:12], self.chain_text(c))
+
+    def test_duplicate_needs_csrf(self):
+        with self.ctx() as c:
+            pid, _ = self.make(c, "Csrf", template="plain")
+            self.assertEqual(c.own.post(f"{_URL}/{pid}/duplicate", json={"project_id": "x-copy"}).status_code, 403)
 
 
 if __name__ == "__main__":

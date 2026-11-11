@@ -363,6 +363,8 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 | `GET /-/import/{staging_id}` | the stored report |
 | `GET /-/import/{staging_id}/verdict?project&location&project_id` | the conflicts recomputed for a chosen place / new id |
 | `DELETE /-/import/{staging_id}` | (CSRF) Cancel: the staging is removed, 204 |
+| `POST /-/import/{staging_id}/apply` | `{project?, project_id?, location?, parts?: {git_history, kb}, title?}` (CSRF): 201 `{project, warnings, notes, origin: "unverified"}`; 409 `id_taken`/`same_source`/`folder_not_empty`/`nested`/`invalid_id`/`project_required`/`import_incomplete` (with `project_id`), 422 `<stage>` (re-validation), 429 `busy`, 404 another tenant's staging (§ Share, Import second half) |
+| `POST /{id}/duplicate` | `{project_id, location?, parts?: {git_history, kb, generated}}` (CSRF): 201 like apply; 409 `id_taken`, `classification` ("Secret projects cannot be duplicated."), `secret_shape`/`secret_in_history`, 429 `busy` (§ Share, Duplicate) |
 | `POST /{id}/move` | `{location}`: same-disk rename only; a rename that fails with `EXDEV` (Windows error 17) answers 409 `cross_device` ("The new place is on another disk. Export the project and import it there, or copy the folder yourself and use Locate folder."), tree and index unchanged, `project.blocked reason_class=cross_device`; moving into/out of the managed root sets `storage` |
 
 **Collection namespace `/projects/-/…` (ADR-2321 Decision 16, REVIEW-0061 M4).** `manifest.RESERVED_IDS` is NOT extended
@@ -544,6 +546,88 @@ CorvinOS manifest never gets here (V4 refuses it). `GET /-/import/{staging_id}` 
 `GET /-/import/{staging_id}/verdict?project=&location=&project_id=` recomputes the conflicts for a chosen place/id,
 `DELETE /-/import/{staging_id}` (CSRF) is Cancel (204). Another tenant's staging is 404. TTL 1 h, swept by the projector
 tick (`sweep_share`) and by every validate request.
+
+### Import, second half: apply (Decision 13, T-0400, T-0411, T-0412)
+
+`POST /-/import/{staging_id}/apply` confirms what the report proposed: `project` names the bundle's card (optional for a
+one-project bundle), `project_id` the id it gets here (default: the bundle's), `location` an own folder (default: the place
+of ADR-2321 Decision 3 for that id), `parts` lets the user skip the git history or the knowledge base (a part the bundle
+does not carry cannot be chosen). It runs in an awaited worker thread, in one of two apply slots (429 `busy` at once), under
+the per-project file lock of the NEW id (`projects_service.import_apply` -> `_apply_into`):
+
+1. **Re-validate** the staged file (`bundle.validate`, V1-V6 - nothing trusted before validation; a refusal deletes the
+   staging, 422) and refuse every open conflict with 409 and its kind and sentence (`id_taken`, `folder_not_empty`,
+   `nested`, any other location class). `same_source` is resolved by a new id ("import as a copy"); every import gets a
+   new random `uid` anyway.
+2. Audit `project.imported outcome=requested`, then the registry entry with `pending: "import"` - the only state that
+   exists before the rename.
+3. **Extract** (`bundle.extract_project`) into the sibling `<parent>/<id>.importing-<8 hex>` (created 0o700): per entry
+   `os.open(O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW)`, directories by `mkdir` without following, never a link created, every
+   byte re-hashed against the envelope (a staging changed after its validation refuses), mode 0o644 for every file except
+   `*.sh`, `gradlew`, `mvnw` (0o755). The root directory keeps 0o700.
+4. **One `os.rename`** onto the target. An existing EMPTY folder (the location rule allows it) is replaced; a folder that
+   appeared or filled meanwhile answers 409 `folder_not_empty` and the sibling is removed.
+5. The root `project.yaml` (as the bundle carried it: no `tenant`) is rewritten with this tenant, the new id, the title and
+   the protection below, and loaded with `manifest.load` (a nested manifest never gets here: V4).
+6. **The git step** (`bundle.import_git` -> `bundle.git_import(tree, bundle, head)` per repository, the root with
+   `history.bundle` + `git.head`, `docs/` with `docs-history.bundle` + `git.docs_head`). Never `git clone`, never a checkout,
+   `reset`, `switch` or `restore`, never a `protocol.*` override; every call is `git <neutral_git_args> ...` with the
+   `changes._env()` base (+ `GIT_ALLOW_PROTOCOL=none`) until the temporary repository exists, then
+   `neutral_git_env(<repo>, base)`:
+   a. `git init -q --template= <parent>/<id>.gitimport-<8 hex>` (no hooks, no template config); before it the bundle's
+      text header is read: a v2/v3 signature, no prerequisite line (a thin bundle), no capability but the object format;
+   b. `git bundle verify`; c. `git bundle list-heads`: every ref `refs/heads/*` or `refs/tags/*` passing the ref-name rules
+      of `git check-ref-format` (`bundle.import_ref_ok`), a bare `HEAD` line ignored, at most 10 000 refs, the envelope head
+      among them - anything else (`refs/remotes/*`, `refs/notes/*`, `refs/stash`, 10 001 tags) drops the part BEFORE any
+      ref is written; d. `git bundle unbundle`; e. `git fsck --strict --no-dangling`; f. the refs in one `git update-ref
+      --stdin` transaction (git applies its own ref-name check to each one again); g. `git symbolic-ref HEAD <head>`;
+   h. `os.rename(<tmp>/.git, <tree>/.git)`, the tmp dir removed; i. `git read-tree HEAD` (index only - the work tree is
+      what extraction wrote); j. `git config --local core.symlinks false`.
+   No `remote.*` key is ever written. Any failure drops the part: nothing of it stays (no `.git`, no `*.gitimport-*`), the
+   response carries the warning "Git history could not be imported" and the repository is `git init`ed as the `core`
+   fragment does (`init -q` + `HEAD -> refs/heads/main`; the same for a nested `docs/` without its history). Then
+   `.corvin-export/` is removed from the tree.
+   **What `git status` shows afterwards and why** (the response's `notes`): a link tracked in git is not on disk (links
+   never travel), so it reads as deleted; so does a tracked never-list file (`.env`, `.corvin/**`). With
+   `core.symlinks=false` a later `git checkout -- <link>` / `git restore .` by the user writes the link as a plain text file
+   holding its target, never a link; set `core.symlinks` back to get links.
+7. Register-complete: a NEW random `uid` (`registry.ensure_uid`; never the bundle's `source_project_uid`), protection
+   `max(DEFAULT_CLASS, envelope class)` with assistant access `read` (Decision 4: a floor, never a grant - `public` becomes
+   `internal`, `confidential` stays), `storage` by where the target lies.
+8. An `ENGINE.json` naming an engine copy is removed (V1 refuses one anyway); `repair` regenerates `.mcp.json` /
+   `.corvin/local/**` and re-seeds the `.corvin/` files of the active fragments that are absent (e.g. the `acs` fragment's
+   `.corvin/forge/README.md`) - it is also the only writer of the registry's `mcp_sha`.
+9. `kb check` through the bound engine of THIS tenant when `kb` is on: non-zero is a `warnings` line and a doctor finding,
+   never a refusal.
+10. `pending` cleared, audit `project.imported outcome=applied`, 201 with the detail. The staging is removed once every
+    project of its bundle was applied.
+
+**Failure contract.** A failure in 1-4 removes the sibling and the `pending` entry, audits `outcome=error` (with a
+`reason_class`) and leaves nothing (409 with the reason; a planted folder at the target is `folder_not_empty`). A failure in
+5-9 leaves a registered project with `pending` cleared whose doctor names what is missing (409 `import_incomplete` with
+`project_id`; audit `outcome=error reason_class=incomplete`); Repair completes it.
+
+**Being imported.** While `pending: "import"` is set, `GET /projects` lists the entry with `state: "pending"`, `pending:
+"import"`, `reason: "Being imported"` (the scope switcher shows "Being imported", `scope.ts`), and `registry.rebuild`,
+`kb_projection.project_kbs` (the projector), the chat attachment and every export skip it.
+
+**Crash recovery (doctor).** A killed apply leaves at most the `pending` entry and a sibling. `GET /{id}/health` of such an
+entry answers only `pending_import` (failed while no apply holds the project lock - the lock file is probed non-blocking;
+ok while an apply runs) and `import_leftovers` (`<id>.importing-*` / `<id>.gitimport-*` beside the target), with
+`repair: "Remove the unfinished import"`. `POST /{id}/repair` then (it holds the project lock, so no apply of that id runs
+anywhere) deletes the siblings (each inside its parent, never through a link), drops the entry and audits `project.imported
+outcome=error reason_class=unfinished`; a folder at the target itself is never deleted (`folder_kept` in the answer).
+
+### Duplicate (Decision 14, T-0401)
+
+`POST /{id}/duplicate {project_id, location?, parts?}` = `bundle.build` into a private staging (admitted like an upload:
+host budget, per-tenant cap, TTL; one of the two apply slots) + the apply above with `project.duplicated` instead of
+`project.imported` (`project_id` = the new id), in-process - never a raw copy of the folder. Because the staging is a bundle,
+the export's scans run (secret shapes, the history scan when `git_history` is on): a hit is 409 `secret_shape` /
+`secret_in_history`. Protection is this tenant's own record of the source (not the floor rule), the copy gets a new random
+`uid`, chat attachments are not copied, remote-tracking refs, stash and notes stay behind (`--branches --tags`). `secret`
+is 409 `classification` ("Secret projects cannot be duplicated."), an existing id 409 `id_taken`. The staging is removed
+after the call, on success and on failure.
 
 ### Validation V1-V6 - `bundle.validate(path, known) -> BundleReport` (Decision 10, T-0398)
 
@@ -758,8 +842,9 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   folder lies where its `storage` says; a stored projects root the current rule would refuse is reported here),
   `no_engine_copy` (no `ENGINE.json` - bounded walk, links not followed - and no `docs/scripts/kb.py` inside the
   project; not repairable: "remove ENGINE.json from the project; the tenant engine is used"), `import_leftovers` (no
-  `<id>.importing-*` sibling), `pending_import` (an entry marked `pending: "import"` while no apply holds the project
-  lock; its repair action ships with the import, T-0412), `hint_source` (`core/projects/hints.py` can load the path
+  `<id>.importing-*` / `<id>.gitimport-*` sibling), `pending_import` (an entry marked `pending: "import"` while no apply
+  holds the project lock; repair "Remove the unfinished import" deletes the siblings and drops the entry - § Share, Crash
+  recovery), `hint_source` (`core/projects/hints.py` can load the path
   gate's hint test), and the NOTE `path_gate_hint` (`ok: true, note: true`: the path contains a hint word). Each
   seeded defect is found by exactly its check and a clean managed project has none
   (`DoctorCalibration::test_the_location_checks_of_adr_2321_find_each_seeded_defect`).

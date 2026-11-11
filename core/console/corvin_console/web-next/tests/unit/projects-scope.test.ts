@@ -14,6 +14,11 @@ describe("which projects can be chosen", () => {
     expect(ids).toEqual(["a"]);
     expect(selectableProjects(undefined)).toEqual([]);
   });
+  it("an import that is not applied yet says so and cannot be chosen (ADR-2323 Decision 13)", () => {
+    expect(projectUnavailableReason(p({ state: "pending", pending: "import", kb: undefined }))).toBe("Being imported");
+    expect(projectUnavailableReason(p({ state: "pending" }))).toBe("still being created");
+    expect(selectableProjects([p({ id: "i", state: "pending", pending: "import" })])).toEqual([]);
+  });
 });
 
 describe("reading and writing ?scope=", () => {

@@ -833,6 +833,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "project.export_refused":       "WARNING",
     "project.import_validated":     "INFO",
     "project.import_rejected":      "WARNING",
+    # ADR-2323 Decisions 13/14: the apply of an import and a duplicate (requested / applied / error)
+    "project.imported":             "INFO",
+    "project.duplicated":           "INFO",
     # ADR-0103 — A2A Network Membership Attestation.
     # Metadata only — SesT bytes, instruction, pairing cert body NEVER in chain.
     # Allow-list: instance_id, sest_fp_prefix (16 hex chars), pairing_id,
@@ -3838,6 +3841,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # ADR-2323 Decision 13: files = total entries of the bundle; reason_class = the stage or staging_full; never a file name
     "project.import_validated": frozenset({"files", "outcome", "tenant_id"}),
     "project.import_rejected": frozenset({"reason_class", "tenant_id"}),
+    # ADR-2323 Decisions 13/14: project_id = the NEW id; reason_class on an error (a closed step/conflict vocabulary)
+    "project.imported": frozenset({"project_id", "files", "parts", "outcome", "reason_class", "tenant_id"}),
+    "project.duplicated": frozenset({"project_id", "files", "parts", "outcome", "reason_class", "tenant_id"}),
     "task_item.kb_create": frozenset({
         "kind", "outcome", "kb_id", "actor_kind", "sid_fingerprint", "tenant_id",
         "scope",   # ADR-2316: the project scope (a project id, never a path)

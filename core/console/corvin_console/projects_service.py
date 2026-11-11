@@ -885,6 +885,10 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
     root = Path(str(e.get("path")))
     out: dict[str, Any] = {"id": e["id"], "path": str(root), "template": e.get("template") or "", "added_at": e.get("added_at"),
                            "storage": e.get("storage") or "own", "display_path": _display(tenant_id, root)}
+    if e.get("pending"):
+        # an import that is not applied yet (ADR-2323 Decision 13 step 2): listed, never opened, attached or projected
+        return {**out, "state": "pending", "pending": e["pending"], "title": e["id"],
+                "reason": PENDING_REASON.get(str(e["pending"]), "pending")}
     try:
         man = manifest.load(root)
     except manifest.ManifestError as exc:
@@ -1065,6 +1069,12 @@ def _repair_marker(tenant_id: str, project_id: str, root: Path, *, dry_run: bool
 @_project_locked
 def repair(tenant_id: str, project_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     _refuse_builtin(project_id)
+    e = _entry(tenant_id, project_id)
+    if e.get("pending") == "import" and not _apply_running(tenant_id, project_id):
+        # this call holds the project lock, so no apply of this id runs in any process: the entry is an orphan (T-0412)
+        if dry_run:
+            return {"dry_run": True, "pending": [{"path": "Remove the unfinished import", "status": "new", "diff": ""}]}
+        return _remove_unfinished_import(tenant_id, project_id, e)
     root, man = _load_project(tenant_id, project_id)
     marker_written = _repair_marker(tenant_id, project_id, root, dry_run=dry_run)
     cat = catalogue(tenant_id)
@@ -1149,6 +1159,16 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
     def add(cid: str, ok: bool, detail: str) -> None:
         checks.append({"id": cid, "ok": ok, "detail": detail, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
 
+    if e.get("pending") == "import":
+        # ADR-2321 Decision 17: an import that is running, or one a crash left behind (no apply holds the lock)
+        stale = _pending_import_unlocked(tenant_id, project_id)
+        add("pending_import", not stale, "an import is being applied right now" if not stale else
+            "the list entry is marked as an unfinished import and no import is running - Repair removes the unfinished import")
+        left = [p.name for p in _bundle().leftovers(root.parent, project_id)]
+        add("import_leftovers", not left, "no unfinished import beside the project" if not left else
+            f"unfinished import folders beside the project: {left[:3]}")
+        return {"project_id": project_id, "ok": all(c["ok"] for c in checks), "checks": checks,
+                "repair": "Remove the unfinished import" if stale else None}
     add("path_exists", root.is_dir(), "the project directory exists" if root.is_dir() else "the directory is missing")
     if not root.is_dir():
         return {"project_id": project_id, "ok": False, "checks": checks}
@@ -1228,6 +1248,14 @@ def _engine_copy(root: Path) -> Optional[str]:
     return None
 
 
+def _apply_running(tenant_id: str, project_id: str) -> bool:
+    """True inside the apply of this very project (the apply's own repair step runs re-entrantly under its lock)."""
+    return (tenant_id, project_id) in getattr(_applying, "keys", set())
+
+
+_applying = threading.local()
+
+
 def _pending_import_unlocked(tenant_id: str, project_id: str) -> bool:
     """True when no apply holds the project's lock (an import that is still running holds it)."""
     from core.projects.fsutil import LockBusy, file_lock  # noqa: PLC0415
@@ -1272,10 +1300,7 @@ def _location_checks(tenant_id: str, project_id: str, e: dict[str, Any], root: P
     copy = _engine_copy(root)
     add("no_engine_copy", copy is None, "no knowledge-base engine copy inside the project" if copy is None else
         f"an engine copy ({copy}) is in the project - not repairable: remove ENGINE.json from the project; the tenant engine is used")
-    try:
-        left = sorted(p.name for p in root.parent.iterdir() if p.name.startswith(f"{project_id}.importing-"))
-    except OSError:
-        left = []
+    left = [p.name for p in _bundle().leftovers(root.parent, project_id)]
     add("import_leftovers", not left, "no unfinished import beside the project" if not left else
         f"unfinished import folders beside the project: {left[:3]}")
     if e.get("pending") == "import":
@@ -2749,3 +2774,346 @@ def import_verdict(tenant_id: str, staging_id: str, project: str, location: Opti
 def import_cancel(tenant_id: str, staging_id: str) -> None:
     d = _staging_dir(tenant_id, staging_id)
     shutil.rmtree(d, ignore_errors=True)
+
+
+# ── Share: import, second half - apply (ADR-2323 Decision 13; T-0400, T-0411, T-0412) and duplicate (Decision 14; T-0401) ─
+# Propose then confirm: the client saw the report (validate) and confirms with an id, a place and the parts. The apply
+# re-validates the staged file first ("nothing trusted before validation") and then, under the project's lock, in this
+# order: (2) audit requested + a registry entry with pending="import" (the only state before the rename), (3) extraction into
+# the sibling <parent>/<id>.importing-<8 hex> (O_EXCL|O_NOFOLLOW, never a link), (4) ONE os.rename onto the target, (5) the
+# root project.yaml rewritten for this tenant, (6) the git step (bundle.import_git: never clone, never checkout), (7) a new
+# random uid and the protection floor, (8) ENGINE.json removed and repair (which alone writes .mcp.json / .corvin/local and
+# the MCP hash), (9) kb check, (10) pending cleared, audit applied. A failure in (1)-(4) leaves nothing (sibling and entry
+# removed, audit error); a failure in (5)-(9) leaves a registered project whose doctor names the gap.
+
+IMPORT_APPLY_SLOTS = 2
+_apply_slots = threading.BoundedSemaphore(IMPORT_APPLY_SLOTS)
+APPLY_MESSAGES = {
+    "busy": "Two imports are being applied already; try again in a moment.",
+    "project_required": "This bundle holds several projects; name the one to import.",
+    "invalid_id": "id must be lowercase kebab-case, 1-28 characters",
+    "incomplete": "The project was imported, but {step} failed; its doctor names what is missing.",
+    "duplicate_secret": "Secret projects cannot be duplicated.",
+    "removed": "The unfinished import was removed.",
+}
+PENDING_REASON = {"import": "Being imported"}
+
+
+def _class_floor(envelope_class: str) -> str:
+    """Decision 4: max(tenant default, envelope class) - the envelope's class is a floor, never a grant."""
+    c = list(manifest.CLASSES)
+    e = envelope_class if envelope_class in c else manifest.DEFAULT_CLASS
+    return c[max(c.index(e), c.index(manifest.DEFAULT_CLASS))]
+
+
+def _parts_choice(card: dict[str, Any], parts: Optional[dict[str, Any]]) -> tuple[bool, bool, str]:
+    """(git history, knowledge base, the audited part list) - a part the bundle does not carry cannot be chosen."""
+    want = parts or {}
+    included = {r.get("name"): bool(r.get("included")) for r in card.get("parts") or []}
+    hist = bool(card.get("git")) and included.get("git_history", False) and bool(want.get("git_history", True))
+    kb = included.get("kb", False) and bool(want.get("kb", True))
+    names = [n for n in ("files", "kb", "git_history", "videos_index", "generated")
+             if included.get(n) and (n != "git_history" or hist) and (n != "kb" or kb)]
+    return hist, kb, ",".join(names) or "files"
+
+
+def _unresolved(tenant_id: str, card: dict[str, Any], pid: str, location: Optional[str]) -> None:
+    """Step 1's conflict gate: 409 with the conflict's kind and message for every conflict the choices leave open."""
+    conflicts, _place = _conflicts(tenant_id, card, location=location, project_id=pid)
+    for c in conflicts:
+        if c["kind"] == "same_source" and pid != card["id"]:
+            continue                                        # "import as a copy": a new id resolves it (a new uid always)
+        raise Conflict(c["message"], c["kind"])
+
+
+def _target(tenant_id: str, pid: str, location: Optional[str]) -> Path:
+    if location:
+        return registry.validate_location(tenant_id, location, purpose="import")
+    loc, _storage = registry.default_location(tenant_id, pid, audit=_bind_audit(tenant_id))
+    return registry.validate_location(tenant_id, str(loc), purpose="import")
+
+
+def _drop_pending(tenant_id: str, pid: str) -> None:
+    e = registry.get(tenant_id, pid)
+    if e is not None and e.get("pending") == "import":
+        registry.unregister(tenant_id, pid)
+
+
+def _place_tree(tmp: Path, loc: Path) -> None:
+    """Step 4: ONE rename of the extracted sibling onto the target - never over content. An existing EMPTY folder (the
+    location rule allows it) is replaced; a folder that appeared or filled meanwhile is 409 ``folder_not_empty``."""
+    b = _bundle()
+    if os.path.lexists(loc):
+        if is_link(loc) or not loc.is_dir() or any(loc.iterdir()):
+            raise b.ImportFailed("folder_not_empty", CONFLICT_MESSAGES["folder_not_empty"])
+        if os.name == "nt":
+            os.rmdir(loc)                                   # Windows renames onto nothing only
+    try:
+        os.rename(tmp, loc)
+    except OSError as exc:
+        if exc.errno in (errno.EEXIST, errno.ENOTEMPTY, errno.ENOTDIR, errno.EISDIR, errno.EACCES) or os.path.lexists(loc):
+            raise b.ImportFailed("folder_not_empty", CONFLICT_MESSAGES["folder_not_empty"]) from None
+        raise
+
+
+def _rewrite_manifest(tenant_id: str, pid: str, loc: Path, title: Optional[str], cls: str, access: str) -> dict[str, Any]:
+    """Step 5: the root project.yaml (as the bundle carried it: no tenant) names this tenant, the new id and title, and the
+    protection the registry holds (so the doctor's protection check agrees)."""
+    from core.projects.fsutil import read_text_any  # noqa: PLC0415
+    import yaml  # noqa: PLC0415
+    raw = yaml.safe_load(read_text_any(loc / manifest.FILE, limit=64 * 1024))
+    if not isinstance(raw, dict):
+        raise manifest.ManifestError("project.yaml in the bundle is not a mapping")
+    man = {**raw, "tenant": tenant_id, "id": pid, "title": (title or raw.get("title") or pid)[:120],
+           "classification": cls, "assistant_access": access}
+    manifest.write(loc, man)
+    return manifest.load(loc)
+
+
+def _git_init(where: Path) -> None:
+    """The ``core`` fragment's git_init (``init -q`` + HEAD -> main), under ``neutral_git_args``."""
+    _git(where, "init", "-q")
+    _git(where, "symbolic-ref", "HEAD", "refs/heads/main")
+
+
+def _remove_engine_copy(root: Path) -> None:
+    copy = _engine_copy(root)
+    if copy and copy.endswith("ENGINE.json"):
+        from core.projects.fsutil import ensure_inside  # noqa: PLC0415
+        p = ensure_inside(root, root / copy)
+        if p.is_file() and not is_link(p):
+            p.unlink()
+
+
+def _kb_check_warning(tenant_id: str, root: Path) -> Optional[str]:
+    try:
+        rc, out = _project_kb_run(root / "docs", "check", actor="operator", engine=bound_engine(tenant_id), timeout=90, guard_git=True)
+    except (Conflict, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+        return f"The knowledge-base check could not run ({str(exc)[:120]}); see the project's doctor."
+    blocking = out.get("blocking") if isinstance(out, dict) else None
+    if rc != 0 or blocking != 0:
+        return f"The knowledge-base check reports blocking {blocking}; see the project's doctor."
+    return None
+
+
+@_project_locked
+def _apply_into(tenant_id: str, project_id: str, zip_path: Path, card: dict[str, Any], *, location: Optional[str],
+                parts: Optional[dict[str, Any]], title: Optional[str], event: str,
+                protection: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    """Decision 13 steps (1, after re-validation)-(10) for one card of a validated bundle, under the project lock of the NEW
+    id. ``event``: ``project.imported`` or ``project.duplicated``; ``protection``: duplicate copies the source's record,
+    import uses the floor rule."""
+    keys = getattr(_applying, "keys", None)
+    if keys is None:
+        keys = _applying.keys = set()
+    keys.add((tenant_id, project_id))
+    try:
+        return _apply_steps(tenant_id, project_id, zip_path, card, location=location, parts=parts, title=title, event=event,
+                            protection=protection)
+    finally:
+        keys.discard((tenant_id, project_id))
+
+
+def _apply_steps(tenant_id: str, project_id: str, zip_path: Path, card: dict[str, Any], *, location: Optional[str],
+                 parts: Optional[dict[str, Any]], title: Optional[str], event: str,
+                 protection: Optional[dict[str, str]]) -> dict[str, Any]:
+    b = _bundle()
+    pid = project_id
+    if not manifest.is_new_id_allowed(pid):
+        raise Conflict(APPLY_MESSAGES["invalid_id"], "invalid_id")
+    _unresolved(tenant_id, card, pid, location)
+    try:
+        loc = _target(tenant_id, pid, location)
+    except registry.ProjectPathError as exc:
+        if exc.reason_class == "not_empty":
+            raise Conflict(CONFLICT_MESSAGES["folder_not_empty"], "folder_not_empty") from None
+        raise
+    hist, kb, parts_str = _parts_choice(card, parts)
+    cls = protection["classification"] if protection else _class_floor(card.get("classification", ""))
+    access = protection["assistant_access"] if protection else manifest.DEFAULT_ACCESS
+    base = {"project_id": pid, "files": int(card.get("counts", {}).get("files", 0)), "parts": parts_str}
+    template = card.get("template") or ""
+    # (2) audit-first, then the only state that exists before the rename
+    _audit(tenant_id, event, outcome="requested", **base)
+    tmp: Optional[Path] = None
+    try:
+        registry.register(tenant_id, pid, loc, template, pending="import")
+        loc.parent.mkdir(parents=True, exist_ok=True)
+        tmp = b.sibling(loc.parent, pid, b.IMPORTING)
+        os.mkdir(tmp, 0o700)
+        # (3) extraction, (4) the one rename
+        b.extract_project(zip_path, card["id"], tmp, kb=kb, history=hist)
+        _place_tree(tmp, loc)
+        tmp = None
+    except BaseException as exc:
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
+        with contextlib.suppress(Exception):
+            _drop_pending(tenant_id, pid)
+        with contextlib.suppress(Exception):
+            _audit(tenant_id, event, outcome="error", reason_class=getattr(exc, "reason_class", None) or "error", **base)
+        if isinstance(exc, b.ImportFailed):
+            raise Conflict(exc.message, exc.reason_class) from None
+        if isinstance(exc, registry.RegistryError):
+            raise Conflict(str(exc), "registry") from None
+        raise
+    warnings: list[str] = list(card.get("warnings") or [])
+    notes: list[str] = []
+    step = "the project description"
+    try:
+        # (5) the manifest, (6) git, (7) uid + protection, (8) engine copy + repair, (9) kb check
+        man = _rewrite_manifest(tenant_id, pid, loc, title, cls, access)
+        step = "the git history"
+        res = b.import_git(loc, card.get("git") if hist else None)
+        notes += res.notes
+        if hist and not res.ok:
+            warnings.append(res.warning or b.GIT_IMPORT_WARNING)
+        if not (loc / ".git").exists():
+            _git_init(loc)
+        docs = loc / "docs"
+        if man.get("docs_mode", "nested") == "nested" and docs.is_dir() and not is_link(docs) and not os.path.lexists(docs / ".git"):
+            _git_init(docs)
+        if hist and card.get("git", {}).get("docs_head") and res.warning and b.GIT_IMPORT_WARNING not in warnings:
+            warnings.append(b.GIT_IMPORT_WARNING)
+        step = "the registry entry"
+        registry.ensure_uid(tenant_id, pid)                 # a NEW random uid: never the bundle's source_project_uid
+        registry.set_protection(tenant_id, pid, cls, access)
+        step = "repair"
+        _remove_engine_copy(loc)
+        repair(tenant_id, pid)
+        if "kb" in manifest.active_features(man):
+            step = "the knowledge-base check"
+            w = _kb_check_warning(tenant_id, loc)
+            if w:
+                warnings.append(w)
+    except BaseException as exc:
+        with contextlib.suppress(Exception):
+            registry.set_pending(tenant_id, pid, None)
+        with contextlib.suppress(Exception):
+            _audit(tenant_id, event, outcome="error", reason_class="incomplete", **base)
+        if not isinstance(exc, Exception):
+            raise
+        raise Conflict(APPLY_MESSAGES["incomplete"].format(step=step), "import_incomplete", project_id=pid) from None
+    # (10)
+    registry.set_pending(tenant_id, pid, None)
+    with contextlib.suppress(_tt.AuditUnavailable):
+        _audit(tenant_id, event, outcome="applied", **base)
+    return {"project": get_project(tenant_id, pid), "warnings": warnings, "notes": notes, "origin": "unverified"}
+
+
+def _mark_applied(d: Path, bundle_id: str, total: int) -> None:
+    """Record the applied card in the staging; the staging is removed once every project of the bundle was applied."""
+    st = _read_job(d) or {"kind": "staging", "created_ts": time.time()}
+    done = sorted(set(st.get("applied") or []) | {bundle_id})
+    if len(done) >= total:
+        shutil.rmtree(d, ignore_errors=True)
+        return
+    st["applied"] = done
+    with contextlib.suppress(OSError):
+        _write_job(d, st)
+
+
+def import_apply(tenant_id: str, staging_id: str, *, project: Optional[str] = None, project_id: Optional[str] = None,
+                 location: Optional[str] = None, parts: Optional[dict[str, Any]] = None,
+                 title: Optional[str] = None) -> dict[str, Any]:
+    """Apply one project of a validated staging (Decision 13). ``project``: the bundle's id of the card (may be omitted for a
+    one-project bundle); ``project_id``: the id it gets here (default: the bundle's). 201 with ``{project, warnings, notes}``."""
+    d = _staging_dir(tenant_id, staging_id)
+    if not _apply_slots.acquire(blocking=False):
+        raise Busy(APPLY_MESSAGES["busy"])
+    key = (tenant_id, staging_id)
+    with _running_lock:
+        _running_jobs.add(key)
+    try:
+        # (1) nothing trusted before validation: the staged file again, V1-V6
+        rep = _bundle().validate(d / "bundle.zip", _known(tenant_id))
+        if not rep["ok"]:
+            shutil.rmtree(d, ignore_errors=True)
+            _import_rejected(tenant_id, rep["reason_class"])
+            raise ImportRejected(rep["message"], rep["reason_class"])
+        cards = rep["projects"]
+        if project is None:
+            if len(cards) != 1:
+                raise Conflict(APPLY_MESSAGES["project_required"], "project_required")
+            card = cards[0]
+        else:
+            card = next((c for c in cards if c["id"] == project), None)
+            if card is None:
+                raise NotFound("no such project in this import")
+        out = _apply_into(tenant_id, project_id or card["id"], d / "bundle.zip", card, location=location, parts=parts,
+                          title=title, event="project.imported")
+        _mark_applied(d, card["id"], len(cards))
+        return out
+    finally:
+        with _running_lock:
+            _running_jobs.discard(key)
+        _apply_slots.release()
+
+
+def _remove_unfinished_import(tenant_id: str, project_id: str, e: dict[str, Any]) -> dict[str, Any]:
+    """Repair of a ``pending: "import"`` entry no apply holds (the caller holds the project lock): the siblings of the
+    unfinished import are deleted (each inside its parent, never through a link), the entry dropped, audited
+    ``project.imported outcome=error``. A folder at the target itself is never deleted."""
+    from core.projects.fsutil import ensure_inside  # noqa: PLC0415
+    b = _bundle()
+    root = Path(str(e.get("path")))
+    _audit(tenant_id, "project.imported", project_id=project_id, outcome="error", reason_class="unfinished")
+    removed = 0
+    for s in b.leftovers(root.parent, project_id, strict=True):
+        p = ensure_inside(root.parent, s)
+        if is_link(p):
+            continue
+        shutil.rmtree(p, ignore_errors=True)
+        removed += 1
+    registry.unregister(tenant_id, project_id)
+    return {"removed_import": True, "removed_folders": removed, "message": APPLY_MESSAGES["removed"],
+            "folder_kept": root.exists()}
+
+
+def duplicate_project(tenant_id: str, project_id: str, *, new_id: str, location: Optional[str] = None,
+                      parts: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Decision 14: export to a private staging plus apply in one call (no download). The staging is a bundle, so the export's
+    scans run (secret shapes, the history scan); protection is the source's own record, chat attachments are not copied,
+    the copy gets a new random uid. Audit ``project.duplicated`` requested/applied/error. The staging is always removed."""
+    b = _bundle()
+    _refuse_builtin(project_id)
+    e = _entry(tenant_id, project_id)
+    if e.get("pending"):
+        raise NotFound("no such project")
+    if not isinstance(new_id, str) or not manifest.is_new_id_allowed(new_id):
+        raise Conflict(APPLY_MESSAGES["invalid_id"], "invalid_id")
+    if registry.get(tenant_id, new_id) is not None:
+        raise Conflict(CONFLICT_MESSAGES["id_taken"].format(id=new_id), "id_taken")
+    _root, man = _load_project(tenant_id, project_id)
+    prot = _protection_of(tenant_id, project_id, man)
+    if prot["classification"] == "secret":
+        _export_refused(tenant_id, "classification", project_id)
+        raise Conflict(APPLY_MESSAGES["duplicate_secret"], "classification")
+    if not _apply_slots.acquire(blocking=False):
+        raise Busy(APPLY_MESSAGES["busy"])
+    handle = None
+    try:
+        handle = staging_open(tenant_id)
+        staging_close(handle)
+        z = handle.dir / "bundle.zip"
+        z.unlink()
+        with _running_lock:
+            _running_jobs.add((tenant_id, handle.staging_id))
+        pr = _parts_of(parts)
+        try:
+            b.build(tenant_id, [project_id], pr, out=z, **_history_gate())
+        except b.BundleRefused as r:
+            raise _refusal_error(tenant_id, r, project_id) from None
+        rep = b.validate(z, _known(tenant_id))
+        if not rep["ok"]:
+            raise Conflict(rep["message"], rep["reason_class"])
+        card = rep["projects"][0]
+        return _apply_into(tenant_id, new_id, z, card, location=location,
+                           parts={"git_history": pr.git_history, "kb": pr.kb}, title=None, event="project.duplicated",
+                           protection=prot)
+    finally:
+        if handle is not None:
+            with _running_lock:
+                _running_jobs.discard((tenant_id, handle.staging_id))
+            shutil.rmtree(handle.dir, ignore_errors=True)
+        _apply_slots.release()

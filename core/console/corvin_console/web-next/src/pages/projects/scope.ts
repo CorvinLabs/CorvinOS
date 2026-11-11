@@ -15,7 +15,7 @@ export type Scope = { kind: "all" } | { kind: "bound" } | { kind: "project"; id:
 export function projectUnavailableReason(p: ProjectSummary): string | null {
   if (p.state === "missing") return p.reason ? `folder missing: ${p.reason}` : "folder missing";
   if (p.state === "invalid") return p.reason ? `invalid: ${p.reason}` : "invalid project.yaml";
-  if (p.state === "pending") return "still being created";
+  if (p.state === "pending") return p.pending === "import" ? "Being imported" : "still being created";
   if (p.state !== "ok") return p.reason ?? p.state;
   if (p.features && p.features.kb !== true) return "no knowledge base - switch it on in Settings";
   if (p.kb !== true) return p.features?.kb === true ? "knowledge base not created yet" : "no knowledge base - switch it on in Settings";

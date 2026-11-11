@@ -19,6 +19,8 @@ export interface ProjectSummary {
   state: ProjectState;
   /** Why the project is not `ok` (missing directory, unreadable project.yaml). */
   reason?: string;
+  /** Set while an import of this project is not applied yet (state `pending`). */
+  pending?: "import";
   title?: string;
   docs_mode?: "nested" | "plain";
   /** Every feature the template offers, on or off. */

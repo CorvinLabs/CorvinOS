@@ -651,6 +651,8 @@ def project_kbs(tenant_id: str) -> list[tuple[str, Path]]:
         raw = e.get("path") if isinstance(e, dict) else None
         if not isinstance(pid, str) or not _PROJECT_ID.match(pid) or pid in seen or not isinstance(raw, str):
             continue
+        if e.get("pending"):
+            continue                    # an import that is not applied yet (ADR-2323 Decision 13, REVIEW-0061 M12)
         try:
             root = Path(raw).expanduser().resolve(strict=True)
         except (OSError, RuntimeError):

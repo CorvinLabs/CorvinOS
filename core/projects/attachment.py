@@ -271,8 +271,8 @@ def spawn_parts(tenant_id: str, sid: str, *, l34_allows=None, class_allows=None)
     pid = att["project_id"]
     from . import builtin  # noqa: PLC0415
     entry = builtin.entry(tenant_id) if builtin.is_builtin(pid) else registry.get(tenant_id, pid)
-    if not entry or not entry.get("path"):
-        return None
+    if not entry or not entry.get("path") or entry.get("pending"):
+        return None                                   # pending: an import that is not applied yet (ADR-2323 Decision 13)
     root = Path(str(entry.get("path")))
     if not att.get("path") or os.path.abspath(att["path"]) != os.path.abspath(root):
         return None                                   # a legacy entry, or another folder that once had this id: attach again (R2)
