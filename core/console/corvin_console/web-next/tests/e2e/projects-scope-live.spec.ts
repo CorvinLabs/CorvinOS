@@ -118,10 +118,30 @@ for (const t of ["light", "dark"] as const) {
         await shot(page, "graph-corvin-own", t, s.name);
       }
 
-      // --- Graph: All knowledge bases ---
+      // --- Graph: All knowledge bases = the sum of every knowledge base it joins ---
+      // The expected total is computed from the per-scope counts read on this install (the default scope and every selectable
+      // project, from the same graph endpoint the page calls), never from a fixed assumption about which projects exist: an
+      // install with more knowledge-base projects - a duplicate or an imported copy among them, sharing its original's uids -
+      // must still add up, nothing dropped (REVIEW-0071 N6).
+      const scopes = await page.getByTestId("scope-select").locator("option").evaluateAll((os) =>
+        os.filter((o) => !(o as HTMLOptionElement).disabled).map((o) => (o as HTMLOptionElement).value)
+          .filter((v) => v === "bound" || v.startsWith("project:")));
+      expect(scopes).toContain("bound");
+      expect(scopes).toContain(`project:${PID}`);
+      const countOf = async (v: string): Promise<number> => {
+        const q = v === "bound" ? "" : `?project=${encodeURIComponent(v.slice("project:".length))}`;
+        const r = await page.request.get(`/v1/console/plugins/corvin-knowledge/graph${q}`, { timeout: 90_000 });
+        expect(r.ok(), `graph ${v}`).toBe(true);
+        return ((await r.json()) as { entities: unknown[] }).entities.length;
+      };
+      const perScope = Object.fromEntries(await Promise.all(scopes.map(async (v) => [v, await countOf(v)] as const)));
+      expect(perScope[`project:${PID}`]).toBe(projectTotal);              // the API counts are the page's counts
+      if (separate) expect(perScope["project:corvin"]).toBe(corvinTotal);
+      const expectedAll = Object.values(perScope).reduce((a, b) => a + b, 0);
       await page.getByTestId("scope-select").selectOption("all");
-      await expect(repo).toContainText("knowledge bases", { timeout: 90_000 });
-      await expect.poll(() => graphTotal(page), { timeout: 90_000 }).toBe(boundTotal + projectTotal + corvinTotal);
+      await expect(repo).toContainText(`${scopes.length} knowledge bases`, { timeout: 90_000 });
+      await expect.poll(() => graphTotal(page), { timeout: 90_000 }).toBe(expectedAll);
+      expect(expectedAll).toBeGreaterThanOrEqual(boundTotal + projectTotal + corvinTotal);
       await shot(page, "graph-all", t, s.name);
 
       // --- Graph: an unavailable project falls back to Corvin, saying why ---

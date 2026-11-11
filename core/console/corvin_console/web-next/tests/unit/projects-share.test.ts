@@ -2,8 +2,8 @@
 import { describe, expect, it } from "vitest";
 import type { ImportCard, PartRow } from "@/lib/api/projects";
 import {
-  conflictRows, exportClassLine, exportEnabled, exportGate, fromLine, importEnabled, importProtection, includedLine, initialChoices,
-  jobLine, leftOutLines, offersWithoutHistory, pruneSelected, skippableParts, suggestId, toggleSelected, verdictKey, willCreateLine,
+  COPY_SUFFIX, TITLE_MAX, conflictRows, copyTitle, exportClassLine, exportEnabled, exportGate, fromLine, importEnabled, importProtection, includedLine, initialChoices,
+  jobLine, leftOutLines, offersWithoutHistory, pruneSelected, skippableParts, suggestId, titleProblem, toggleSelected, verdictKey, willCreateLine,
 } from "@/pages/projects/share-logic";
 
 const parts = (on: Partial<Record<PartRow["name"], boolean>>): PartRow[] =>
@@ -160,5 +160,35 @@ describe("duplicate id and list selection", () => {
     expect(toggleSelected(["a", "b"], "a")).toEqual(["b"]);
     expect(pruneSelected(["a", "corvin", "gone"], [{ id: "a", state: "ok" }, { id: "corvin", state: "ok", builtin: true },
       { id: "gone", state: "missing" }])).toEqual(["a"]);
+  });
+});
+
+// REVIEW-0071 N5: the dialog's default title is the server's default (projects_service._copy_title), never more than 120 characters
+describe("the copy's default title", () => {
+  it("is '<title> (copy)' for an ordinary title, the id when there is none", () => {
+    expect(copyTitle("Alpha research", "alpha")).toBe("Alpha research (copy)");
+    expect(copyTitle("", "alpha")).toBe("alpha (copy)");
+    expect(copyTitle(undefined, "alpha")).toBe("alpha (copy)");
+  });
+  it("clips the base so a 114..120 character title still gives at most 120 characters, as the server does", () => {
+    for (const n of [113, 114, 118, 120]) {
+      const out = copyTitle("y".repeat(n), "p");
+      expect(Array.from(out).length).toBeLessThanOrEqual(TITLE_MAX);
+      expect(titleProblem(out)).toBeNull();
+    }
+    expect(copyTitle("y".repeat(118), "p")).toBe("y".repeat(113) + COPY_SUFFIX);
+    expect(copyTitle("y".repeat(112) + " z", "p")).toBe("y".repeat(112) + " (copy)");     // trimmed again: no double space
+  });
+  it("puts an odd source title on one line, counting code points like the server", () => {
+    expect(copyTitle("a\u0001b\u2028c\n d", "p")).toBe("a b c d (copy)");
+    expect(copyTitle("\u0001\u0002", "orig")).toBe("orig (copy)");
+    const emoji = "\u{1F600}".repeat(118);
+    expect(Array.from(copyTitle(emoji, "p")).length).toBe(TITLE_MAX);
+  });
+  it("names the server's refusal of a title before it is sent", () => {
+    expect(titleProblem("  ")).toBe("Give the copy a title.");
+    expect(titleProblem("bad\u0001title")).toBe("The title must be one line, without control characters.");
+    expect(titleProblem("x".repeat(121))).toBe("The title can have at most 120 characters.");
+    expect(titleProblem("  fine  ")).toBeNull();
   });
 });

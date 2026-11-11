@@ -161,23 +161,40 @@ export interface GraphPart<E, R> {
   relations: R[];
 }
 
+/** The node id a project's entity gets in a joined view when its uid is already taken by another knowledge base. */
+export function partNodeId(uid: string, projectId: string | null): string {
+  return projectId ? `${uid}@${projectId}` : uid;
+}
+
 /**
- * Joins the parts of a "both" view. Node ids are uids (unique across knowledge bases); each node keeps its
- * scope and carries a qualified label. Relations never cross knowledge bases, so the parts form separate islands.
+ * Joins the parts of a "both" view. Node ids are uids, which are unique within one knowledge base but not across them: a
+ * duplicated or imported-as-copy project carries its original's knowledge base verbatim, uids included. The first part to
+ * use a uid keeps it as the node id (so a shared ?node=<uid> link still opens that node); a later part's node with a taken uid
+ * becomes ``<uid>@<project>`` (``uid`` keeps the raw one for the document request) and that part's relation endpoints are
+ * remapped the same way, so every knowledge base stays its own island and no entity is dropped (REVIEW-0071 N6). Each node
+ * keeps its scope and carries a qualified label.
  */
-export function mergeGraphs<E extends { id: string; label: string }, R>(
+export function mergeGraphs<E extends { id: string; label: string }, R extends { from_id: string; to_id: string }>(
   parts: GraphPart<E, R>[],
-): { entities: (E & { scope: string | null })[]; relations: R[] } {
-  const seen = new Set<string>();
-  const entities: (E & { scope: string | null })[] = [];
+): { entities: (E & { scope: string | null; uid: string })[]; relations: R[] } {
+  const taken = new Set<string>();
+  const entities: (E & { scope: string | null; uid: string })[] = [];
   const relations: R[] = [];
   for (const part of parts) {
+    const local = new Map<string, string>();       // this part's uid -> its node id in the joined graph
     for (const e of part.entities) {
-      if (seen.has(e.id)) continue;               // the same uid in two parts: keep the first
-      seen.add(e.id);
-      entities.push({ ...e, label: qualify(e.label, part.projectId), scope: part.projectId });
+      if (local.has(e.id)) continue;               // the same uid twice in ONE knowledge base: one node
+      let id = e.id;
+      if (taken.has(id)) id = partNodeId(e.id, part.projectId);
+      if (taken.has(id)) continue;                 // cannot happen for distinct project ids; never two nodes with one id
+      taken.add(id);
+      local.set(e.id, id);
+      entities.push({ ...e, id, uid: e.id, label: qualify(e.label, part.projectId), scope: part.projectId });
     }
-    relations.push(...part.relations);
+    // an endpoint outside this part (a dangling link) gets a key no node has, so it can never land on another knowledge base's
+    // node; in a single-part view there is no other knowledge base and it stays as it was
+    const end = (x: string) => local.get(x) ?? (parts.length > 1 ? `${x}@${part.projectId ?? ""}` : x);
+    for (const r of part.relations) relations.push({ ...r, from_id: end(r.from_id), to_id: end(r.to_id) });
   }
   return { entities, relations };
 }

@@ -50,6 +50,21 @@ class ManifestError(ValueError):
     """The manifest is missing, unreadable or invalid."""
 
 
+#: the longest title a project may carry (create, rename, import, duplicate; the console dialogs clip to it)
+TITLE_MAX = 120
+
+
+def check_title(title: Any) -> str:
+    """The one title rule of every path that names a project (create, import apply, duplicate): a non-empty string of at most
+    ``TITLE_MAX`` characters on one line - a title is rendered into the chat's system prompt (REVIEW-0066 m1). Returns it
+    unchanged; raises :class:`ManifestError` (HTTP 422) so a caller can refuse BEFORE anything is written (REVIEW-0071 N4)."""
+    if not isinstance(title, str) or not title.strip() or len(title) > TITLE_MAX:
+        raise ManifestError(f"title must be a non-empty string of at most {TITLE_MAX} characters")
+    if _CONTROL.search(title):
+        raise ManifestError("title must be one line (no line break or control character)")
+    return title
+
+
 def validate(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ManifestError("project.yaml must be a mapping")
@@ -60,12 +75,7 @@ def validate(data: Any) -> dict[str, Any]:
         raise ManifestError("id must be lowercase kebab-case, 1-28 characters")
     if pid in RESERVED_IDS:
         raise ManifestError(f"the id {pid!r} is reserved")
-    title = data.get("title", pid)
-    if not isinstance(title, str) or not title.strip() or len(title) > 120:
-        raise ManifestError("title must be a non-empty string of at most 120 characters")
-    if _CONTROL.search(title):
-        # a title is one line: it is rendered into the chat's system prompt (REVIEW-0066 m1)
-        raise ManifestError("title must be one line (no line break or control character)")
+    check_title(data.get("title", pid))
     tenant = data.get("tenant")
     if not isinstance(tenant, str) or not _TENANT_RE.match(tenant):
         raise ManifestError("tenant must name the owning tenant")

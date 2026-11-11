@@ -420,7 +420,7 @@ another tenant is 404 on every route (never a hint). Paths from a client exist o
 | `GET /-/import/{staging_id}` | the stored report |
 | `GET /-/import/{staging_id}/verdict?project&location&project_id` | the conflicts recomputed for a chosen place / new id |
 | `DELETE /-/import/{staging_id}` | (CSRF) Cancel: the staging is removed, 204 |
-| `POST /-/import/{staging_id}/apply` | `{project?, project_id?, location?, parts?: {git_history, kb}, title?}` (CSRF): 201 `{project, warnings, notes, origin: "unverified"}`; 409 `id_taken`/`same_source`/`folder_not_empty`/`nested`/`invalid_id`/`project_required`/`import_incomplete` (with `project_id`), 422 `<stage>` (re-validation), 429 `busy`, 404 another tenant's staging (§ Share, Import second half) |
+| `POST /-/import/{staging_id}/apply` | `{project?, project_id?, location?, parts?: {git_history, kb}, title?}` (CSRF): 201 `{project, warnings, notes, origin: "unverified"}`; 409 `id_taken`/`same_source`/`folder_not_empty`/`nested`/`invalid_id`/`project_required`/`import_incomplete` (with `project_id`), 422 `<stage>` (re-validation), 422 `invalid` for a `title` the create rule refuses (`manifest.check_title`, checked before anything is written; the staging stays), 429 `busy`, 404 another tenant's staging (§ Share, Import second half) |
 | `POST /{id}/duplicate` | `{project_id, location?, parts?: {git_history, kb, generated}}` (CSRF): 201 like apply; 409 `id_taken`, `classification` ("Secret projects cannot be duplicated."), `secret_shape`/`secret_in_history`, 429 `busy` (§ Share, Duplicate) |
 | `POST /{id}/move` | `{location}`: same-disk rename only; a rename that fails with `EXDEV` (Windows error 17) answers 409 `cross_device` ("The new place is on another disk. Export the project and import it there, or copy the folder yourself and use Locate folder."), tree and index unchanged, `project.blocked reason_class=cross_device`; moving into/out of the managed root sets `storage` |
 
@@ -844,9 +844,19 @@ outcome=error reason_class=unfinished`; a folder at the target itself is never d
 
 ### Duplicate (Decision 14, T-0401)
 
-The copy's title is `title` (one line, 1-120 characters, not blank) or, without one, "<original title> (copy)" - a copy and its
-original are told apart in the list, the scope switchers and the graph (integration test 2026-11-11, D3); the dialog pre-fills
-the same default. Test: `test_projects_share_e2e.py::Duplicate::test_a_duplicate_is_told_apart_by_its_title`.
+The copy's title is `title` (trimmed, then the create path's rule `manifest.check_title`: 1-120 characters, no line break or
+control character) or, without one, "<original title> (copy)" - a copy and its original are told apart in the list, the scope
+switchers and the graph (integration test 2026-11-11, D3). The default's base is the source title on one line (control
+characters become spaces, runs collapse; the id when it is empty), clipped to 113 characters and trimmed again, so the default
+is never more than 120 characters. The dialog pre-fills the SAME default (`share-logic.ts::copyTitle`, counting code points like
+the server) and names a title the server would refuse before sending it (`titleProblem`). A title the rule refuses - on
+duplicate and on import apply alike - is 422 before a slot, a staging or a folder is touched; until REVIEW-0071 N4 it failed at
+step 5 as 409 `import_incomplete` and left an `invalid` project whose project.yaml named the source id. Tests:
+`test_projects_share_e2e.py::Duplicate::test_a_duplicate_is_told_apart_by_its_title`,
+`::Duplicate::test_a_title_create_refuses_is_422_with_nothing_registered_no_folder_and_no_staging`,
+`::Duplicate::test_the_default_copy_title_fits_the_title_rule`,
+`::ImportApply::test_a_title_create_refuses_is_422_before_anything_is_written_and_the_staging_stays`; `projects-share.test.ts`
+("the copy's default title"); `projects-share.spec.ts` (a 118-character title).
 
 `POST /{id}/duplicate {project_id, title?, location?, parts?}` = `bundle.build` into a private staging (admitted like an upload:
 host budget, per-tenant cap, TTL; one of the two apply slots) + the apply above with `project.duplicated` instead of
@@ -1136,8 +1146,14 @@ Pure decisions in `pages/projects/scope.ts` (`tests/unit/projects-scope.test.ts`
   Runs section says it is install-wide ("not filtered by knowledge base").
 - **Knowledge Graph:** one request per knowledge base (`/graph` or `/graph?project=<id>`), joined by `mergeGraphs`:
   a project's labels are qualified (`alpha/T-0001`), two equal local ids stay separate nodes, relations never cross
-  knowledge bases, so the graphs form islands. A node's document is read with its own project
-  (`/doc/{key}?project=<id>`). Each answer carries `repo_path` and `graph_state` (`ok`/`built`/`empty`/`missing`/
+  knowledge bases, so the graphs form islands. Uids are unique within one knowledge base, not across them: a duplicated or
+  imported-as-copy project carries its original's uids. The first part to use a uid keeps it as the node id (a shared
+  `?node=<uid>` still opens it); a later part's node with that uid becomes `<uid>@<project>` with `uid` holding the raw one,
+  and that part's relation endpoints are remapped the same way (a dangling endpoint gets a key no node has), so the joined
+  total is the sum of the parts - until REVIEW-0071 N6 the later node was dropped (live: 19 entities of two copies missing)
+  and the copy's relations attached to the original's nodes. A node's document is read with its own uid and project
+  (`/doc/{uid}?project=<id>`). `projects-scope-live.spec.ts` computes the expected All total from the per-scope counts it
+  reads (every selectable scope, same endpoint), not from an assumption about which projects exist. Each answer carries `repo_path` and `graph_state` (`ok`/`built`/`empty`/`missing`/
   `error` + `graph_error`); the stats line shows "<scope> · Repository: <that path>" (or "N knowledge bases"), an
   empty project KB says so with its own path, and a graph that could not be built is named in a banner. Pull/Push/Sync
   are shown only for Corvin (they act on the bound checkout). The project ids are part of the query key only for the

@@ -3893,6 +3893,7 @@ def import_apply(tenant_id: str, staging_id: str, *, project: Optional[str] = No
                  title: Optional[str] = None) -> dict[str, Any]:
     """Apply one project of a validated staging (Decision 13). ``project``: the bundle's id of the card (may be omitted for a
     one-project bundle); ``project_id``: the id it gets here (default: the bundle's). 201 with ``{project, warnings, notes}``."""
+    title = _given_title(title)                     # the create rule, before anything is written (REVIEW-0071 N4)
     d = _staging_dir(tenant_id, staging_id)
     if not _apply_slots.acquire(blocking=False):
         raise Busy(APPLY_MESSAGES["busy"])
@@ -3945,14 +3946,29 @@ def _remove_unfinished_import(tenant_id: str, project_id: str, e: dict[str, Any]
             "folder_kept": root.exists()}
 
 
+def _given_title(title: Optional[str]) -> Optional[str]:
+    """A title given to import apply or duplicate, trimmed and checked with the create path's rule (``manifest.check_title``):
+    a control character, a line break or more than 120 characters is a 422 BEFORE a slot, a staging or a folder is touched
+    (REVIEW-0071 N4 - it used to fail at step 5 and leave an ``invalid`` half-import). ``None`` stays ``None``."""
+    if title is None:
+        return None
+    return manifest.check_title(str(title).strip())
+
+
+#: the default copy title is "<base> (copy)"; the base is clipped so the whole stays within the title rule - the console's
+#: Duplicate dialog pre-fills the same string (web-next src/pages/projects/copy-title.ts, REVIEW-0071 N5)
+COPY_SUFFIX = " (copy)"
+
+
 def _copy_title(title: Optional[str], man: dict[str, Any], project_id: str) -> str:
-    """The copy's title: the one given (one line, trimmed), else "<title> (copy)" - a copy and its original must be told apart in
-    the list, the scope switchers and the graph (integration test 2026-11-11 D3)."""
-    given = " ".join(str(title or "").split())
+    """The copy's title: the one given (trimmed, the create rule), else "<title> (copy)" - a copy and its original must be told
+    apart in the list, the scope switchers and the graph (integration test 2026-11-11 D3). The default's base is the source
+    title on one line (control characters become spaces, runs collapse), clipped to 113 characters and trimmed again."""
+    given = _given_title(title)
     if given:
-        return given[:120]
-    base = " ".join(str(man.get("title") or project_id).split())
-    return f"{base[:113]} (copy)"
+        return given
+    base = " ".join(manifest._CONTROL.sub(" ", str(man.get("title") or "")).split()) or project_id
+    return base[:manifest.TITLE_MAX - len(COPY_SUFFIX)].rstrip() + COPY_SUFFIX
 
 
 def duplicate_project(tenant_id: str, project_id: str, *, new_id: str, location: Optional[str] = None,
@@ -3970,6 +3986,7 @@ def duplicate_project(tenant_id: str, project_id: str, *, new_id: str, location:
     if registry.get(tenant_id, new_id) is not None:
         raise Conflict(CONFLICT_MESSAGES["id_taken"].format(id=new_id), "id_taken")
     _root, man = _load_project(tenant_id, project_id)
+    copy_title = _copy_title(title, man, project_id)   # the create rule, before the staging is opened (REVIEW-0071 N4)
     prot = _protection_of(tenant_id, project_id, man)
     if prot["classification"] == "secret":
         _export_refused(tenant_id, "classification", project_id)
@@ -3994,7 +4011,7 @@ def duplicate_project(tenant_id: str, project_id: str, *, new_id: str, location:
             raise Conflict(rep["message"], rep["reason_class"])
         card = rep["projects"][0]
         return _apply_into(tenant_id, new_id, z, card, location=location,
-                           parts={"git_history": pr.git_history, "kb": pr.kb}, title=_copy_title(title, man, project_id), event="project.duplicated",
+                           parts={"git_history": pr.git_history, "kb": pr.kb}, title=copy_title, event="project.duplicated",
                            protection=prot)
     finally:
         if handle is not None:

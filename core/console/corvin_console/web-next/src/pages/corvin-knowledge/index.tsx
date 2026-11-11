@@ -30,7 +30,7 @@ import { boundName, boundRepoLabel, graphScopes, listedProjects, mergeGraphs, re
 import { buildLinkIndex } from "./link-resolver";
 import { neighbourhood, newestDecisionKey, searchNodes } from "./graph-model";
 
-export interface KnowledgeEntity { id: string; label?: string; file?: string; type: string; title: string; status: string; tags: string[]; /** the project whose knowledge base holds the node (ADR-2316); null/absent = the bound KB */ scope?: string | null }
+export interface KnowledgeEntity { id: string; label?: string; file?: string; type: string; title: string; status: string; tags: string[]; /** the project whose knowledge base holds the node (ADR-2316); null/absent = the bound KB */ scope?: string | null; /** the uid in its own knowledge base when the joined view had to qualify the node id */ uid?: string }
 export interface KnowledgeRelation { from_id: string; to_id: string; relation: string }
 export interface KnowledgeGraph { entities: KnowledgeEntity[]; relations: KnowledgeRelation[] }
 /** One knowledge base's answer: where it was read from and what state its graph is in. */
@@ -158,6 +158,8 @@ export function CorvinKnowledgePage() {
   const selectedKey = resolvedParam ?? newestDecisionKey(entities);
   const select = useCallback((key: string) => setParams({ node: key }), [setParams]);
   const canGoBack = location.key !== "default";
+  // the document is requested by the entity's own uid: in the joined view a copy's node id is "<uid>@<project>" (REVIEW-0071 N6)
+  const selectedEntity = selectedKey && known.has(selectedKey) ? entities.find((e) => e.id === selectedKey) ?? null : null;
 
   const shown = useMemo(() => {
     if (mode === "focus" && selectedKey && known.has(selectedKey)) {
@@ -337,7 +339,7 @@ export function CorvinKnowledgePage() {
             ) : (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <GraphCanvas nodes={shown.entities} edges={shown.relations} selectedKey={selectedKey} statusColours={colours} onSelect={select} layoutMode={layoutMode} onLayoutModeChange={setLayoutChoice} fullscreen={fullscreen} onFullscreen={setFullscreen} />
-                <DocumentPane nodeKey={selectedKey && known.has(selectedKey) ? selectedKey : null} project={entities.find((e) => e.id === selectedKey)?.scope ?? null} index={linkIndex} basePath={BASE_PATH} onOpen={select} onBack={canGoBack ? () => navigate(-1) : null} />
+                <DocumentPane nodeKey={selectedEntity ? (selectedEntity.uid ?? selectedEntity.id) : null} project={selectedEntity?.scope ?? null} index={linkIndex} basePath={BASE_PATH} onOpen={select} onBack={canGoBack ? () => navigate(-1) : null} />
               </div>
             )}
             </>

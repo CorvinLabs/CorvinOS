@@ -29,6 +29,7 @@ const PROJECTS = {
   vault: base("vault", "Vault", "secret"),
   big: base("big", "Big media", "internal"),
   hist: base("hist", "History leak", "internal"),
+  long: base("long", `Long ${"t".repeat(113)}`, "internal"),        // 118 characters: "<title> (copy)" would be 125
 };
 type Pid = keyof typeof PROJECTS;
 const parts = (on: Record<string, boolean>) => ["files", "kb", "git_history", "videos_index", "generated"].map((name) => ({ name, included: !!(on[name] ?? name === "files") }));
@@ -359,6 +360,25 @@ test("duplicate: the next free id is suggested, the copy appears in the list", a
   await dlg.getByTestId("duplicate-close").click();
   await page.goto("/console/app/projects");
   await expect(page.locator('[data-testid="project-card"][data-project-id="alpha-2"]')).toBeVisible();
+});
+
+// REVIEW-0071 N5: a 118-character title used to pre-fill a 125-character default the server refused with 422
+test("duplicate: a long title's default is clipped to the server's 120 characters and is sent as shown", async ({ page }) => {
+  const st = await stub(page);
+  st.list = [...st.list, PROJECTS.long];                                 // listed, so the next free id is "long-2"
+  await page.goto("/console/app/projects/long?tab=settings");
+  await page.getByTestId("share-duplicate").click();
+  const dlg = page.getByTestId("duplicate-dialog");
+  const expected = `Long ${"t".repeat(108)} (copy)`;
+  expect([...expected].length).toBe(120);
+  await expect(dlg.getByTestId("duplicate-title")).toHaveValue(expected);
+  await expect(dlg.getByTestId("duplicate-id")).toHaveValue("long-2");
+  await expect(dlg.getByTestId("duplicate-title-problem")).toHaveCount(0);
+  await expect(dlg.getByTestId("duplicate-submit")).toBeEnabled();
+  await dlg.getByTestId("duplicate-submit").click();
+  await expect(dlg).toHaveAttribute("data-stage", "done");
+  expect(st.duplicated).toHaveLength(1);
+  expect(st.duplicated[0].title).toBe(expected);
 });
 
 test("multi-select: Export selected (2) exports one set; Corvin itself and broken projects have no checkbox", async ({ page }) => {

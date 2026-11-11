@@ -233,6 +233,31 @@ export function suggestId(base: string, taken: Iterable<string>): string {
   return "";
 }
 
+// ── the copy's title ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** The longest project title the server accepts (core/projects/manifest.py TITLE_MAX). */
+export const TITLE_MAX = 120;
+export const COPY_SUFFIX = " (copy)";
+// C0/C1 control characters and the Unicode line/paragraph separators: the server's one-line rule (manifest._CONTROL)
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const CONTROL_ALL = new RegExp(CONTROL.source, "g");
+
+/** The default title of a copy, equal to the server's own default (projects_service._copy_title): the source title on one line,
+ *  its base clipped so "<base> (copy)" stays within TITLE_MAX characters (code points, as the server counts), trimmed again. */
+export function copyTitle(title: string | undefined | null, id: string): string {
+  const base = (title ?? "").replace(CONTROL_ALL, " ").split(/\s+/).filter(Boolean).join(" ") || id;
+  return Array.from(base).slice(0, TITLE_MAX - COPY_SUFFIX.length).join("").trimEnd() + COPY_SUFFIX;
+}
+
+/** Why the server would refuse this title (the create rule, applied to a copy and an import too), or null. */
+export function titleProblem(title: string): string | null {
+  const t = title.trim();
+  if (!t) return "Give the copy a title.";
+  if (CONTROL.test(t)) return "The title must be one line, without control characters.";
+  if (Array.from(t).length > TITLE_MAX) return `The title can have at most ${TITLE_MAX} characters.`;
+  return null;
+}
+
 // ── list multi-select ────────────────────────────────────────────────────────────────────────────────────────
 
 /** Toggles one id in the selection (order kept). */

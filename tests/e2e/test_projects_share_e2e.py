@@ -823,6 +823,28 @@ class ImportApply(ApplyBase):
             self.assertEqual(_tree(Path(r.json()["project"]["path"])).keys() - {"project.yaml"},
                              _tree(root).keys() - {"project.yaml"})
 
+    # REVIEW-0071 N4: a title the create path refuses (control character, line break, too long) ended in 409 import_incomplete
+    # and left an `invalid` project whose project.yaml named the source id; now 422 before anything is written
+    def test_a_title_create_refuses_is_422_before_anything_is_written_and_the_staging_stays(self):
+        from core.projects import registry
+        with self.ctx() as c:
+            pid, _root = self.make(c, "Titled", template="plain")
+            rep = self.stage(c, self.bundle_bytes(c, pid))
+            sid = rep["staging_id"]
+            parent = Path(rep["projects"][0]["default_location"]["path"]).parent
+            before = sorted(p.name for p in parent.iterdir()) if parent.exists() else []
+            for bad in ("bad\x01title", "Line one\nline two", "x" * 121):
+                r = self.apply(c, sid, project_id="titled-bad", title=bad)
+                self.assertEqual(r.status_code, 422, (bad, r.text[:300]))
+                self.assertIsNone(registry.get("acme", "titled-bad"))
+                self.assertIsNone(registry.get("acme", pid))
+                self.assertEqual(sorted(p.name for p in parent.iterdir()) if parent.exists() else [], before, bad)
+            self.assertFalse(self.events(c, "project.imported", tenant="acme"), "a refused title is not an import attempt")
+            # the staging was not consumed: the same staging imports with a valid title
+            r = self.apply(c, sid, project_id="titled-ok", title="  Titled again  ")
+            self.assertEqual(r.status_code, 201, r.text[:300])
+            self.assertEqual(self.get(c, f"{_URL}/titled-ok").json()["title"], "Titled again")
+
     def test_apply_needs_csrf_and_another_tenant_cannot_apply_my_staging(self):
         with self.ctx() as c:
             pid, _ = self.make(c, "Mine", template="plain")
@@ -1100,6 +1122,40 @@ class Duplicate(ApplyBase):
             self.assertEqual(r.status_code, 201, r.text[:500])
             self.assertEqual(c.own.get(f"{_URL}/original-two").json()["title"], "Second take")
             self.assertEqual(self.dup(c, pid, project_id="original-three", title="  ").status_code, 422, "a blank title is refused")
+
+    # REVIEW-0071 N4: the create path's title rule, before the staging is even opened
+    def test_a_title_create_refuses_is_422_with_nothing_registered_no_folder_and_no_staging(self):
+        from core.projects import registry
+        with self.ctx() as c:
+            pid, root = self.make(c, "Original")
+            before = sorted(p.name for p in root.parent.iterdir())
+            for bad in ("bad\x01title", "Line one\nline two", "tab\there", "x" * 121):
+                r = self.dup(c, pid, project_id="original-bad", title=bad)
+                self.assertEqual(r.status_code, 422, (bad, r.text[:300]))
+                self.assertIsNone(registry.get("_default", "original-bad"))
+                self.assertEqual(sorted(p.name for p in root.parent.iterdir()), before, bad)
+                self.assertEqual(self.stagings(c), [])
+            self.assertFalse(self.events(c, "project.duplicated", "_default"))
+            self.assertEqual(c.own.get(f"{_URL}/{pid}").json()["title"], "Original")
+
+    # REVIEW-0071 N4/N5: the default title is one line of at most 120 characters, the base trimmed - the rule the dialog shares
+    def test_the_default_copy_title_fits_the_title_rule(self):
+        from core.projects import manifest
+        with self.ctx() as c:
+            f = c.svc._copy_title
+            self.assertEqual(f(None, {"title": "Original"}, "o"), "Original (copy)")
+            for src in ("y" * 120, "y" * 114, "y" * 112 + " z", "a\x01b\u2028c", "\x01\x02", ""):
+                out = f(None, {"title": src}, "orig")
+                self.assertEqual(manifest.check_title(out), out, repr(src))
+                self.assertTrue(out.endswith(" (copy)"), out)
+                self.assertNotIn("  ", out)
+            self.assertEqual(f(None, {"title": "y" * 120}, "o"), "y" * 113 + " (copy)")
+            self.assertEqual(f(None, {"title": "y" * 112 + " z"}, "o"), "y" * 112 + " (copy)")
+            self.assertEqual(f(None, {"title": "a\x01b\u2028c"}, "o"), "a b c (copy)")
+            self.assertEqual(f(None, {"title": "\x01\x02"}, "orig"), "orig (copy)")
+            self.assertEqual(f("  Mine  ", {"title": "x"}, "o"), "Mine")
+            with self.assertRaises(manifest.ManifestError):
+                f("bad\x01", {"title": "x"}, "o")
 
     # T-0401 AC1a (REVIEW-0062 N4)
     def test_duplicate_of_an_adopted_clone_keeps_its_history_without_remote_refs(self):

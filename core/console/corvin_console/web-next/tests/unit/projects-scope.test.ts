@@ -70,20 +70,53 @@ describe("a 'both' view", () => {
   });
   it("two local ids that are equal stay distinct: labels are qualified, uids keep the nodes apart", () => {
     const merged = mergeGraphs([
-      { projectId: null, entities: [{ id: "uid-1", label: "T-0001" }], relations: [{ from: "uid-1", to: "uid-1" }] },
+      { projectId: null, entities: [{ id: "uid-1", label: "T-0001" }], relations: [{ from_id: "uid-1", to_id: "uid-1" }] },
       { projectId: "alpha", entities: [{ id: "uid-2", label: "T-0001" }], relations: [] },
     ]);
     expect(merged.entities.map((e) => e.label)).toEqual(["T-0001", "alpha/T-0001"]);
     expect(merged.entities.map((e) => e.scope)).toEqual([null, "alpha"]);
+    expect(merged.entities.map((e) => e.id)).toEqual(["uid-1", "uid-2"]);       // no collision: ids unchanged
     expect(merged.entities).toHaveLength(2);
   });
-  it("the same uid in two parts is kept once; relations are never invented across parts", () => {
+  // REVIEW-0071 N6: a duplicated or imported-as-copy project carries its original's uids; its entities used to vanish
+  it("the same uid in two parts is kept in both; each part's relations stay inside its own island", () => {
     const merged = mergeGraphs([
-      { projectId: null, entities: [{ id: "u", label: "A" }], relations: [{ from: "u", to: "u" }] },
-      { projectId: "alpha", entities: [{ id: "u", label: "A" }], relations: [] },
+      { projectId: "orig", entities: [{ id: "u1", label: "A" }, { id: "u2", label: "B" }], relations: [{ from_id: "u1", to_id: "u2", relation: "r" }] },
+      { projectId: "copy", entities: [{ id: "u1", label: "A" }, { id: "u2", label: "B" }, { id: "u3", label: "C" }],
+        relations: [{ from_id: "u1", to_id: "u2", relation: "r" }, { from_id: "u3", to_id: "u1", relation: "r" }] },
     ]);
+    expect(merged.entities).toHaveLength(5);
+    expect(merged.entities.map((e) => e.id)).toEqual(["u1", "u2", "u1@copy", "u2@copy", "u3"]);
+    expect(merged.entities.map((e) => e.uid)).toEqual(["u1", "u2", "u1", "u2", "u3"]);
+    expect(merged.entities.map((e) => e.label)).toEqual(["orig/A", "orig/B", "copy/A", "copy/B", "copy/C"]);
+    expect(merged.relations).toEqual([
+      { from_id: "u1", to_id: "u2", relation: "r" },
+      { from_id: "u1@copy", to_id: "u2@copy", relation: "r" },
+      { from_id: "u3", to_id: "u1@copy", relation: "r" },
+    ]);
+    const scopeOf = new Map(merged.entities.map((e) => [e.id, e.scope]));
+    for (const r of merged.relations) expect(scopeOf.get(r.from_id)).toBe(scopeOf.get(r.to_id));
+    expect(new Set(merged.entities.map((e) => e.id)).size).toBe(merged.entities.length);
+  });
+  it("the bound knowledge base and a copy of it share uids: both kept, the count is the sum of the parts", () => {
+    const part = (pid: string | null, n: number) => ({ projectId: pid, entities: Array.from({ length: n }, (_, i) => ({ id: `u${i}`, label: `E${i}` })), relations: [] });
+    const merged = mergeGraphs([part(null, 3), part("t", 3), part("t-copy", 2)]);
+    expect(merged.entities).toHaveLength(8);
+    expect(merged.entities.filter((e) => e.scope === "t-copy").map((e) => e.id)).toEqual(["u0@t-copy", "u1@t-copy"]);
+  });
+  it("a dangling endpoint of a joined part never lands on another knowledge base's node; one part alone is unchanged", () => {
+    const merged = mergeGraphs([
+      { projectId: null, entities: [{ id: "x", label: "X" }], relations: [] },
+      { projectId: "alpha", entities: [{ id: "y", label: "Y" }], relations: [{ from_id: "y", to_id: "x", relation: "r" }] },
+    ]);
+    expect(merged.relations).toEqual([{ from_id: "y", to_id: "x@alpha", relation: "r" }]);
+    const one = mergeGraphs([{ projectId: "alpha", entities: [{ id: "y", label: "Y" }], relations: [{ from_id: "y", to_id: "gone", relation: "r" }] }]);
+    expect(one.relations).toEqual([{ from_id: "y", to_id: "gone", relation: "r" }]);
+    expect(one.entities.map((e) => e.id)).toEqual(["y"]);
+  });
+  it("the same uid twice within one knowledge base is one node", () => {
+    const merged = mergeGraphs([{ projectId: "a", entities: [{ id: "u", label: "A" }, { id: "u", label: "A" }], relations: [] }]);
     expect(merged.entities).toHaveLength(1);
-    expect(merged.relations).toEqual([{ from: "u", to: "u" }]);
   });
 });
 

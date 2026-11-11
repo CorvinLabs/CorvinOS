@@ -21,9 +21,9 @@ import { CLASS_META } from "./roles";
 import { explain } from "./wizard";
 import { parentOf } from "./picker-logic";
 import {
-  ARCHIVE_NOTE, ID_RULE, ORIGIN_HINT, ORIGIN_LABEL, PROTECTION_LATER, conflictRows, exportEnabled, exportGate, fromLine, importEnabled,
+  ARCHIVE_NOTE, ID_RULE, ORIGIN_HINT, ORIGIN_LABEL, PROTECTION_LATER, TITLE_MAX, conflictRows, copyTitle, exportEnabled, exportGate, fromLine, importEnabled,
   importProtection, includedLine, initialChoices, jobLine, leftOutLines, offersKbPart, offersWithoutHistory, refusalOf, skippableParts, suggestId,
-  verdictKey, willCreateLine, type ImportChoices,
+  titleProblem, verdictKey, willCreateLine, type ImportChoices,
 } from "./share-logic";
 
 const LIST = ["projects", "list"] as const;
@@ -434,7 +434,7 @@ function DuplicateBody({ d, onClose, setBusy }: { d: ProjectDetail; onClose: () 
   const [id, setId] = useState<string | null>(null);
   const value = id ?? suggested;
   // the copy's name: told apart from the original in the list, the scope switchers and the graph (the server uses the same default)
-  const [title, setTitle] = useState(`${d.title || d.id} (copy)`);
+  const [title, setTitle] = useState(() => copyTitle(d.title, d.id));
   const [location, setLocation] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [parts, setParts] = useState({ git_history: true, kb: true, generated: false });
@@ -447,7 +447,8 @@ function DuplicateBody({ d, onClose, setBusy }: { d: ProjectDetail; onClose: () 
     onSuccess: (r) => { setDone(r); void qc.invalidateQueries({ queryKey: LIST }); },
     onError: (e) => setError(explain(e)),
   });
-  const valid = ID_RULE.test(value.trim()) && value.trim() !== d.id && title.trim().length > 0;
+  const titleIssue = titleProblem(title);
+  const valid = ID_RULE.test(value.trim()) && value.trim() !== d.id && titleIssue === null;
   const defaultPlace = list.data?.default_storage === "root" && list.data.projects_root_set
     ? `Projects folder › ${value.trim() || "…"}` : `Corvin workspace › ${value.trim() || "…"}`;
   if (done) {
@@ -480,9 +481,9 @@ function DuplicateBody({ d, onClose, setBusy }: { d: ProjectDetail; onClose: () 
           {value.trim() && !ID_RULE.test(value.trim()) && <span className="mt-1 block text-xs text-red-700 dark:text-red-300">Use lowercase letters, digits and dashes, at most 28 characters.</span>}
         </label>
         <label className="block text-sm">Title
-          <input className="mt-1 w-full rounded border bg-background px-2 py-1 text-sm" value={title} maxLength={120}
+          <input className="mt-1 w-full rounded border bg-background px-2 py-1 text-sm" value={title} maxLength={TITLE_MAX}
             onChange={(e) => { setTitle(e.target.value); setError(null); }} data-testid="duplicate-title" disabled={mut.isPending} />
-          {!title.trim() && <span className="mt-1 block text-xs text-red-700 dark:text-red-300">Give the copy a title.</span>}
+          {titleIssue && <span className="mt-1 block text-xs text-red-700 dark:text-red-300" data-testid="duplicate-title-problem">{titleIssue}</span>}
         </label>
         <Line label="Where" testid="duplicate-where">
           <span className="flex flex-wrap items-center gap-2">
