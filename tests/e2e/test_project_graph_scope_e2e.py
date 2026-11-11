@@ -195,5 +195,45 @@ class ProjectGraphScopeE2E(unittest.TestCase):
             self.assertEqual(row["kb_problem"], "docs/kb/_meta/sources.yaml is missing")
 
 
+    def test_a_manual_card_labelled_like_a_project_stays_a_manual_card(self):
+        # REVIEW-0082 N30: the project came from any prj-* label; such a card vanished from every view
+        with _sandbox(self.tmp / "s", tenants=("_default",)) as (_c, _t, home, clients):
+            from corvin_console import kb_projection
+            alpha = fx._make_project(self.tmp / "p", "alpha")
+            fx._write_registry(home, "_default", [("alpha", alpha)])
+            kb_projection.sync("_default", force=True)
+            kb_projection.sync_projects("_default")
+            own, csrf = clients["_default"]
+            r = own.post(f"{_TT}/items", json={"kind": "task", "title": "my manual card", "labels": ["prj-alpha"]},
+                         headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 201, r.text)
+            mid = r.json()["id"]
+            every = {it["id"]: it for it in own.get(f"{_TT}/items").json()["items"]}
+            self.assertIn(mid, every)
+            self.assertIsNone(every[mid]["project"])
+            self.assertIn(mid, {it["id"] for it in own.get(f"{_TT}/items", params={"scope": "bound"}).json()["items"]})
+            self.assertNotIn(mid, {it["id"] for it in own.get(f"{_TT}/items", params={"scope": "project:alpha"}).json()["items"]})
+
+    def test_a_board_move_right_after_a_restart_keeps_the_other_projects(self):
+        # REVIEW-0082 N31: sync_project read the state from memory only and wrote back just its own project
+        with _sandbox(self.tmp / "s", tenants=("_default",)) as (_c, _t, home, clients):
+            from corvin_console import kb_projection
+            alpha = fx._make_project(self.tmp / "p", "alpha")
+            beta = fx._make_project(self.tmp / "p", "beta")
+            fx._write_registry(home, "_default", [("alpha", alpha), ("beta", beta)])
+            kb_projection.sync("_default", force=True)
+            kb_projection.sync_projects("_default")
+            own, csrf = clients["_default"]
+            before = own.get(f"{_TT}/items").json()["items"]
+            self.assertTrue(any(it["project"] == "beta" for it in before))
+            kb_projection._project_state.clear()                              # what a restart leaves: the file only
+            task = next(it for it in before if it["project"] == "alpha" and it["kind"] == "task")
+            r = own.post(f"{_TT}/items/{task['id']}/kb-transition", json={"to": "in_progress"}, headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+            after = own.get(f"{_TT}/items").json()["items"]
+            self.assertTrue(any(it["project"] == "beta" for it in after), "beta's cards vanished after alpha's move")
+            self.assertEqual(set(kb_projection.project_status("_default")), {"alpha", "beta"})
+
+
 if __name__ == "__main__":
     unittest.main()

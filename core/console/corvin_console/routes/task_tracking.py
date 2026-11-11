@@ -134,12 +134,11 @@ def _attach_live_runs(tenant_id: str, items: list[dict[str, Any]]) -> None:
 # ── Reads ────────────────────────────────────────────────────────────────────
 
 def _project_of(item: dict[str, Any]) -> Any:
+    """The project a card belongs to - from its KB reference, which only the projector writes; never from a label a person can
+    type (REVIEW-0082 N30: a manual card labelled ``prj-alpha`` vanished from every view, or showed on alpha's board)."""
     from core.task_tracking import projection  # noqa: PLC0415
 
-    for x in item.get("labels") or []:
-        if isinstance(x, str) and x.startswith(projection.SCOPE_PREFIX):
-            return x[len(projection.SCOPE_PREFIX):]
-    return None
+    return projection.scope_of_ref(item.get("external_ref"))
 
 
 @router.get("/items")

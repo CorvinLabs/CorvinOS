@@ -1279,7 +1279,10 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   view never shows the cards of a removed, trashed, switched-off or mismatched project. The joined graph loads its parts with
   `allSettled` and names a part that cannot be read; a scoped Tasks 404 says that project's knowledge base cannot be read.
   "Remove from the list" is refused (409 `import_running`) and drawn disabled while an import of the project runs
-  (REVIEW-0081 N27-N29). A chain failure between two opening records of `_audited` closes the ones already
+  (REVIEW-0081 N27-N29). A card's project comes from its KB reference (`kb:<uid>@<project>`, written only by the
+  projector, `projection.scope_of_ref`), never from a `prj-*` label a person can type (REVIEW-0082 N30). Every reader of
+  the projector's per-project state goes through `_load_project_state` (memory, else the file), so a board move right
+  after a restart keeps the other projects carried (N31). A chain failure between two opening records of `_audited` closes the ones already
   open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
   feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,

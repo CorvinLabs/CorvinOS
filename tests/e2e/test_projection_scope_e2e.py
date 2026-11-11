@@ -87,6 +87,10 @@ class ProjectionScopeE2E(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _board(self, client) -> dict[str, dict]:
+        # these tests apply a project's export straight into the store, without the registry and the projector; the board shows
+        # a project's cards only while the projector carries it (REVIEW-0081 N27), so the state a projector pass writes is set here
+        from corvin_console import kb_projection
+        kb_projection._save_projects("_default", {"alpha": {"state": "ok"}})
         r = client.get("/v1/console/task-tracking/items")
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()

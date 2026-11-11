@@ -72,6 +72,16 @@ def kb_uid(external_ref: str) -> str:
     return external_ref.split(":", 1)[1].split("@", 1)[0]
 
 
+def scope_of_ref(external_ref: Any) -> Optional[str]:
+    """The project a stored KB reference belongs to (``kb:<uid>@<scope>``), or None for the bound KB and for any card that is
+    not a KB card. The reference is written only by the projector; a ``prj-*`` label is not proof - anyone may type one on a
+    manual card (REVIEW-0082 N30)."""
+    ref = str(external_ref or "")
+    if not ref.startswith("kb:") or "@" not in ref:
+        return None
+    return ref.split("@", 1)[1] or None
+
+
 def _payload_ref(external_ref: str) -> str:
     return external_ref.split("@", 1)[0]
 

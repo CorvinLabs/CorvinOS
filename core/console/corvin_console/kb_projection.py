@@ -730,14 +730,21 @@ def project_kb_problem(tenant_id: str, project_id: str) -> str | None:
     return "the project is not registered"
 
 
-def project_status(tenant_id: str) -> dict[str, Any]:
-    """The per-project projection states without their payloads (for /kb/status)."""
+def _load_project_state(tenant_id: str) -> dict[str, Any]:
+    """The per-project projection state: the process's copy, else the file the last pass wrote (after a restart). One reader
+    for every caller (REVIEW-0082 N31)."""
     st = _project_state.get(tenant_id)
-    if st is None:
+    if not st:
         try:
             st = json.loads(_project_state_path(tenant_id).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             st = {}
+    return dict(st) if isinstance(st, dict) else {}
+
+
+def project_status(tenant_id: str) -> dict[str, Any]:
+    """The per-project projection states without their payloads (for /kb/status)."""
+    st = _load_project_state(tenant_id)
     return {k: {kk: vv for kk, vv in v.items() if kk != "payload"} if isinstance(v, dict) else v
             for k, v in st.items()}
 
@@ -802,12 +809,7 @@ def sync_projects(tenant_id: str, *, busy: bool = False) -> dict[str, Any]:
     if busy:
         return {"skipped": "host saturated"}
     kbs = project_kbs(tenant_id)
-    prev_all = dict(_project_state.get(tenant_id) or {})
-    if not prev_all:
-        try:
-            prev_all = json.loads(_project_state_path(tenant_id).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            prev_all = {}
+    prev_all = _load_project_state(tenant_id)
     if not kbs:
         if prev_all:
             _save_projects(tenant_id, {})
@@ -837,6 +839,8 @@ def sync_projects(tenant_id: str, *, busy: bool = False) -> dict[str, Any]:
 
 
 def _scope_of_item(cur: dict[str, Any]) -> Optional[str]:
+    if str(cur.get("external_ref") or "").startswith("kb:"):
+        return projection.scope_of_ref(cur.get("external_ref"))       # a KB card: its reference decides (REVIEW-0082 N30)
     labels = cur.get("labels") if isinstance(cur.get("labels"), list) else []
     for x in labels:
         if isinstance(x, str) and x.startswith(projection.SCOPE_PREFIX):
@@ -979,7 +983,9 @@ def ensure_project_graph(tenant_id: str, repo: Path) -> dict[str, Any]:
 def sync_project(tenant_id: str, scope: str) -> dict[str, Any]:
     """Re-project ONE project scope now (after a board write into it)."""
     repo, engine = _write_target(tenant_id, scope)
-    prev_all = dict(_project_state.get(tenant_id) or {})
+    # memory, else the file - like every other reader: a write right after a restart must not drop the other projects
+    # (REVIEW-0082 N31)
+    prev_all = _load_project_state(tenant_id)
     with _tenant_lock(tenant_id):
         prev = {k: v for k, v in (prev_all.get(scope) or {}).items() if k != "fingerprint"}
         prev_all[scope] = _sync_one_project(tenant_id, scope, repo, engine, prev)
