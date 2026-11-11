@@ -132,6 +132,11 @@ def _safe_rel(rel: str, what: str) -> str:
     if not isinstance(rel, str) or not rel or rel.startswith(("/", "\\")) or "\\" in rel or ".." in Path(rel).parts \
             or "\x00" in rel or re.match(r"^[A-Za-z]:", rel):
         raise FragmentError(f"{what}: {rel!r} is not a safe relative path")
+    # NTFS reads "name::$INDEX_ALLOCATION" / "name:stream" as the folder or a stream of "name", and an 8.3 short name ("GIT~1") as the long
+    # name it abbreviates: either one would reach a protected name the component check below never sees (REVIEW-0070 N3). No template path
+    # needs a colon or a "~<digit>" component, so both are refused on every platform (the catalogue is the same file everywhere).
+    if ":" in rel or any(re.search(r"~\d", part) for part in Path(rel).parts):
+        raise FragmentError(f"{what}: {rel!r} is not a safe relative path")
     return rel
 
 

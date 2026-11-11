@@ -373,7 +373,9 @@ Fragments are DATA: no template code runs. The only active steps are the closed 
   directory whose `config` sets `core.fsmonitor` (REVIEW-0069's bypass of the first fix); `HEAD` because a folder holding
   `HEAD` + `objects/` + `refs/` is a git directory git discovers, and with `core.worktree = ..` in its `config` a plain
   `git status` there runs fsmonitor - no template needs a file named `HEAD`. The console's own git is neutral; the operator's
-  terminal git and a terminal `claude` are not, so a catalogue must never seed what they execute. Proof:
+  terminal git and a terminal `claude` are not, so a catalogue must never seed what they execute. Every fragment path also refuses
+  a colon and any `~<digit>` component on every platform (REVIEW-0070 N3): on NTFS `GIT~1` is the 8.3 short name of `.git` and
+  `.git::$INDEX_ALLOCATION` names the folder itself, so either would reach `.git` without spelling it. Proof:
   `tests/projects/test_fragment_targets_review_0066.py`, `tests/projects/test_fragment_targets_review_0069.py` (the verifier's
   gitdir and bare-layout attacks through the real loader, planner, writer and `git`).
 

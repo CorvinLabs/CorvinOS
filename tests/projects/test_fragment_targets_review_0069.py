@@ -57,6 +57,21 @@ class FinalComponentTargets(unittest.TestCase):
                 self.assertEqual(self._load(dst).fragments["core"].files[0]["dst"], dst)
 
 
+class WindowsAliasTargets(FinalComponentTargets):
+    """REVIEW-0070 N3: on NTFS an 8.3 short name (GIT~1) and an alternate data stream / index allocation name (.git::$INDEX_ALLOCATION)
+    reach .git without ever spelling it. Refused on every platform: the catalogue is the same file everywhere."""
+
+    ALIASES = ["GIT~1/config", "x/GIT~1/config", ".git::$INDEX_ALLOCATION/config", "a:b", "notes/x.md:stream", "CLAUDE~1/settings.json"]
+
+    def test_short_names_and_stream_names_are_refused(self):
+        for dst in self.ALIASES:
+            with self.subTest(dst=dst), self.assertRaises(F.FragmentError):
+                self._load(dst)
+
+    def test_a_tilde_without_a_digit_still_loads(self):
+        self.assertEqual(self._load("docs/~draft.md").fragments["core"].files[0]["dst"], "docs/~draft.md")
+
+
 class GitdirRedirectReproduction(unittest.TestCase):
     """The verifier's /tmp/r69/frag_git2.py as a test: a ``.git`` FILE plus an fsmonitor config under unprotected names."""
 
