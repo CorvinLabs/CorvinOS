@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api/client";
 import type { FeatureRow, ProjectDetail } from "@/lib/api/projects";
 import { MARKER_TRASH, confirmMatches, conflictOf, doctorSummary, healthHeadline, parseTab, restorableUntil, rowState, settingsSections, trashDate,
-  trashLinkLabel, trashRows } from "@/pages/projects/inspector-logic";
+  trashLinkLabel, trashPager, trashRows } from "@/pages/projects/inspector-logic";
 
 const row = (over: Partial<FeatureRow>): FeatureRow => ({ id: "kb", title: "kb", description: "", active: true, requires: ["core"],
   suggests: [], dependants: [], plugins: [], ...over });
@@ -191,5 +191,22 @@ describe("the Trash (T-0405)", () => {
     expect(trashLinkLabel(0)).toBeNull();
     expect(trashLinkLabel(undefined)).toBeNull();
     expect(trashLinkLabel(1)).toBe("Trash (1)");
+  });
+  // REVIEW-0063 m6: the server pages the Trash (offset, limit, total, next_offset); the section pages with it
+  it("one page needs no pager; a first page offers Older, a middle page both, the last page Newer", () => {
+    const rows = (n: number) => Array.from({ length: n }, () => ({}));
+    expect(trashPager(undefined)).toEqual({ label: null, newer: null, older: null });
+    expect(trashPager({ entries: rows(3), total: 3, offset: 0, limit: 200, next_offset: null })).toEqual({ label: null, newer: null, older: null });
+    expect(trashPager({ entries: rows(200), total: 523, offset: 0, limit: 200, next_offset: 200 }))
+      .toEqual({ label: "Showing 1–200 of 523", newer: null, older: 200 });
+    expect(trashPager({ entries: rows(200), total: 523, offset: 200, limit: 200, next_offset: 400 }))
+      .toEqual({ label: "Showing 201–400 of 523", newer: 0, older: 400 });
+    expect(trashPager({ entries: rows(123), total: 523, offset: 400, limit: 200, next_offset: null }))
+      .toEqual({ label: "Showing 401–523 of 523", newer: 200, older: null });
+  });
+  it("a page emptied by restores steps back to the newer page; an old server without paging fields is one page", () => {
+    expect(trashPager({ entries: [], total: 200, offset: 200, limit: 200, next_offset: null }))
+      .toEqual({ label: null, newer: 0, older: null, stepBack: 0 });
+    expect(trashPager({ entries: [{}, {}], ttl_days: 30 })).toEqual({ label: null, newer: null, older: null });
   });
 });

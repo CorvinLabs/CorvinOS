@@ -1,9 +1,10 @@
 /**
  * The Trash of the Projects page (T-0405, ADR-2321 Decision 12): the managed projects whose files were deleted, kept for 30 days.
  * Restore brings a folder back to the Corvin workspace; "Delete permanently…" needs the typed id. Rows, dates and refusals are the
- * server's (GET /projects/-/trash); the row logic is in inspector-logic.ts (unit-tested).
+ * server's (GET /projects/-/trash); the row logic is in inspector-logic.ts (unit-tested). The server pages the Trash (200 per page,
+ * newest first); "Older entries" / "Newer entries" page with it (REVIEW-0063 m6).
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth";
 import { listTrash, purgeTrashEntry, restoreTrashEntry } from "@/lib/api/projects";
-import { PURGE_SENTENCE, TRASH_DAYS, confirmMatches, trashRows, type TrashRow } from "./inspector-logic";
+import { PURGE_SENTENCE, TRASH_DAYS, confirmMatches, trashPager, trashRows, type TrashRow } from "./inspector-logic";
 import { explain } from "./wizard";
 
 export const TRASH_KEY = ["projects", "trash"] as const;
@@ -22,8 +23,14 @@ export function TrashSection({ onBack }: { onBack: () => void }) {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
   const qc = useQueryClient();
-  const trash = useQuery({ queryKey: TRASH_KEY, queryFn: ({ signal }) => listTrash(signal), refetchInterval: 30_000 });
+  const [offset, setOffset] = useState(0);
+  const trash = useQuery({ queryKey: [...TRASH_KEY, offset], queryFn: ({ signal }) => listTrash(signal, offset), refetchInterval: 30_000,
+    placeholderData: (prev) => prev });                         // paging keeps the rows on screen until the next page arrives
   const rows = trashRows(trash.data?.entries);
+  const pager = trashPager(trash.data);
+  useEffect(() => {                                             // the page emptied (restored/deleted rows): show the newer one
+    if (pager.stepBack !== undefined && !trash.isPlaceholderData) setOffset(pager.stepBack);
+  }, [pager.stepBack, trash.isPlaceholderData]);
   const [note, setNote] = useState<string | null>(null);
   const [rowError, setRowError] = useState<{ entry: string; text: string } | null>(null);
   const [purging, setPurging] = useState<TrashRow | null>(null);
@@ -54,7 +61,7 @@ export function TrashSection({ onBack }: { onBack: () => void }) {
         <div role="alert" className="rounded-lg border border-red-500/40 p-3 text-sm text-red-700 dark:text-red-300" data-testid="trash-error">{loadError}</div>
       )}
       {trash.isLoading && <Skeleton className="h-20 w-full" data-testid="trash-loading" />}
-      {trash.data && rows.length === 0 && (
+      {trash.data && rows.length === 0 && pager.stepBack === undefined && (
         <Card data-testid="trash-empty"><CardContent className="p-6 text-center text-sm text-muted-foreground">Trash is empty.</CardContent></Card>
       )}
       {rows.length > 0 && (
@@ -81,6 +88,17 @@ export function TrashSection({ onBack }: { onBack: () => void }) {
             </li>
           ))}
         </ul>
+      )}
+      {(pager.newer !== null || pager.older !== null) && (
+        <nav className="flex flex-wrap items-center justify-between gap-2" aria-label="Trash pages" data-testid="trash-pager">
+          <p className="text-xs text-muted-foreground" data-testid="trash-range">{pager.label}</p>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" disabled={pager.newer === null || trash.isPlaceholderData}
+              onClick={() => { if (pager.newer !== null) { setRowError(null); setOffset(pager.newer); } }} data-testid="trash-newer">Newer entries</Button>
+            <Button size="sm" variant="outline" disabled={pager.older === null || trash.isPlaceholderData}
+              onClick={() => { if (pager.older !== null) { setRowError(null); setOffset(pager.older); } }} data-testid="trash-older">Older entries</Button>
+          </div>
+        </nav>
       )}
       <PurgeDialog row={purging} csrf={csrf} onClose={() => setPurging(null)}
         onDone={(r) => { setPurging(null); setNote(`${r.title} was deleted permanently.`); refresh(); }} />

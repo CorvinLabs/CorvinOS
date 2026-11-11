@@ -241,15 +241,23 @@ export interface TrashEntry {
   /** true while the move into the Trash has not finished: it cannot be restored or deleted yet. */
   pending: boolean;
 }
-export interface TrashList { entries: TrashEntry[]; ttl_days: number }
+/** One page of the Trash, newest first (REVIEW-0063 m6): `total` counts every entry, `next_offset` is null on the last page. */
+export interface TrashList {
+  entries: TrashEntry[];
+  ttl_days: number;
+  total?: number;
+  offset?: number;
+  limit?: number;
+  next_offset?: number | null;
+}
 
 export function deleteProjectFiles(id: string, confirmId: string, csrf: string):
   Promise<{ project_id: string; trash_entry: string; deleted_at: string; restorable_until: string; warnings: string[] }> {
   return api(`/projects/${encodeURIComponent(id)}/files`, { method: "DELETE", body: { confirm_id: confirmId }, csrf });
 }
 
-export function listTrash(signal?: AbortSignal): Promise<TrashList> {
-  return api<TrashList>("/projects/-/trash", { signal });
+export function listTrash(signal?: AbortSignal, offset: number = 0): Promise<TrashList> {
+  return api<TrashList>(offset > 0 ? `/projects/-/trash?offset=${offset}` : "/projects/-/trash", { signal });
 }
 
 export function restoreTrashEntry(entry: string, csrf: string): Promise<ProjectDetail & { warnings: string[] }> {

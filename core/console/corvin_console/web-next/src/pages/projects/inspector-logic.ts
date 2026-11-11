@@ -197,6 +197,34 @@ export function trashRows(entries: { entry: string; id: string; title: string; d
     }));
 }
 
+/** Rows per Trash page: the server's page size (GET /projects/-/trash, at most 200). */
+export const TRASH_PAGE = 200;
+
+export interface TrashPager {
+  /** "Showing 201–400 of 523" while the Trash spans more than one page, else null. */
+  label: string | null;
+  /** The offset of the newer page, or null on the first page. */
+  newer: number | null;
+  /** The offset of the older page (the server's `next_offset`), or null on the last page. */
+  older: number | null;
+  /** Set when this page came back empty although it is not the first (its rows were restored or deleted): go here. */
+  stepBack?: number;
+}
+
+/** The Trash pager from one server page (REVIEW-0063 m6). A server without paging fields is one page. */
+export function trashPager(d: { entries?: unknown[]; total?: number; offset?: number; limit?: number; next_offset?: number | null } | undefined): TrashPager {
+  if (!d) return { label: null, newer: null, older: null };
+  const n = d.entries?.length ?? 0;
+  const off = Math.max(0, d.offset ?? 0);
+  const limit = d.limit && d.limit > 0 ? d.limit : TRASH_PAGE;
+  const total = d.total ?? off + n;
+  const older = d.next_offset ?? null;
+  const newer = off > 0 ? Math.max(0, off - limit) : null;
+  if (n === 0 && off > 0) return { label: null, newer, older: null, stepBack: newer ?? 0 };
+  const label = older === null && newer === null ? null : `Showing ${off + 1}–${off + n} of ${total}`;
+  return { label, newer, older };
+}
+
 /** "Trash (n)" - shown only when there is something in it. */
 export function trashLinkLabel(n: number | undefined): string | null {
   return n && n > 0 ? `Trash (${n})` : null;

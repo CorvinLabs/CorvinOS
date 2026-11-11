@@ -920,7 +920,7 @@ A `missing` or `invalid` project shows these sections under its state card (Gene
 "Locate folder…" and "Remove from the list" are reachable without the tabs.
 
 **Trash in the console** (T-0405, `settings-sections.tsx` Danger zone, `trash-section.tsx`, pure logic in `inspector-logic.ts`:
-`settingsSections`, `confirmMatches`, `restorableUntil`, `trashDate`, `trashRows`, `trashLinkLabel`). "Delete project files…"
+`settingsSections`, `confirmMatches`, `restorableUntil`, `trashDate`, `trashRows`, `trashLinkLabel`, `trashPager`). "Delete project files…"
 opens a dialog: "The folder moves to Corvin's trash for 30 days; restore it from the Projects page.", a field "Type the project id
 <id> to confirm" and **Move to Trash**, enabled only on the exact id (no trimming, no case folding); Cancel sends nothing; a
 refusal stays in the dialog as the server's sentence. Success sends `DELETE /{id}/files`, drops the cached detail and opens the list
@@ -928,11 +928,15 @@ with the notice "<title> was moved to the Trash. You can restore it there for 30
 when `trash_count > 0`; it opens `?view=trash` (the Trash replaces the cards; "Back to projects" and the browser's back return).
 Each row: title, id, "Deleted <date> · restorable until <date>" (en-US, UTC), **Restore** (primary; a refusal such as
 `folder_not_empty` is shown on the row) and **Delete permanently…** (a dialog with "This removes the folder and every file in it
-for good. It cannot be undone." and the typed id). A pending entry cannot be acted on and says so. Empty: "Trash is empty.";
+for good. It cannot be undone." and the typed id). A pending entry cannot be acted on and says so. **Paging (REVIEW-0063 m6, closed
+2026-11-11):** the section pages with the server (`GET /-/trash?offset=`, 200 per page, newest first): while the Trash spans
+more than one page a line "Showing 201–400 of 523" and **Newer entries** / **Older entries** (disabled at either end and while
+the next page loads, the rows stay on screen meanwhile) sit below the list; a page that Restore or Delete permanently emptied
+steps back to the newer page instead of saying "Trash is empty." Empty: "Trash is empty.";
 loading: a skeleton; a load error: the server's message. The scope switcher of the Tasks board and the Knowledge Graph lists a
 trashed project (`GET /projects` → `trashed`, `scope.scopeList`) disabled as "<title> (In Trash)", linking to the Trash.
 Proof: `tests/unit/projects-inspector.test.ts`, `projects-scope.test.ts`; stubbed `tests/e2e/projects-settings.spec.ts`,
-`projects-panel.spec.ts`, `projects-scope.spec.ts` (screenshots of the Danger zone, both dialogs, the Trash section and the
+`projects-panel.spec.ts` (a 205-entry Trash paged with a server-shaped stub: both buttons, the range line, the step back), `projects-scope.spec.ts` (screenshots of the Danger zone, both dialogs, the Trash section and the
 Trash link at 1280/375 in both themes: `TRASH_SHOTS_DIR`, default `/tmp/phase5-shots`); live (opt-in, in
 `LIVE_ONLY_SPEC_GLOBS`): `tests/e2e/projects-trash-live.spec.ts` creates the throwaway managed project `p5-trash-live`, deletes
 it to the Trash, restores it byte-identical, deletes it permanently, and checks every other project and trash entry is unchanged.

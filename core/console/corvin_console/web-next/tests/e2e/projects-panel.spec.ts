@@ -237,12 +237,19 @@ const RESTORED = { id: "old-notes", path: "/home/u/.local/share/corvin/projects/
   title: "Old notes", storage: "managed", display_path: "Corvin workspace › old-notes", active: ["core"], features: { core: true } };
 
 async function stubTrash(page: Page, opts: { entries?: typeof TRASH_ROW[]; restoreStatus?: number } = {}) {
-  const st = { entries: [...(opts.entries ?? [TRASH_ROW])], restored: [] as string[], purged: [] as unknown[] };
+  const st = { entries: [...(opts.entries ?? [TRASH_ROW])], restored: [] as string[], purged: [] as unknown[], offsets: [] as number[] };
   await page.route(/\/v1\/console\/projects\/templates/, (r) => r.fulfill({ json: { available: true, templates: [], features: [] } }));
   await page.route(/\/v1\/console\/projects$/, (r) => r.fulfill({ json: { projects_root: "/home/u/projects", default_storage: "managed",
     managed_root: "/home/u/.local/share/corvin/projects/w-0123456789", workspace: "ok",
     projects: [LIST.projects[0], ...(st.restored.length ? [RESTORED] : [])], trashed: [], trash_count: st.entries.length } }));
-  await page.route(/\/v1\/console\/projects\/-\/trash$/, (r) => r.fulfill({ json: { entries: st.entries, ttl_days: 30 } }));
+  await page.route(/\/v1\/console\/projects\/-\/trash(\?[^/]*)?$/, (r) => {      // pages like the server (REVIEW-0063 m6)
+    const offset = Number(new URL(r.request().url()).searchParams.get("offset") ?? "0");
+    st.offsets.push(offset);
+    const limit = 200;
+    const page = st.entries.slice(offset, offset + limit);
+    return r.fulfill({ json: { entries: page, ttl_days: 30, total: st.entries.length, offset, limit,
+      next_offset: offset + limit < st.entries.length ? offset + limit : null } });
+  });
   await page.route(/\/v1\/console\/projects\/-\/trash\/[^/]+\/restore$/, (r) => {
     if (opts.restoreStatus) return r.fulfill({ status: opts.restoreStatus, json: { detail: {
       message: "A folder named old-notes is already in the Corvin workspace; move it away, then restore.", reason_class: "folder_not_empty" } } });
@@ -283,6 +290,34 @@ test("Trash (n) appears only when something is in it, and Restore brings the car
   await expect(page.locator('[data-testid="project-card"][data-project-id="old-notes"]')).toBeVisible();
   await expect(page.getByTestId("trash-link")).toHaveCount(0);
   await noIds(page);
+});
+
+test("a Trash larger than one page pages with the server: Older entries, Newer entries, and a range line", async ({ page }) => {
+  // 205 entries, newest first by the time in the name; the server answers 200 per page (REVIEW-0063 m6)
+  const many = Array.from({ length: 205 }, (_, i) => {
+    const t = new Date(Date.UTC(2026, 10, 11, 7, 0, 0) - i * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const id = `p${String(i).padStart(3, "0")}`;
+    return { entry: `${id}-${t.replace(/[-:]/g, "")}`, id, title: `Project ${i}`, deleted_at: t, restorable_until: null, pending: false };
+  });
+  const st = await stubTrash(page, { entries: many });
+  await page.goto("/console/app/projects?view=trash");
+  await expect(page.getByTestId("trash-row")).toHaveCount(200);
+  await expect(page.getByTestId("trash-range")).toHaveText("Showing 1–200 of 205");
+  await expect(page.getByTestId("trash-newer")).toBeDisabled();
+  await page.getByTestId("trash-older").click();
+  await expect(page.getByTestId("trash-row")).toHaveCount(5);
+  await expect(page.getByTestId("trash-range")).toHaveText("Showing 201–205 of 205");
+  await expect(page.getByTestId("trash-row").first().getByTestId("trash-id")).toHaveText("p200");
+  await expect(page.getByTestId("trash-older")).toBeDisabled();
+  expect(st.offsets).toContain(200);
+  fs.mkdirSync(TRASH_OUT, { recursive: true });
+  await page.getByTestId("trash-pager").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(TRASH_OUT, `trash-paging-${test.info().project.name}.png`), fullPage: true });
+  // restoring every row of the last page steps back to the newer page instead of "Trash is empty"
+  for (let i = 0; i < 5; i++) await page.getByTestId("trash-row").first().getByTestId("trash-restore").click();
+  await expect(page.getByTestId("trash-range")).toHaveCount(0);
+  await expect(page.getByTestId("trash-row")).toHaveCount(200);
+  await expect(page.getByTestId("trash-empty")).toHaveCount(0);
 });
 
 test("with an empty Trash there is no Trash link; ?view=trash says Trash is empty", async ({ page }) => {
