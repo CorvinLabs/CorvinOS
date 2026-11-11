@@ -71,11 +71,16 @@ folder whose path the Projects page names under Change… (the `managed_root`).
 
 **Tests never reach the real workspace.** The repo-root `conftest.py` puts `XDG_DATA_HOME` (on Windows also
 `LOCALAPPDATA`/`APPDATA`) into the session sandbox for every test process, and its tripwire lists the real
-`<data dir>/corvin/projects` of every platform form (resolved once, before any env change) around every test: a
-new entry there fails the test ("wrote into the real Corvin workspace"). `corvin_operator/bridges/run-all-tests.sh`
-exports the same for plain-script suites. `HOME` stays the operator's (the live suites need `~/.claude`); on macOS
+`<data dir>/corvin/projects` of every platform form (resolved once, before any env change) around every test, and
+one level down the entries of each existing `w-*` workspace in it (REVIEW-0064 #5): a new entry in either fails the
+test ("wrote into the real Corvin workspace"). `corvin_operator/bridges/run-all-tests.sh` exports the same for
+plain-script suites. The isolated Playwright backend (`web-next/scripts/start-isolated-e2e-backend.sh`) names
+`XDG_DATA_HOME`/`XDG_STATE_HOME`/`XDG_CACHE_HOME` (under Git Bash on Windows also `LOCALAPPDATA`/`APPDATA`/`USERPROFILE`)
+below its sandbox home like `start-fresh-install-backend.sh`, so a calling shell's own value never reaches it
+(REVIEW-0064 #6, `tests/security/test_isolated_e2e_backend_env.py`). `HOME` stays the operator's (the live suites need `~/.claude`); on macOS
 the data dir follows `HOME`, so there the guard is the tripwire plus the projects test `Sandbox`, which moves `HOME`.
-Proof: `tests/projects/test_user_dirs.py`, `tests/security/test_conftest_data_dir_sandbox.py`.
+Proof: `tests/projects/test_user_dirs.py`, `tests/security/test_conftest_data_dir_sandbox.py` (including a write into an
+existing workspace).
 
 ## The directory is the truth
 
@@ -522,7 +527,8 @@ Proof: `tests/e2e/test_projects_trash_e2e.py` (real HTTP, two tenants): delete -
 byte-identical with a green doctor; own project 409 `not_managed`; wrong id; a planted folder blocks restore; a project
 named `trash`; purge removes only that entry; names outside the trash and a planted symlink entry are 422 `path_rule`;
 purge and sweep leave a symlinked outside directory byte-identical; sweep at +29 d keeps, at +31 d removes, busy skips,
-a pending entry under a running delete stays and a crash's is settled then swept, bounded per tick, every crash window
+a pending entry under a running delete stays and a crash's is settled then swept, bounded per tick, one REAL projector tick (`kb_projection._loop`, a stop event set after one pass) removes a 31-day-old entry and
+skips it while `host_saturated()` is true (REVIEW-0064 #4: a dead or unwired call turns it red), every crash window
 settled by the listing (`CrashWindows`), the explicit `missing`/`pending` refusals (`ExplicitRefusals`), the other tenant's trash untouched, the route pages over 205 entries with 50 foreign names
 (`Paging`; the 300-junk / 400-young / 40-old / planted-sidecar cases in `tests/projects/test_trash_review_0063.py`); erasure leaves the trash; both events registered,
 no path and no entry name in the chain, the chain verifies.

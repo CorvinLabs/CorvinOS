@@ -415,11 +415,38 @@ class Sweep(TrashBase):
             self.assertEqual(c.svc.sweep_trash("_default", now=now)["purged"], 12 - c.svc.TRASH_SWEEP_LIMIT)
             self.assertEqual(self.trash(c), [])
 
-    def test_the_projector_tick_calls_the_sweep(self):
-        import inspect
+    def test_the_projector_tick_runs_the_sweep_and_a_saturated_host_skips_it(self):
+        # REVIEW-0064 #4: the REAL kb_projection._loop runs one tick (a stop event that is set after the first pass); the KB
+        # passes of the tick are stubbed, the trash sweep and the saturation reading are not
+
+        class OneTick:
+            def __init__(self):
+                self.n = 0
+
+            def is_set(self):
+                self.n += 1
+                return self.n > 1
+
+            def wait(self, _t=None):
+                return True
+
         with self.ctx() as c:
-            src = inspect.getsource(c.svc.kb_projection._loop)
-            self.assertIn("sweep_trash(tenant_id, busy=busy)", src)
+            from corvin_console import loop_health              # the sandbox's module, the one _loop imports
+            pid, _ = self.create(c, "Ticked")
+            entry = self.delete(c, pid).json()["trash_entry"]
+            d = self.managed_root(c) / ".trash" / entry
+            kp = c.svc.kb_projection
+            later = c.svc._now() + 31 * DAY
+            with mock.patch.object(kp, "sync", lambda t: None), mock.patch.object(kp, "sync_projects", lambda t, busy=False: None), \
+                    mock.patch.object(kp, "periodic", lambda t: None), mock.patch.object(c.svc, "sweep_share", lambda t, busy=False: None), \
+                    mock.patch.object(c.svc, "_now", lambda: later):
+                with mock.patch.object(loop_health, "host_saturated", lambda now=None: True):
+                    kp._loop("_default", OneTick())
+                self.assertTrue(d.is_dir(), "a saturated host skips the sweep")
+                with mock.patch.object(loop_health, "host_saturated", lambda now=None: False):
+                    kp._loop("_default", OneTick())
+            self.assertFalse(d.exists(), "one projector tick removed the 31-day-old entry")
+            self.assertEqual(self.outcomes(c, "project.deleted"), ["requested", "applied", "purged"])
 
 
 class Paging(TrashBase):

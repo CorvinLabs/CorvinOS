@@ -43,9 +43,11 @@ def test_the_managed_parent_resolves_into_the_sandbox():
     assert Path(str(user_dirs.managed_parent())).resolve().is_relative_to(sandbox)
 
 
-def _child_pytest(tmp: Path, body: str) -> subprocess.CompletedProcess:
+def _child_pytest(tmp: Path, body: str, workspaces: tuple[str, ...] = ()) -> subprocess.CompletedProcess:
     real = tmp / "real-data" / "corvin" / "projects"
     real.mkdir(parents=True)
+    for w in workspaces:                                      # an operator's existing workspace, there before the session
+        (real / w / "existing").mkdir(parents=True)
     test = tmp / "planted" / "test_planted.py"
     test.parent.mkdir(parents=True)
     test.write_text(textwrap.dedent(body).replace("@REAL@", str(real)), encoding="utf-8")
@@ -68,6 +70,20 @@ def test_a_planted_test_that_writes_into_the_real_workspace_fails():
         assert r.returncode != 0, out
         assert "wrote into the real Corvin workspace" in out, out
         assert "w-planted" in out, out
+
+
+def test_a_planted_test_that_writes_into_an_existing_workspace_fails():
+    # REVIEW-0064 #5: one level deeper - a project written into the operator's own w-<key> workspace is caught too
+    with tempfile.TemporaryDirectory() as td:
+        r = _child_pytest(Path(td), """
+            from pathlib import Path
+            def test_writes():
+                (Path(r"@REAL@") / "w-0123456789" / "alpha").mkdir()
+        """, workspaces=("w-0123456789",))
+        out = r.stdout + r.stderr
+        assert r.returncode != 0, out
+        assert "wrote into the real Corvin workspace" in out, out
+        assert "alpha" in out, out
 
 
 def test_a_planted_test_that_writes_nothing_there_passes():

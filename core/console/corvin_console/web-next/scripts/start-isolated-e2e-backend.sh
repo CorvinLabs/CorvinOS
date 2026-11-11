@@ -14,6 +14,21 @@ SANDBOX_ROOT="$(dirname "$CORVIN_HOME")/$(basename "$CORVIN_HOME")-env"
 mkdir -p "$SANDBOX_ROOT/xdg" "$SANDBOX_ROOT/user-home"
 export XDG_CONFIG_HOME="$SANDBOX_ROOT/xdg"
 export HOME="$SANDBOX_ROOT/user-home"
+# The platform data dir holds the managed project workspace (ADR-2321 Decision 7), outside CORVIN_HOME: name it
+# explicitly below the sandbox, like start-fresh-install-backend.sh, so an exported XDG_DATA_HOME (or, on Windows,
+# LOCALAPPDATA/APPDATA) of the calling shell never puts the sandbox's workspace into the real one (REVIEW-0064 #6).
+# macOS derives it from HOME (~/Library/Application Support), which is sandboxed above.
+export XDG_DATA_HOME="$HOME/.local/share"
+export XDG_STATE_HOME="$HOME/.local/state"
+export XDG_CACHE_HOME="$HOME/.cache"
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    export LOCALAPPDATA="$HOME/AppData/Local"
+    export APPDATA="$HOME/AppData/Roaming"
+    export USERPROFILE="$HOME"
+    ;;
+esac
+mkdir -p "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 export CORVIN_AUDIT_ANCHOR_KEY="$CORVIN_HOME/audit-anchor.key"
 export CORVIN_TELEMETRY_OPTIN=false
 unset FORGE_ROOT

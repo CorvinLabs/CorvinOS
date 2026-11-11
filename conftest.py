@@ -433,12 +433,18 @@ _REAL_APPDATA = tuple(_norm(v) for v in (_os.environ.get("APPDATA", "").strip(),
 
 
 def _data_dir_entries() -> "dict[str, frozenset[str]] | None":
-    """Direct entries of each real workspace parent (read-only). None when a listing cannot be taken."""
+    """Direct entries of each real workspace parent AND of each ``w-*`` workspace in it (REVIEW-0064 #5: a project written
+    into the operator's existing workspace is a new entry one level down). Read-only. None when a listing cannot be taken."""
     out: "dict[str, frozenset[str]]" = {}
     try:
         for d in _REAL_DATA_PROJECTS:
             if d.is_dir():
-                out[str(d)] = frozenset(q.name for q in d.iterdir())
+                names = frozenset(q.name for q in d.iterdir())
+                out[str(d)] = names
+                for w in sorted(names):
+                    q = d / w
+                    if w.startswith("w-") and q.is_dir() and not q.is_symlink():
+                        out[str(q)] = frozenset(x.name for x in q.iterdir())
     except Exception:  # noqa: BLE001 - same contract as _protected_state: a guard that cannot look stands down
         return None
     return out
