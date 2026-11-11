@@ -245,6 +245,37 @@ session per minute (an in-memory stamp per session id); written best-effort thro
 Successful listings, favourites and recents are never audited. Proof: `tests/e2e/test_projects_browse_e2e.py` (real HTTP
 through the console router, concurrent requests in one event loop).
 
+**The dialog (T-0392, `web-next/src/components/folder-picker.tsx`; every decision in `pages/projects/picker-logic.ts`,
+unit-tested).** `FolderPicker {open, purpose, projectId?, title?, initialPath?, inputTestId?, onChoose(path), onCancel}` and
+the small `FolderField {value, onChange, purpose, …}` (the chosen path + "Choose a folder…"/"Change…"). Title "Choose a folder
+for "<title>"" (or "Choose a folder"), the line "Folders on the computer that runs Corvin. Files are not shown.". Left: the
+places in four groups - Places (Corvin workspace, Projects folder, Home, Desktop, Documents), Drives and network, Recent (with
+"Clear recent places"), Favourites; an unavailable place is greyed with its note. Right: breadcrumbs with "‹" up (more than
+five crumbs collapse the middle to "…"), a star that adds/removes the current folder as a favourite (`PUT …/favourites`, at
+most 10), "Show hidden", the rows ("<name>" + the note: "Already a project (<title>)", "belongs to another workspace", "link —
+cannot be chosen", "no permission", "Corvin's own data", "system folder", "protected place", "hidden", "inside a project").
+A row that is a link, another workspace's, Corvin's data, a system folder or unreadable cannot be entered (`enterable`).
+"New folder here [name]" only for `create`, `move`, `projects_root` and `import` (adopting and locating need an existing
+folder): virtual - the picker returns `<current>/<name>` and the action creates it; the name rule is shown inline ("Use
+letters, digits, '-', '_' or '.', no leading dot, at most 80 characters.") and a valid name gets its OWN verdict (a debounced
+`GET /browse` of the target) before "Choose" turns on. The verdict box in the footer shows the target path and the sentence:
+"Can be used — a new folder will be created when you continue." (create/move/import) or "Can be used", else the server's
+message; a hint-word note is an extra amber line and does not turn "Choose" off. "Choose" is enabled only for a loaded folder
+whose verdict is `ok`. "Enter a path instead…" (Ctrl/Cmd+L) opens the advanced field, pre-filled with the current folder and
+selected; "Go" lists that path and judges it by the same verdict. States: skeleton rows while listing; "No folders here."; a
+blocked folder "This folder cannot be opened here."; an unreadable one "No permission to read this folder."; `slow` -> "did not
+answer in time" with **Retry** (the verdict line carries the fixed sentence); 429 -> "Too many folder requests at once; wait a
+moment."; 422 -> the rule's sentence; the dialog never closes on an error. **Keyboard:** arrows move, Home/End, Enter opens the
+focused folder, Backspace goes up, typing jumps by prefix (700 ms buffer; one letter cycles through the matches), Space marks
+the current folder as the choice and moves the focus to "Choose" (Enter then chooses), Esc cancels (only the picker: the
+dialog behind it stays), Ctrl/Cmd+L opens the path field. Keys and submits inside the picker never reach the form that
+opened it (React events bubble through the portal; Enter in the path field once submitted "Default place" with an empty
+folder). **375 px:** a full-screen sheet; places become a horizontal chip row, breadcrumbs collapse to "‹ <parent>" + the
+current name, rows are 44 px, the verdict and the buttons sit in a sticky footer. Cancel leaves the field as it was.
+
+Proof: unit `tests/unit/projects-picker.test.ts` (a scripted keyboard session, the name rule table, verdict per purpose,
+row notes, breadcrumbs, places). The dialogs that open it and the browser specs follow with T-0393.
+
 ## The fragment engine (`core/projects/fragments.py`)
 
 A catalogue is `<src>/fragments/<id>/fragment.yaml` (+ template files) and `<src>/templates/<id>.yaml`.

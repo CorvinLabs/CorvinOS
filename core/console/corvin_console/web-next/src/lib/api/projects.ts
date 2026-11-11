@@ -394,3 +394,81 @@ export function rekeyWorkspace(csrf: string): Promise<StorageSettings> {
 export function relocateProject(id: string, location: string, csrf: string): Promise<ProjectDetail & { repaired_files: number | null; warnings?: string[] }> {
   return api(`/projects/${encodeURIComponent(id)}/relocate`, { method: "POST", body: { location }, csrf });
 }
+
+// ── the folder picker (ADR-2322): directories on the machine that runs the console, with the location rule's verdict ────────
+
+/** What the chosen folder is for; the verdict is the rule of that action. */
+export type PickerPurpose = "create" | "adopt" | "projects_root" | "move" | "relocate" | "import";
+
+export interface BrowsePlace {
+  kind: "managed" | "root" | "home" | "desktop" | "documents" | "drive" | "recent" | "favourite";
+  label: string;
+  path: string;
+  available: boolean;
+  /** "removable", "network", or why the place is not available */
+  note?: string;
+}
+
+export interface BrowseVerdict {
+  ok: boolean;
+  reason_class?: string;
+  message: string;
+  warnings?: string[];
+  /** one sentence per warning class (the hint word named) */
+  notes?: { class: string; message: string }[];
+}
+
+export interface BrowseEntry {
+  name: string;
+  /** where the row leads (the "Corvin workspaces" row leads to the own workspace) */
+  path: string;
+  kind: "dir";
+  hidden: boolean;
+  symlink: boolean;
+  readable: boolean;
+  project: { state: "mine" | "other" | "none"; id?: string; title?: string };
+  refusal?: string;
+}
+
+export interface BrowseListing {
+  path: string;
+  display: string;
+  parent: string | null;
+  breadcrumbs: { label: string; path: string }[];
+  /** false: the folder itself could not be read */
+  readable: boolean;
+  entries: BrowseEntry[];
+  verdict: BrowseVerdict;
+  truncated: boolean;
+  next_page?: string;
+}
+
+export interface BrowseParams {
+  path: string;
+  purpose: PickerPurpose;
+  projectId?: string;
+  hidden?: boolean;
+  page?: string;
+}
+
+export function browsePlaces(signal?: AbortSignal): Promise<{ places: BrowsePlace[]; verdict?: BrowseVerdict }> {
+  return api("/projects/-/browse/places", { signal });
+}
+
+export function browse(p: BrowseParams, signal?: AbortSignal): Promise<BrowseListing> {
+  const q = new URLSearchParams({ path: p.path, purpose: p.purpose });
+  if (p.projectId) q.set("project_id", p.projectId);
+  if (p.hidden) q.set("hidden", "1");
+  if (p.page) q.set("page", p.page);
+  return api<BrowseListing>(`/projects/-/browse?${q.toString()}`, { signal });
+}
+
+/** Replaces the favourites (at most 10); answers the favourite rows. */
+export function setFavourites(paths: string[], csrf: string): Promise<{ places: BrowsePlace[] }> {
+  return api("/projects/-/browse/favourites", { method: "PUT", body: { paths }, csrf });
+}
+
+/** "Clear recent places"; answers the places. */
+export function clearRecent(csrf: string): Promise<{ places: BrowsePlace[] }> {
+  return api("/projects/-/browse/recent", { method: "DELETE", csrf });
+}
