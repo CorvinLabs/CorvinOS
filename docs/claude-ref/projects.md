@@ -22,7 +22,7 @@ template catalogue is the first-party plugin `project_templates` (T-0354, T-0356
 | Proof | `tests/e2e/test_projects_registry_e2e.py`, `test_projects_fragments_e2e.py`, `test_projects_api_e2e.py`, `test_project_templates_catalogue_e2e.py` (the REAL catalogue) |
 | Platform data directory, managed workspace path, user places, drives, the lists the location rule judges against | `core/paths/user_dirs.py` (ADR-2321 Decision 7, stdlib only, Python 3.11-safe) |
 | Export jobs (bundles above 100 MiB) | `<tenant_home>/projects/exports/<job_id>/` (`job.json` + the file; dir 0o700, files 0o600), TTL 24 h, swept by the projector tick (`sweep_share`) and every export request |
-| Import stagings | `<tenant_home>/projects/import_staging/<staging_id>/` (`bundle.zip`, `report.json`; 0o700/0o600), TTL 1 h, at most 5 per tenant, 2 GiB across the host; removed on Cancel, after the last card was applied, by the sweep and by every validate request |
+| Import stagings | `<tenant_home>/projects/import_staging/<staging_id>/` (`bundle.zip`, `report.json`; 0o700/0o600), TTL 1 h, at most 5 per tenant, 2 GiB across the host, 1 GiB per tenant; removed on Cancel, after the last card was applied, by the sweep and by every validate request |
 | Bundle format, never-list, validation, git import | `core/projects/bundle.py`, `core/projects/bundle_rules.py`, `core/bundle_common/` (§ Share) |
 
 ### Erasure and retiring a tenant (ADR-2321 Decision 13)
@@ -652,9 +652,12 @@ title.
 
 `POST /-/import/validate` (CSRF, `multipart/form-data`, one part `file`): a declared `Content-Length` above 500 MiB
 (+ 64 KiB of multipart framing) is 413 before anything is read; otherwise `staging_open` sweeps the tenant's expired
-stagings, checks the host-wide budget (2 GiB across every tenant's stagings plus the uploads in flight; over it -> 429
-`staging_full` "Too many imports are waiting; finish or cancel one first.", audited `project.import_rejected
-reason_class=staging_full`, never dropping another tenant's staging), drops the tenant's oldest staging beyond 5 and
+stagings, checks the host-wide budget (2 GiB across every tenant's stagings plus the uploads in flight) AND the tenant's
+share of it (REVIEW-0063 m11: `IMPORT_TENANT_SHARE_BYTES` = 1 GiB, never more than half the host budget - one full 500 MiB
+upload and a second fit; checked on open with the declared size and on every chunk that grows past the reservation), so
+one tenant cannot make every other tenant's upload fail for the 1 h TTL (two tenants together still can fill the host);
+over either -> 429 `staging_full` "Too many imports are waiting; finish or cancel one first.", audited
+`project.import_rejected reason_class=staging_full`, never dropping another tenant's staging), drops the tenant's oldest staging beyond 5 and
 creates `<tenant_home>/projects/import_staging/<staging_id>/bundle.zip` (dir 0o700, file 0o600, `O_EXCL|O_NOFOLLOW`).
 The body is parsed as it arrives (`python_multipart`'s push parser over `request.stream()`; never `request.body()`,
 never an `UploadFile` spool) and written in 1 MiB pieces through awaited worker threads; past 500 MiB the upload stops

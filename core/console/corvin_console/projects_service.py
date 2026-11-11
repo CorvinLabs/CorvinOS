@@ -2989,6 +2989,9 @@ IMPORT_STAGING_TTL_S = 3600.0
 IMPORT_MAX_BYTES = 500 << 20
 IMPORT_STAGINGS_PER_TENANT = 5
 IMPORT_HOST_BUDGET_BYTES = 2 << 30
+#: REVIEW-0063 m11: one tenant's stagings (on disk + uploads in flight) may hold at most this - and never more than half the host
+#: budget - so a single tenant cannot make every other tenant's upload staging_full for the TTL
+IMPORT_TENANT_SHARE_BYTES = 1 << 30
 IMPORT_MESSAGES = {
     "too_large": "The file is larger than 500 MB.",
     "staging_full": "Too many imports are waiting; finish or cancel one first.",
@@ -3087,13 +3090,35 @@ def _in_flight_bytes() -> int:
     return sum(_staging_reserved.values())
 
 
+def _tenant_share() -> int:
+    """The bytes one tenant's stagings may hold: ``IMPORT_TENANT_SHARE_BYTES``, at most half the host budget (1 GiB today: one full
+    500 MiB upload and a second one fit, the other half stays for the other tenants)."""
+    return min(IMPORT_TENANT_SHARE_BYTES, IMPORT_HOST_BUDGET_BYTES // 2)
+
+
+def _tenant_staging_bytes(tenant_id: str) -> int:
+    """Bytes of this tenant's staged ``bundle.zip`` files (the uploads in flight included as far as they are written)."""
+    total = 0
+    for _created, d in _own_stagings(tenant_id):
+        z = d / "bundle.zip"
+        if not is_link(z):
+            with contextlib.suppress(OSError):
+                total += os.lstat(z).st_size
+    return total
+
+
+def _tenant_in_flight(tenant_id: str, *, but: Optional[str] = None) -> int:
+    return sum(v for (t, sid), v in _staging_reserved.items() if t == tenant_id and sid != but)
+
+
 def staging_open(tenant_id: str, declared: Optional[int] = None) -> StagingHandle:
     """Admit one upload: sweep the tenant's expired stagings, check the host budget (429 ``staging_full``, audited), drop the
     tenant's oldest beyond the cap, create the staging directory and the empty ``bundle.zip``."""
     _sweep_dir(tenant_id, "import_staging", IMPORT_STAGING_TTL_S, _now())
     with _staging_lock:
         need = min(declared or 0, IMPORT_MAX_BYTES)
-        if _host_staging_bytes() + _in_flight_bytes() + need > IMPORT_HOST_BUDGET_BYTES:
+        if _host_staging_bytes() + _in_flight_bytes() + need > IMPORT_HOST_BUDGET_BYTES or \
+                _tenant_staging_bytes(tenant_id) + _tenant_in_flight(tenant_id) + need > _tenant_share():
             _import_rejected(tenant_id, "staging_full")
             raise StagingFull(IMPORT_MESSAGES["staging_full"])
         own = _own_stagings(tenant_id)
@@ -3129,7 +3154,9 @@ def staging_write(handle: StagingHandle, data: bytes) -> None:
         if handle.written > _staging_reserved.get(key, 0):
             others = _in_flight_bytes() - _staging_reserved.get(key, 0)
             # the walk counts this staging's file (handle.written bytes) already; add what the other uploads reserved
-            if _host_staging_bytes() + others > IMPORT_HOST_BUDGET_BYTES:
+            if _host_staging_bytes() + others > IMPORT_HOST_BUDGET_BYTES or \
+                    _tenant_staging_bytes(handle.tenant_id) + _tenant_in_flight(handle.tenant_id, but=handle.staging_id) \
+                    > _tenant_share():
                 _import_rejected(handle.tenant_id, "staging_full")
                 raise StagingFull(IMPORT_MESSAGES["staging_full"])
             _staging_reserved[key] = handle.written
