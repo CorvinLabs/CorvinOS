@@ -21,6 +21,8 @@ export interface ProjectSummary {
   reason?: string;
   /** Set while an import of this project is not applied yet (state `pending`). */
   pending?: "import";
+  /** A pending import that no apply runs any more: Repair removes it (REVIEW-0079 N22). */
+  stale?: boolean;
   title?: string;
   docs_mode?: "nested" | "plain";
   /** Every feature the template offers, on or off. */
@@ -160,7 +162,8 @@ export function createProject(planId: string, csrf: string): Promise<{ project: 
 }
 
 /** `note`: an observation that is not a failure (for example a hint word in the path). */
-export interface HealthCheck { id: string; ok: boolean; detail: string; at: string; note?: boolean }
+/** `repairable`: the server's statement that Repair fixes this FAILED check (REVIEW-0079 N23) - the only basis for offering Repair. */
+export interface HealthCheck { id: string; ok: boolean; detail: string; at: string; note?: boolean; repairable?: boolean }
 export interface Health { project_id: string; ok: boolean; checks: HealthCheck[] }
 
 export interface FeatureRow {
@@ -218,7 +221,9 @@ export function setFeatures(id: string, body: FeatureRequest, csrf: string): Pro
   return api<ProjectDetail>(`/projects/${encodeURIComponent(id)}/features`, { method: "PUT", body, csrf });
 }
 
-export function repairProject(id: string, dryRun: boolean, csrf: string): Promise<{ pending: { path: string; status: string; diff: string }[]; dry_run: boolean }> {
+/** Repair. For an unfinished import nobody applies any more, the real run removes the entry (`removed_import`) instead of writing files. */
+export function repairProject(id: string, dryRun: boolean, csrf: string): Promise<{ pending: { path: string; status: string; diff: string }[]; dry_run: boolean;
+  removed_import?: boolean; message?: string }> {
   return api(`/projects/${encodeURIComponent(id)}/repair`, { method: "POST", body: { dry_run: dryRun }, csrf });
 }
 

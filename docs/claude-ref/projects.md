@@ -1263,7 +1263,13 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   refuses a project.yaml that names another project, so it is not offered. The health row `manifest` says which id or
   tenant differs and what to put back, and the detail page shows no "Open Settings to repair" link when that is the only
   failed check (REVIEW-0077 N19, N20). A project that cannot be opened (`missing`/`invalid`) has no tabs, so its page
-  lists every check itself above Settings, and Maintenance shows "Open Overview" only for a usable project (REVIEW-0078 N21). A chain failure between two opening records of `_audited` closes the ones already
+  lists every check itself above Settings, and Maintenance shows "Open Overview" only for a usable project (REVIEW-0078 N21).
+- **Which failed check Repair fixes is the server's statement** (`repairable` on each health row: `generated_files_in_sync`, a
+  missing `storage_marker`, a stale `pending_import`; never while project.yaml names another project). The UI offers "Open
+  Settings to repair" only for such a row; every other row says in its own words what to do (REVIEW-0079 N23). The
+  `protection` row is left out while project.yaml names another project, because saving the protection needs it (N24). An
+  import nobody applies any more is `stale: true` in the detail (badge "Import unfinished"); Maintenance then offers Repair,
+  which removes the entry and its leftover folders and shows the same confirmation page as Remove (N22). A chain failure between two opening records of `_audited` closes the ones already
   open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
   feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,

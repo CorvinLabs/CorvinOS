@@ -272,3 +272,14 @@ describe("at a glance", () => {
     expect(changesGlance({ files: [f, f], truncated: true, has_repository: true })).toEqual({ value: "2+", detail: "files not committed yet" });
   });
 });
+
+describe("an unfinished import nobody applies any more offers Repair (REVIEW-0079 N22)", () => {
+  const base = { id: "p", path: "/x", template: "t@1", storage: "own", state: "pending", pending: "import" } as unknown as ProjectDetail;
+  it("stale: Maintenance with Repair on", () => {
+    const s = settingsSections({ ...base, stale: true }, {});
+    expect(s.find((x) => x.id === "maintenance")?.actions.repair).toEqual({ enabled: true, note: null });
+  });
+  it("still running: no Maintenance", () => {
+    expect(settingsSections({ ...base, stale: false }, {}).some((x) => x.id === "maintenance")).toBe(false);
+  });
+});

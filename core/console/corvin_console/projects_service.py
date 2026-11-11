@@ -1190,6 +1190,10 @@ def list_projects(tenant_id: str) -> dict[str, Any]:
 def get_project(tenant_id: str, project_id: str) -> dict[str, Any]:
     e = _entry(tenant_id, project_id)
     out = _summary(tenant_id, e)
+    if out["state"] == "pending" and e.get("pending") == "import" and not e.get("builtin") and _pending_import_unlocked(tenant_id, project_id):
+        # no apply is running: the entry is an unfinished import a crash left behind, and Repair removes it (REVIEW-0079 N22)
+        return {**out, "stale": True, "reason": "The import did not finish and is not running any more. Repair in Settings removes "
+                                                "the unfinished import."}
     if out["state"] != "ok":
         return out
     if e.get("builtin"):
@@ -1946,14 +1950,17 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
         return {"project_id": project_id, "ok": all(c["ok"] for c in out), "checks": out}
     checks: list[dict[str, Any]] = []
 
-    def add(cid: str, ok: bool, detail: str) -> None:
-        checks.append({"id": cid, "ok": ok, "detail": detail, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    def add(cid: str, ok: bool, detail: str, repairable: bool = False) -> None:
+        # `repairable`: a FAILED check that Repair fixes - the one statement the UI uses to offer Repair (REVIEW-0079 N23)
+        checks.append({"id": cid, "ok": ok, "detail": detail, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "repairable": bool(repairable and not ok)})
 
     if e.get("pending") == "import":
         # ADR-2321 Decision 17: an import that is running, or one a crash left behind (no apply holds the lock)
         stale = _pending_import_unlocked(tenant_id, project_id)
         add("pending_import", not stale, "an import is being applied right now" if not stale else
-            "the list entry is marked as an unfinished import and no import is running - Repair removes the unfinished import")
+            "the list entry is marked as an unfinished import and no import is running - Repair removes the unfinished import",
+            repairable=stale)
         left = [p.name for p in _bundle().leftovers(root.parent, project_id)]
         add("import_leftovers", not left, "no unfinished import beside the project" if not left else
             f"unfinished import folders beside the project: {left[:3]}")
@@ -1962,8 +1969,10 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
     add("path_exists", root.is_dir(), "the project directory exists" if root.is_dir() else "the directory is missing")
     if not root.is_dir():
         return {"project_id": project_id, "ok": False, "checks": checks}
+    manifest_ok = False
     try:
         man = manifest.load(root)
+        manifest_ok = man.get("id") == project_id and man.get("tenant") == tenant_id
         # the detail names what differs (REVIEW-0077 N20 - a failed row used to read "valid and matches the registry")
         if man.get("id") != project_id:
             add("manifest", False, f"project.yaml names the id '{_clip(man.get('id'))}', the list has '{project_id}' - put "
@@ -1978,7 +1987,7 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
         return {"project_id": project_id, "ok": False, "checks": checks}
     _location_checks(tenant_id, project_id, e, root, add, checks)
     prot = registry.protection(tenant_id, project_id)
-    if prot:
+    if prot and manifest_ok:                                 # saving the protection needs a project.yaml that names this project (REVIEW-0079 N24)
         same = prot.get("classification") == manifest.classification_of(man) and prot.get("assistant_access") == manifest.access_of(man)
         add("protection", same, "project.yaml matches the project's protection setting" if same else
             "project.yaml was changed by hand or by the assistant: the setting still applies (save the protection in Settings to rewrite the file)")
@@ -1992,7 +2001,7 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
         plan = F.build_plan(cat, root, active, ctx, docs_mode=man.get("docs_mode", "nested"), mode="repair")
         drift = [o.path or o.action for o in plan.pending()]
         add("generated_files_in_sync", not drift, "generated and machine-local files match the active features"
-            if not drift else f"out of sync (repair fixes): {drift[:6]}")
+            if not drift else f"out of sync (repair fixes): {drift[:6]}", repairable=manifest_ok)
         miss = [x for x in _check_plugins(tenant_id, plan) if x["state"] != "enabled"]
         add("tenant_plugins", not miss, "every plugin the active features need is enabled"
             if not miss else "not enabled: " + ", ".join(m["plugin"] for m in miss))
@@ -2019,6 +2028,9 @@ def health(tenant_id: str, project_id: str) -> dict[str, Any]:
                     else f"kb check failed: {str(out)[:120]}")
             except (Conflict, subprocess.TimeoutExpired, OSError, ValueError) as exc:        # ChangesError is a ValueError
                 add("kb_check", False, str(exc)[:160])
+    if not manifest_ok:                                      # repair refuses a project.yaml that names another project
+        for c in checks:
+            c["repairable"] = False
     return {"project_id": project_id, "ok": all(c["ok"] for c in checks), "checks": checks}
 
 
@@ -2082,7 +2094,8 @@ def _location_checks(tenant_id: str, project_id: str, e: dict[str, Any], root: P
         state = registry.workspace_state(tenant_id)
         marker = mr is not None and (mr / registry.MARKER).is_file()
         if not marker:
-            add("storage_marker", False, "the workspace marker workspace.json is missing - Repair writes the workspace marker")
+            add("storage_marker", False, "the workspace marker workspace.json is missing - Repair writes the workspace marker",
+                repairable=True)
         elif state == "foreign":
             add("storage_marker", False, "the workspace marker names another installation or tenant - start a new workspace in Settings")
         else:
@@ -2109,7 +2122,7 @@ def _location_checks(tenant_id: str, project_id: str, e: dict[str, Any], root: P
     if e.get("pending") == "import":
         stale = _pending_import_unlocked(tenant_id, project_id)
         add("pending_import", not stale, "an import is being applied right now" if not stale else
-            "the list entry is marked as an unfinished import and no import is running")
+            "the list entry is marked as an unfinished import and no import is running", repairable=stale)
     else:
         add("pending_import", True, "no unfinished import is recorded")
     why = hints.available()

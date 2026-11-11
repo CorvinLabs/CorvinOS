@@ -155,6 +155,8 @@ export function settingsSections(d: ProjectDetail, ctx: { workspace?: WorkspaceS
     sec("location", location, hints),
   ];
   if (ok) out.push(sec("protection"), sec("chat"));
+  // an unfinished import nobody applies any more is removed by Repair (REVIEW-0079 N22)
+  if (d.state === "pending" && d.pending === "import" && d.stale) out.push(sec("maintenance", { repair: ON }));
   if (ok || d.state === "invalid") out.push(sec("maintenance", { repair: ok ? ON : off("Repair needs a project.yaml that can be read and names this project; the health check says what to fix.") }));
   // Export always opens: its dialog says why a secret project cannot leave; a secret project is never duplicated either
   if (ok) out.push(sec("share", { export: ON, duplicate: d.classification === "secret" ? off("Secret projects cannot be duplicated.") : ON }));

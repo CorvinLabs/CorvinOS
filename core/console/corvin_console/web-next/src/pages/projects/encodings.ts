@@ -57,6 +57,8 @@ export function offFeatures(p: ProjectSummary): string[] {
 
 export function stateOf(p: ProjectSummary): { label: string; tone: Tone; detail: string } {
   const m = STATE_META[p.state] ?? { label: String(p.state), tone: "warn" as Tone };
+  // an import nobody applies any more is not "setting up" (REVIEW-0079 N22)
+  if (p.state === "pending" && p.stale) return { label: "Import unfinished", tone: "bad", detail: p.reason ?? "" };
   return { ...m, detail: p.state === "ok" ? "" : (p.reason ?? "") };
 }
 

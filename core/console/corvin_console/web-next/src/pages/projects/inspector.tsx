@@ -244,8 +244,8 @@ function OverviewTab({ projectId, builtin, videosOn, csrf, onChanged }: { projec
           <p className={cn("text-sm font-medium", head.ok ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300")} data-testid="health-headline">
             {health.isLoading ? "Checking…" : head.text}
           </p>
-          {/* a project.yaml that names another project is fixed by hand (its row says what to put back): Settings has no repair for it */}
-          {!builtin && (health.data?.checks ?? []).some((c) => !c.ok && c.id !== "manifest") && (
+          {/* only a failed check the server marks repairable leads to Settings: the rest say in their own row what to do (REVIEW-0079 N23) */}
+          {!builtin && (health.data?.checks ?? []).some((c) => !c.ok && c.repairable) && (
             <Link to={`/app/projects/${encodeURIComponent(projectId)}?tab=settings`} className="text-sm underline" data-testid="health-fix-link">Open Settings to repair</Link>
           )}
         </div>

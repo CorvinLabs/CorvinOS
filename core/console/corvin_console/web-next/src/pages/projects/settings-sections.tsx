@@ -54,7 +54,7 @@ export function SettingsSections({ d, onRemoved, onNotice }: { d: ProjectDetail;
       case "location": return <Location d={d} csrf={csrf} actions={actions} notes={notes} where={list.data} onChanged={changed} onNotice={onNotice} />;
       case "protection": return <ProtectionSection d={d} csrf={csrf} onChanged={() => void qc.invalidateQueries({ queryKey: KEY(d.id) })} />;
       case "chat": return <AttachSection d={d} csrf={csrf} />;
-      case "maintenance": return <Maintenance d={d} csrf={csrf} repair={actions.repair} />;
+      case "maintenance": return <Maintenance d={d} csrf={csrf} repair={actions.repair} onRemoved={onRemoved} />;
       case "share": return <Share d={d} actions={actions} />;
       case "danger": return <Danger d={d} csrf={csrf} actions={actions} onRemoved={onRemoved} />;
     }
@@ -229,7 +229,7 @@ function RekeyBox({ csrf, onChanged }: { csrf: string; onChanged: () => void }) 
   );
 }
 
-function Maintenance({ d, csrf, repair }: { d: ProjectDetail; csrf: string; repair?: ActionGate }) {
+function Maintenance({ d, csrf, repair, onRemoved }: { d: ProjectDetail; csrf: string; repair?: ActionGate; onRemoved: (msg: string) => void }) {
   const qc = useQueryClient();
   const health = useQuery({ queryKey: HEALTH(d.id), queryFn: ({ signal }) => getHealth(d.id, signal), refetchInterval: false });
   const [preview, setPreview] = useState<{ pending: { path: string; status: string; diff: string }[] } | null>(null);
@@ -241,7 +241,9 @@ function Maintenance({ d, csrf, repair }: { d: ProjectDetail; csrf: string; repa
   });
   const applyMut = useMutation({
     mutationFn: () => repairProject(d.id, false, csrf),
-    onSuccess: () => {
+    onSuccess: (r) => {
+      // removing an unfinished import takes the entry off the list: back to the list with the server's sentence, like Remove
+      if (r.removed_import) { onRemoved(r.message || "The unfinished import was removed."); return; }
       setPreview(null); setNote("Repaired. Only generated and machine-local files were rewritten.");
       void qc.invalidateQueries({ queryKey: KEY(d.id) }); void qc.invalidateQueries({ queryKey: HEALTH(d.id) });
     },
@@ -258,7 +260,9 @@ function Maintenance({ d, csrf, repair }: { d: ProjectDetail; csrf: string; repa
         {d.state === "ok" && <Link to={`/app/projects/${encodeURIComponent(d.id)}?tab=overview`} className="shrink-0 text-xs underline" data-testid="doctor-open">Open Overview</Link>}
       </div>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-muted-foreground">Repair restores generated and machine-local files (CLAUDE.md sections, MCP settings); your text is kept.</p>
+        <p className="text-sm text-muted-foreground" data-testid="repair-what">{d.state === "pending"
+          ? "Repair removes the unfinished import: the entry leaves the list and the import's leftover folders beside it are deleted; a folder at the project's place is kept."
+          : "Repair restores generated and machine-local files (CLAUDE.md sections, MCP settings); your text is kept."}</p>
         <Button size="sm" variant="outline" className="self-start sm:self-auto" onClick={() => previewMut.mutate()}
           disabled={!repair?.enabled || previewMut.isPending} title={repair?.note ?? undefined} data-testid="repair-preview">Preview changes</Button>
       </div>

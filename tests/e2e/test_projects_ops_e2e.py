@@ -287,6 +287,50 @@ class AdoptRenameMove(_Base):
             row = next(x for x in c.own.get(f"{_URL}/{pid}/health").json()["checks"] if x["id"] == "manifest")
             self.assertIn("another tenant", row["detail"])
 
+    def _row(self, c, pid, cid):
+        return next((x for x in c.own.get(f"{_URL}/{pid}/health").json()["checks"] if x["id"] == cid), None)
+
+    def test_only_checks_repair_fixes_are_marked_repairable(self):
+        # REVIEW-0079 N23: the UI offered "Open Settings to repair" for any failed check; the server now says which ones repair fixes
+        with self._ctx() as c:
+            pid, root = self._new(c)
+            (root / "CLAUDE.md").write_text((root / "CLAUDE.md").read_text().replace("## Core", "## Core (hand edited)", 1))
+            (root / "tools").mkdir()
+            (root / "tools" / "ENGINE.json").write_text("{}")
+            gen, eng = self._row(c, pid, "generated_files_in_sync"), self._row(c, pid, "no_engine_copy")
+            self.assertEqual((gen["ok"], gen["repairable"]), (False, True))
+            self.assertEqual((eng["ok"], eng["repairable"]), (False, False))
+            self.assertFalse(self._row(c, pid, "manifest")["repairable"])          # a passing check is never "repairable"
+
+    def test_a_project_yaml_naming_another_project_offers_neither_repair_nor_a_protection_fix(self):
+        # REVIEW-0079 N24 + N23: repair and saving the protection both refuse this state, so no row may promise them
+        with self._ctx() as c:
+            pid, root = self._new(c)
+            (root / "CLAUDE.md").write_text((root / "CLAUDE.md").read_text().replace("## Core", "## Core (hand edited)", 1))
+            y = root / "project.yaml"
+            y.write_text(y.read_text().replace(f"id: {pid}", "id: beta").replace("assistant_access: read", "assistant_access: write"))
+            checks = c.own.get(f"{_URL}/{pid}/health").json()["checks"]
+            self.assertNotIn("protection", [x["id"] for x in checks])
+            self.assertEqual([x["id"] for x in checks if x.get("repairable")], [])
+
+    def test_an_unfinished_import_says_so_and_repair_removes_it(self):
+        # REVIEW-0079 N22: the page said "Being imported" and offered no Repair, while its check said Repair removes it
+        from core.projects import registry
+        with self._ctx() as c:
+            pid, root = self._new(c)
+            registry.set_pending("_default", pid, "import")
+            d = c.own.get(f"{_URL}/{pid}").json()
+            self.assertEqual((d["state"], d.get("stale")), ("pending", True))
+            self.assertIn("Repair in Settings removes", d["reason"])
+            self.assertTrue(self._row(c, pid, "pending_import")["repairable"])
+            dry = c.own.post(f"{_URL}/{pid}/repair", json={"dry_run": True}, headers=self._h(c)).json()
+            self.assertEqual([p["path"] for p in dry["pending"]], ["Remove the unfinished import"])
+            r = c.own.post(f"{_URL}/{pid}/repair", json={}, headers=self._h(c))
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertTrue(r.json()["removed_import"])
+            self.assertIsNone(registry.get("_default", pid))
+            self.assertTrue(root.exists())                                       # the folder at the project's place is kept
+
     def test_a_successful_adopt_closes_its_request(self):
         with self._ctx() as c:
             dst = c.root / "plain-two"

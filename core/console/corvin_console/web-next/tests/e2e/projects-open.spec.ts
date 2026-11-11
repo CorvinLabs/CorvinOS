@@ -131,7 +131,7 @@ test("a failing check is named in plain words and points to the place where it i
   await page.route(new RegExp(`/v1/console/projects/${ID}/health$`), (r) => r.fulfill({ json: { project_id: ID, ok: false, checks: [
     { id: "path_under_base", ok: true, detail: "the folder lies where its storage kind says", at: "x" },
     { id: "pending_import", ok: true, detail: "no unfinished import is recorded", at: "x" },
-    { id: "generated_files_in_sync", ok: false, detail: "out of sync (repair fixes): ['.gitignore']", at: "x" }] } }));
+    { id: "generated_files_in_sync", ok: false, detail: "out of sync (repair fixes): ['.gitignore']", at: "x", repairable: true }] } }));
   await page.goto(`/console/app/projects/${ID}`);
   await expect(page.getByTestId("health-headline")).toContainText("1 of 3 checks need attention.");
   // no raw identifier is shown as a title
@@ -176,4 +176,42 @@ test("a project that cannot be opened lists every check on its page, and Setting
   await expect(checks.locator('[data-testid="health-check"][data-ok="false"]')).toHaveCount(2);
   await expect(checks).toContainText(`put 'id: ${ID}' back into project.yaml`);
   await expect(page.getByTestId("doctor-open")).toHaveCount(0);
+});
+
+test("a failed check that repair cannot fix offers no repair link; its own row says what to do (REVIEW-0079 N23)", async ({ page }) => {
+  await stub(page);
+  await page.route(new RegExp(`/v1/console/projects/${ID}/health$`), (r) => r.fulfill({ json: { project_id: ID, ok: false, checks: [
+    { id: "no_engine_copy", ok: false, detail: "an engine copy (tools/ENGINE.json) is in the project - not repairable: remove ENGINE.json from the project; the tenant engine is used", at: "x", repairable: false },
+    { id: "kb_check", ok: false, detail: "kb check: blocking 1", at: "x", repairable: false }] } }));
+  await page.goto(`/console/app/projects/${ID}`);
+  await expect(page.getByTestId("health-headline")).toContainText("2 of 2 checks need attention.");
+  await expect(page.getByText("remove ENGINE.json from the project")).toBeVisible();
+  await expect(page.getByTestId("health-fix-link")).toHaveCount(0);
+});
+
+test("an unfinished import says so, and Repair in Settings removes it and says so (REVIEW-0079 N22)", async ({ page }) => {
+  await stub(page);
+  const P = { ...LIST_ITEM, state: "pending", pending: "import", title: ID, stale: true, features: {}, active: [],
+    reason: "The import did not finish and is not running any more. Repair in Settings removes the unfinished import." };
+  await page.route(new RegExp(`/v1/console/projects/${ID}$`), (r) => r.fulfill({ json: P }));
+  await page.route(new RegExp(`/v1/console/projects/${ID}/health$`), (r) => r.fulfill({ json: { project_id: ID, ok: false, repair: "Remove the unfinished import", checks: [
+    { id: "pending_import", ok: false, detail: "the list entry is marked as an unfinished import and no import is running - Repair removes the unfinished import", at: "x", repairable: true },
+    { id: "import_leftovers", ok: true, detail: "no unfinished import beside the project", at: "x", repairable: false }] } }));
+  let applied = false;
+  await page.route(new RegExp(`/v1/console/projects/${ID}/repair$`), async (r) => {
+    const body = r.request().postDataJSON();
+    if (body.dry_run) return r.fulfill({ json: { dry_run: true, pending: [{ path: "Remove the unfinished import", status: "new", diff: "" }] } });
+    applied = true;
+    return r.fulfill({ json: { removed_import: true, removed_folders: 0, message: "The unfinished import was removed.", folder_kept: true } });
+  });
+  await page.goto(`/console/app/projects/${ID}?tab=settings`);
+  await expect(page.getByTestId("inspector-not-ready")).toContainText("Repair in Settings removes the unfinished import");
+  await expect(page.getByTestId("inspector-state")).toHaveText("Import unfinished");
+  await expect(page.getByTestId("repair-what")).toContainText("Repair removes the unfinished import");
+  await page.getByTestId("repair-preview").click();
+  await expect(page.getByTestId("repair-pending")).toContainText("Remove the unfinished import");
+  await page.getByTestId("repair-apply").click();
+  await expect.poll(() => applied).toBe(true);
+  // the same confirmation page as Remove from the list, with the server's sentence and the way back to the list
+  await expect(page.getByTestId("inspector-removed")).toContainText("The unfinished import was removed.");
 });
