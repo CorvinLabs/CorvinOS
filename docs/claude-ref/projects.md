@@ -181,10 +181,14 @@ the place right before `registry.register` and removes its `project.yaml` throug
 renames the project INTO the held descriptor of the verified parent (`os.rename(src, name, dst_dir_fd=...)`) and then
 requires the moved folder to have the project folder's `st_dev`/`st_ino` at the judged place, else it is renamed back.
 Windows (no `dir_fd`): each component is checked with `fsutil.is_link` before and after its `mkdir` and the same
-resolve/identity checks run afterwards; a swap undone between two checks is not seen. Not closed on either platform: the
-files a create writes after the last check (`project.yaml`, the fragment files) go by path, so an ancestor swapped in that
-interval is caught only by the check before `register` (the project is then not recorded, the written files stay where the
-link pointed). The root itself is
+resolve/identity checks run afterwards; a swap undone between two checks is not seen. Create writes `project.yaml`
+INTO the held descriptor (POSIX: `manifest.write_into` = `fsutil.write_at`, a temp opened `O_CREAT|O_EXCL|O_NOFOLLOW`
+relative to the folder's fd, then `rename` within it; REVIEW-0065), so a component swapped for a link after
+`make_location` cannot place it at the link's target - the check before `register` refuses `symlink` and the manifest is
+taken back through the same fd (Windows: by path, as before). Not closed: the fragment files written AFTER `register`
+(`.git`, templates) go by path; when that write fails because the folder no longer resolves to itself, the 409
+`create_failed` sentence names where it resolves now ("... its folder <loc> (it now resolves to <target>) was left as it
+is - remove it or add it again"), so the operator knows what to remove. The root itself is
 re-judged by the full rule only when it is set again (`PUT /projects/root` with the same value of a `~/.projects`
 root answers `hidden`). Registered projects are never re-judged on read.
 

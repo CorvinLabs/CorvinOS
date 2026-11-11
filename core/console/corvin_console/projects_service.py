@@ -718,7 +718,10 @@ def _create_project(tenant_id: str, plan_id: str, rec: "PlanRecord") -> dict[str
             man = _manifest_for(tenant_id, rec.project_id, rec.title, tpl.id, tpl.version, rec.docs_mode,
                                 plan.features, list(tpl.offered), tpl.videos, rec.role, rec.classification,
                                 rec.assistant_access)
-            manifest.write(loc, man)                                            # the truth first,
+            if hloc.fd is not None:                                             # the truth first, into the folder that was
+                manifest.write_into(hloc.fd, man)                               # made - never through a path (REVIEW-0065)
+            else:
+                manifest.write(loc, man)                                        # Windows: no dir_fd; location_intact below
             try:
                 if not registry.location_intact(loc, hloc):                     # re-checked right before it is recorded
                     _audit_refusal(tenant_id, "symlink", rec.project_id)
@@ -742,8 +745,12 @@ def _create_project(tenant_id: str, plan_id: str, rec: "PlanRecord") -> dict[str
             applied = F.apply_plan(plan, loc, {**ctx, "_root": str(loc)}, _runner(tenant_id, loc))
         except Exception as exc:  # noqa: BLE001 - a half-created project must not stay in the list (release review R4)
             registry.unregister(tenant_id, rec.project_id)
+            # a folder that no longer resolves to itself (a component became a link while the files were written) is named
+            # by where it resolves now: that is where the written files are (REVIEW-0065, REVIEW-0063 m4)
+            now = os.path.realpath(loc)
+            where = str(loc) if os.path.normcase(now) == os.path.normcase(str(loc)) else f"{loc} (it now resolves to {now})"
             raise Conflict(f"creating the project failed ({type(exc).__name__}); it was taken off the list and its folder "
-                           f"{loc} was left as it is - remove it or add it again", "create_failed") from None
+                           f"{where} was left as it is - remove it or add it again", "create_failed") from None
         _sync_mcp(tenant_id, rec.project_id, loc, plan.features)
         outcome = "applied"
     finally:

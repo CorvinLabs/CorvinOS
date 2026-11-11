@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from .fsutil import atomic_write, is_link, read_text_any
+from .fsutil import atomic_write, is_link, read_text_any, write_at
 
 SCHEMA = 1
 FILE = "project.yaml"
@@ -129,6 +129,14 @@ def dumps(data: dict[str, Any]) -> str:
 def write(root: Path, data: dict[str, Any]) -> None:
     validate(data)
     atomic_write(Path(root) / FILE, dumps(data).encode("utf-8"), root=Path(root))
+
+
+def write_into(dir_fd: int, data: dict[str, Any]) -> None:
+    """:func:`write` into the directory held by *dir_fd* (POSIX), never through a path: create writes the manifest into the
+    folder ``make_location`` made, so a component swapped for a link afterwards cannot place it at the link's target
+    (REVIEW-0065, REVIEW-0063 m4)."""
+    validate(data)
+    write_at(dir_fd, FILE, dumps(data).encode("utf-8"))
 
 
 def active_features(data: dict[str, Any]) -> list[str]:

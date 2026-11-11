@@ -143,5 +143,70 @@ class GrandfatheringBinding(BundleBase):
         self.assertEqual(cm.exception.reason_class, "symlink")
 
 
+@unittest.skipUnless(POSIX, "symlinks without privileges")
+class CreateWritesThroughTheMadeFolder(BundleBase):
+    """REVIEW-0065 (REVIEW-0063 m4 residual): a swap AFTER make_location - between it and the first write, or after the
+    project is recorded - never leaves ``project.yaml`` at the link's target, and a failed create names where the folder
+    resolves now."""
+
+    def setUp(self):
+        super().setUp()
+        self.outside = self.tmp / "outside"
+        self.outside.mkdir()
+
+    def _plan(self, title: str):
+        w = self.tmp / ("w-" + title.lower())
+        w.mkdir()
+        plan = self.svc.plan_project("_default", template="plain", title=title, location=str(w / "proj"))
+        return plan, w / "proj"
+
+    def test_a_swap_between_make_location_and_the_manifest_never_writes_at_the_link_target(self):
+        plan, loc = self._plan("Before")
+        real = registry.make_location
+        fired = []
+
+        def hook(resolved):
+            h = real(resolved)
+            if Path(resolved) == loc and not fired:
+                _swap_for_link(loc, self.outside, self.tmp / "parked")
+                fired.append(1)
+            return h
+        with mock.patch.object(registry, "make_location", hook):
+            with self.assertRaises(registry.ProjectPathError) as cm:
+                self.svc.create_project("_default", plan["plan_id"])
+        self.assertTrue(fired)
+        self.assertEqual(cm.exception.reason_class, "symlink")
+        self.assertEqual(sorted(p.name for p in self.outside.iterdir()), [])
+        self.assertFalse((self.tmp / "parked" / "project.yaml").exists(), "the manifest was taken back in the made folder")
+        self.assertIsNone(registry.get("_default", plan["project_id"]))
+
+    def test_a_swap_after_the_project_is_recorded_names_where_the_folder_resolves(self):
+        plan, loc = self._plan("After")
+        real = registry.register
+        fired = []
+
+        def hook(tenant_id, pid, where, *a, **k):
+            out = real(tenant_id, pid, where, *a, **k)
+            if Path(where) == loc and not fired:
+                _swap_for_link(loc, self.outside, self.tmp / "parked")
+                fired.append(1)
+            return out
+        with mock.patch.object(registry, "register", hook):
+            with self.assertRaises(self.svc.Conflict) as cm:
+                self.svc.create_project("_default", plan["plan_id"])
+        self.assertEqual(cm.exception.reason_class, "create_failed")
+        self.assertIn(f"it now resolves to {self.outside}", str(cm.exception))      # the operator learns where the files went
+        self.assertTrue(fired)
+        self.assertIsNone(registry.get("_default", plan["project_id"]))
+        self.assertFalse((self.outside / "project.yaml").exists())
+
+    def test_an_unraced_create_writes_the_manifest_once_with_no_temp_left(self):
+        plan, loc = self._plan("Plain")
+        self.svc.create_project("_default", plan["plan_id"])
+        self.assertTrue((loc / "project.yaml").is_file())
+        self.assertEqual([p.name for p in loc.iterdir() if p.name.startswith(".project.yaml")], [])
+        self.assertEqual(oct((loc / "project.yaml").stat().st_mode & 0o777), oct(0o644))     # as atomic_write leaves it
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import secrets
 import stat
 import tempfile
 from pathlib import Path
@@ -171,6 +172,34 @@ def atomic_write(path: Path, data: bytes, *, mode: int = 0o644, root: Path | Non
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
+        raise
+
+
+def write_at(dir_fd: int, name: str, data: bytes, *, mode: int = 0o644) -> None:
+    """:func:`atomic_write` relative to a held directory descriptor (POSIX): a fresh temp opened
+    ``O_CREAT|O_EXCL|O_NOFOLLOW`` in THAT directory, then ``rename`` within it. A path component swapped for a link after
+    the directory was opened cannot redirect the write (REVIEW-0065, REVIEW-0063 m4)."""
+    if "/" in name or name in ("", ".", ".."):
+        raise UnsafePath(f"{name!r} is not a plain file name")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC
+    for _ in range(16):
+        tmp = f".{name}.{secrets.token_hex(6)}"
+        try:
+            fd = os.open(tmp, flags, 0o600, dir_fd=dir_fd)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise WriteFailed(f"{name} could not be written (no free temporary name)")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fchmod(fh.fileno(), mode)
+        os.rename(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp, dir_fd=dir_fd)
         raise
 
 
