@@ -21,8 +21,9 @@ from .registry import PROTECTED_COMPONENTS
 
 Rel = Union[PurePosixPath, str, Iterable[str]]
 
-#: the reasons this module answers (the export's ``left_out`` vocabulary for protected entries)
-REASONS = ("machine_local", "git_internal", "protected_name", "engine_copy", "graph_cache", "secret_name")
+#: the reasons this module answers (the export's ``left_out`` vocabulary for protected entries; ``bundle_reserved`` is the
+#: project's own ``.corvin-export`` folder, which only the export itself may write into a bundle - REVIEW-0063 m9)
+REASONS = ("machine_local", "git_internal", "protected_name", "engine_copy", "graph_cache", "secret_name", "bundle_reserved")
 
 #: the platform's machine-local directory and the git directory (members of PROTECTED_COMPONENTS)
 _MACHINE_LOCAL_COMPONENT = ".corvin"
@@ -102,6 +103,20 @@ def export_payload_problem(rel: Rel) -> bool:
     if not any(p.casefold() == EXPORT_DIR for p in parts):
         return False
     return "/".join(parts) not in GIT_PAYLOADS
+
+
+def export_left_out(rel: Rel) -> Optional[str]:
+    """The export's never-list (``bundle.NEVER_LIST``): :func:`protected_entry`, and ``bundle_reserved`` for a path with an
+    ``.corvin-export`` component (any depth, case-insensitive). The export writes its git payloads below that name itself;
+    a project's own folder of that name never travels, so a bundle always passes its own V1 (REVIEW-0063 m9: V1 refuses
+    every ``.corvin-export`` entry but the two payload paths, and a planted ``.corvin-export/git/history.bundle`` would have
+    collided with the real one). Everything V1 refuses (``protected_entry`` or ``export_payload_problem``) is answered here."""
+    reason = protected_entry(rel)
+    if reason is not None:
+        return reason
+    if any(p.casefold() == EXPORT_DIR for p in _parts(rel)):
+        return "bundle_reserved"
+    return None
 
 
 def history_secret_path(rel: Rel) -> bool:

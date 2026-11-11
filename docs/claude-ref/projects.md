@@ -509,7 +509,7 @@ docs_head?}` (only with history), `left_out [{path, reason}]`, `files [{path, sh
 envelope, the git bundles included), `counts {files, bytes}`. Entries are `ZIP_DEFLATED` (the git bundles stored), mtimes
 as on disk, modes 0o644/0o755 only.
 
-### Never in a bundle (Decision 8) - `bundle_rules.protected_entry(rel)`
+### Never in a bundle (Decision 8) - `bundle_rules.export_left_out(rel)` (= `protected_entry` + `bundle_reserved`)
 
 | Path (case-insensitive, any depth) | `left_out` reason |
 |---|---|
@@ -520,6 +520,7 @@ as on disk, modes 0o644/0o755 only.
 | `ENGINE.json`, `docs/scripts/kb*.py` (an engine copy) | `engine_copy` |
 | `kb/graph/**` | `graph_cache` |
 | `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_ed25519*`, `secrets.*`, `credentials.*` | `secret_name` |
+| a `.corvin-export` component (the bundle's own payload name; the export writes its git bundles there itself; REVIEW-0063 m9, `bundle_rules.export_left_out`) | `bundle_reserved` |
 
 The walk adds: a symlink or junction (target and contents never read) -> `link`; a regular file with `st_nlink > 1` ->
 `hard_link`; a directory or a regular file on another filesystem than the project root (a bind mount) -> `mount`; a CorvinOS `project.yaml` below the root (mapping,
@@ -736,7 +737,7 @@ carries content.
 | Stage | Refuses | Message |
 |---|---|---|
 | `container` (V1) | > 500 MiB file, > 50 000 entries, unreadable ZIP; names absolute, with `\`, `:`, `..`, empty segments or control characters (`bundle_common.names`); duplicates exact, after casefold and after NFC; a Windows device name (any extension), `<>"|?*` or a trailing dot/space in any component; depth > 64, name > 1000 bytes; symlink, encrypted or not stored/deflated entries; > 2 GiB declared; 100:1 per entry above 1 MiB; an entry outside `projects/<id>/` (id rule) or the envelope | "This file is not a valid project bundle (<detail>)." |
-| `container`, protected | `bundle_rules.protected_entry(<path below projects/<id>/>)` answers (`bundle.V1_PROTECTED` IS `bundle.NEVER_LIST`); a `.corvin-export` component other than the two git payload paths | "This file is not a valid project bundle (it contains a protected entry: <entry path>)." |
+| `container`, protected | `bundle_rules.protected_entry(<path below projects/<id>/>)` answers (`bundle.V1_PROTECTED`); a `.corvin-export` component other than the two git payload paths. The export's never-list `bundle.NEVER_LIST` is `bundle_rules.export_left_out` = `protected_entry` plus every `.corvin-export` path of the project (`bundle_reserved`), so it covers everything this stage refuses | "This file is not a valid project bundle (it contains a protected entry: <entry path>)." |
 | `envelope` (V2) | missing, > 4 MiB, not UTF-8 JSON; strict schema (unknown keys refused), `format`/`format_version` 1, 1-20 projects, id rule, ULID, 32-hex uid, closed part and `left_out` vocabularies, `git.head`/`docs_head` a `refs/heads/*` name exactly when the history part is included and its bundle listed, counts equal to the file list, each file below its project; every project directory is an envelope id and vice versa | "This file is not a valid project bundle (<detail>)." |
 | `integrity` (V3) | an unlisted or missing entry, a path listed twice, size or sha256 mismatch, CRC / stream error | "The bundle's contents do not match its manifest." |
 | `manifest` (V4) | the root `project.yaml` missing, > 64 KiB, not YAML, with a `tenant` key, failing `manifest.validate` (unknown `docs_mode`, a reserved id such as `corvin` - `import`, `trash`, `files` pass), id not the envelope's; a CorvinOS manifest below the root | "The project description in the bundle is invalid." / "The bundle contains a project inside the project; it was not imported." |

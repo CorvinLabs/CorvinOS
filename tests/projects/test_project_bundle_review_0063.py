@@ -241,5 +241,37 @@ class MessageScan(BundleBase):
         self.assertIn(f"projects/{pid}/{bundle_rules.HISTORY_BUNDLE}", self.names(z))
 
 
+class ExportDirRoundTrip(BundleBase):
+    """m9: a project folder named ``.corvin-export`` is left out on export (``bundle_reserved``), so the export passes its own V1;
+    a planted ``.corvin-export/git/history.bundle`` never becomes a second payload."""
+
+    def test_a_project_corvin_export_folder_is_left_out_and_the_bundle_validates(self):
+        pid, root = self.project()
+        (root / ".corvin-export" / "git").mkdir(parents=True)
+        (root / ".corvin-export" / "notes.txt").write_text("mine\n")
+        (root / ".corvin-export" / "git" / "history.bundle").write_bytes(b"# v2 git bundle\nplanted\n")
+        (root / "sub" / ".Corvin-Export").mkdir(parents=True)
+        (root / "sub" / ".Corvin-Export" / "x.txt").write_text("x\n")
+        (root / "keep.txt").write_text("k\n")
+        for hist in (False, True):
+            z, _ = self.build([pid], name=f"m9-{hist}.zip", git_history=hist)
+            lo = self.left_out(self.envelope(z), pid)
+            self.assertEqual(lo.get(".corvin-export"), "bundle_reserved")
+            self.assertEqual(lo.get("sub/.Corvin-Export"), "bundle_reserved")
+            names = self.names(z)
+            self.assertIn(f"projects/{pid}/keep.txt", names)
+            self.assertEqual(len(names), len(set(names)))
+            self.assertEqual(sum(1 for n in names if n.endswith("/history.bundle")), 1 if hist else 0)
+            self.assertTrue(bundle.validate(z, None)["ok"], hist)
+
+    def test_one_list_export_leaves_out_everything_v1_refuses(self):
+        for rel in (".corvin-export/notes.txt", "a/.corvin-export/b", ".CORVIN-EXPORT/x", ".git/config", ".env"):
+            self.assertIsNotNone(bundle.NEVER_LIST(rel), rel)
+        for rel in bundle_rules.GIT_PAYLOADS:
+            self.assertIsNone(bundle_rules.protected_entry(rel))
+            self.assertFalse(bundle_rules.export_payload_problem(rel))
+            self.assertEqual(bundle.NEVER_LIST(rel), "bundle_reserved")   # the export writes them itself, never from disk
+
+
 if __name__ == "__main__":
     unittest.main()

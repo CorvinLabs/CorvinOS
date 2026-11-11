@@ -73,8 +73,9 @@ LIMITS_MUTABLE: dict[str, int] = {
 }
 LIMITS = MappingProxyType(LIMITS_MUTABLE)
 
-#: the never-list of the export IS bundle_rules.protected_entry (the same function V1 uses; never a second list)
-NEVER_LIST = bundle_rules.protected_entry
+#: the never-list of the export: bundle_rules.export_left_out = protected_entry (the same function V1 uses; never a second
+#: list) plus the bundle's own ``.corvin-export`` name (REVIEW-0063 m9)
+NEVER_LIST = bundle_rules.export_left_out
 
 GENERATED = frozenset({"node_modules", ".venv", "__pycache__", "build", "dist", "target"})
 PART_NAMES = ("files", "kb", "git_history", "videos_index", "generated")

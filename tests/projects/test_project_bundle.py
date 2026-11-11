@@ -378,7 +378,7 @@ class Build(BundleBase):
                 rel = n[len(f"projects/{pid}/"):]
                 self.assertIsNone(bundle_rules.protected_entry(rel), n)
                 self.assertFalse(bundle_rules.export_payload_problem(rel), n)
-        self.assertIs(bundle.NEVER_LIST, bundle_rules.protected_entry)
+        self.assertIs(bundle.NEVER_LIST, bundle_rules.export_left_out)
 
     # AC9c (N4)
     def test_a_cloned_repository_bundles_only_branches_and_tags(self):
@@ -690,7 +690,8 @@ class Validate(BundleBase):
                          {p["id"]: p["counts"] for p in res.envelope["projects"]})
         self.assertEqual(rep["origin"], "unverified")
         self.assertIs(bundle.V1_PROTECTED, bundle_rules.protected_entry)
-        self.assertIs(bundle.V1_PROTECTED, bundle.NEVER_LIST)
+        # REVIEW-0063 m9: the export's list is V1's list plus the bundle's own .corvin-export name (one function builds on the other)
+        self.assertIs(bundle.NEVER_LIST, bundle_rules.export_left_out)
 
     def test_bundle_py_carries_no_protected_name_literal_of_its_own(self):
         src = Path(bundle.__file__).read_text(encoding="utf-8")
