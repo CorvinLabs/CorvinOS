@@ -254,11 +254,45 @@ def _kb_bound(tenant_id: str) -> bool:
     return kb_projection.kb_repo(tenant_id) is not None
 
 
+def _board_project(tenant_id: str, scope: str | None) -> str | None:
+    """The project a board request names (``?scope=project:<id>``), checked like ``get_items`` does: 404 for a project the board
+    does not carry. ``None`` for the tenant's own board (no scope, ``bound``, ``project:corvin``)."""
+    if scope is None or scope == "bound":
+        return None
+    if not scope.startswith("project:"):
+        raise HTTPException(status_code=422, detail="scope must be 'bound' or 'project:<id>'")
+    pid = scope.split(":", 1)[1]
+    if pid == "corvin":                                     # the built-in Corvin project IS the tenant's own board
+        return None
+    from .. import kb_projection  # noqa: PLC0415
+
+    if pid not in {p for p, _ in kb_projection.project_kbs(tenant_id, only=pid)}:
+        raise HTTPException(status_code=404, detail="no such project")
+    return pid
+
+
 @router.post("/items", status_code=201)
-def post_item(body: ItemCreate, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+def post_item(body: ItemCreate, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+              scope: str | None = Query(default=None, max_length=40,
+                                        description="the board the item is made on: project:<id> writes into that project's KB")) -> dict:
     """Create an item. While a knowledge base is bound to the tenant (ADR-2205) an initiative,
     epic or task is created IN the KB (``kb new``) and returned as its projection — the board
-    has one writer. A KB parent makes a KB child too. Other kinds stay local board items."""
+    has one writer. A KB parent makes a KB child too. Other kinds stay local board items.
+    On a project's board (``?scope=project:<id>``) every item goes into THAT project's knowledge base, so only its kinds
+    exist there - an item made on a project board used to land in the tenant's own knowledge base (REVIEW-0083 N32)."""
+    project = _board_project(rec.tenant_id, scope)
+    if project is not None:
+        from .. import kb_projection  # noqa: PLC0415
+
+        if body.kind not in ("initiative", "epic", "task"):
+            raise HTTPException(status_code=409, detail={
+                "message": "a project's board holds its knowledge base's items only: an initiative, an epic or a task",
+                "kb_refused": True})
+        if body.status != "open":
+            raise HTTPException(status_code=409, detail={
+                "message": "a knowledge-base item starts open — move it on the board (kb transition)", "kb_refused": True})
+        return _call(kb_projection.create_item, rec.tenant_id, kind=body.kind, title=body.title, parent_id=body.parent_id,
+                     description=body.description or "", actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint, scope=project)
     if body.kind in ("initiative", "epic", "task") and _kb_bound(rec.tenant_id):
         from .. import kb_projection  # noqa: PLC0415
 

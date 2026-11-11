@@ -7,12 +7,19 @@ import { KIND_META, KIND_ORDER, PARENT_RULES, PRIORITY_META, PRIORITY_ORDER, kin
 
 const inputCls = "h-9 w-full rounded-md border bg-background px-2 text-sm";
 
-export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, error, onCreate }: {
+/** The kinds a project's knowledge base holds; on its board only these are offered, each but an initiative under a parent. */
+export const PROJECT_KINDS: ItemKind[] = ["initiative", "epic", "task"];
+
+export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, error, onCreate, project = null }: {
   open: boolean; onOpenChange: (v: boolean) => void; items: Item[]; defaultParent: Item | null;
   busy: boolean; error: string | null; onCreate: (body: ItemCreateBody) => void;
+  /** The project whose board this is (its name), or null for the tenant's own board. */
+  project?: string | null;
 }) {
-  const initialKind = (p: Item | null): ItemKind =>
-    !p ? "initiative" : p.kind === "initiative" ? "epic" : p.kind === "task" || p.kind === "issue" || p.kind === "proposal" ? "subtask" : "task";
+  const initialKind = (p: Item | null): ItemKind => {
+    const k: ItemKind = !p ? "initiative" : p.kind === "initiative" ? "epic" : p.kind === "task" || p.kind === "issue" || p.kind === "proposal" ? "subtask" : "task";
+    return project && !PROJECT_KINDS.includes(k) ? "initiative" : k;      // a project's knowledge base has no subtasks
+  };
   const [kind, setKind] = useState<ItemKind>(initialKind(defaultParent));
   const [parent, setParent] = useState<string>(defaultParent?.id ?? "");
   const [title, setTitle] = useState("");
@@ -36,7 +43,9 @@ export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, e
   useEffect(() => {
     if (parent && !parents.some((p) => p.id === parent)) setParent("");
   }, [parent, parents]);
-  const parentOk = parent ? parents.some((p) => p.id === parent) : allowed.includes(null);
+  // in a project's knowledge base only an initiative stands alone; an epic needs its initiative, a task its epic
+  const parentOk = parent ? parents.some((p) => p.id === parent) : allowed.includes(null) && (!project || kind === "initiative");
+  const kinds = project ? KIND_ORDER.filter((k) => PROJECT_KINDS.includes(k)) : KIND_ORDER;
   const article = /^[aeiou]/i.test(KIND_META[kind].label) ? "An" : "A";
 
   return (
@@ -44,7 +53,9 @@ export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, e
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New item</DialogTitle>
-          <DialogDescription>Saved to the task store and recorded in the audit log.</DialogDescription>
+          <DialogDescription data-testid="create-target">{project
+            ? `Saved to ${project}'s knowledge base and recorded in the audit log.`
+            : "Saved to the task store and recorded in the audit log."}</DialogDescription>
         </DialogHeader>
         <form className="space-y-3" onSubmit={(e) => {
           e.preventDefault();
@@ -57,12 +68,12 @@ export function CreateDialog({ open, onOpenChange, items, defaultParent, busy, e
           <div className="grid grid-cols-2 gap-3">
             <label className="space-y-1 text-xs text-muted-foreground">Kind
               <select aria-label="Kind" className={inputCls} value={kind} onChange={(e) => setKind(e.target.value as ItemKind)}>
-                {KIND_ORDER.map((k) => <option key={k} value={k}>{KIND_META[k].label}</option>)}
+                {kinds.map((k) => <option key={k} value={k}>{KIND_META[k].label}</option>)}
               </select>
             </label>
             <label className="space-y-1 text-xs text-muted-foreground">Parent
               <select aria-label="Parent" className={inputCls} value={parent} onChange={(e) => setParent(e.target.value)}>
-                {allowed.includes(null) ? <option value="">None (top level)</option> : <option value="">Choose a parent…</option>}
+                {allowed.includes(null) && (!project || kind === "initiative") ? <option value="">None (top level)</option> : <option value="">Choose a parent…</option>}
                 {parents.map((p) => <option key={p.id} value={p.id}>{kindMeta(p.kind).label}: {p.title}</option>)}
               </select>
             </label>

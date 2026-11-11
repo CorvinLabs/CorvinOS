@@ -284,3 +284,31 @@ test("a project's board that cannot be read says so instead of 'not available on
   await page.goto("/console/app/initiatives?scope=project:alpha");
   await expect(page.getByTestId("tasks-not-available")).toContainText("Plumbline's knowledge base cannot be read right now");
 });
+
+test("New item on a project's board offers that knowledge base's kinds and writes into it (REVIEW-0083 N32)", async ({ page }) => {
+  await stub(page);
+  let posted: { url: string; body: unknown } | null = null;
+  await page.route(/\/v1\/console\/task-tracking\/items(\?|$)/, async (r) => {
+    if (r.request().method() === "POST") {
+      posted = { url: r.request().url(), body: r.request().postDataJSON() };
+      return r.fulfill({ status: 201, json: { ...ALPHA, id: "a-new", title: "I-02 · made here", kind: "initiative" } });
+    }
+    return r.fallback();
+  });
+  await page.goto("/console/app/initiatives?scope=project:alpha");
+  await page.getByRole("button", { name: "New item" }).click();
+  await expect(page.getByTestId("create-target")).toHaveText("Saved to Plumbline's knowledge base and recorded in the audit log.");
+  const kinds = await page.getByRole("dialog").getByLabel("Kind").locator("option").allInnerTexts();
+  expect(kinds).toEqual(["Initiative", "Epic", "Task"]);
+  await page.getByLabel("New item title").fill("made here");
+  await page.getByRole("button", { name: /^Create/ }).click();
+  await expect.poll(() => posted?.url ?? "").toContain("scope=project%3Aalpha");
+});
+
+test("New item on the tenant's own board keeps every kind and no scope", async ({ page }) => {
+  await stub(page);
+  await page.goto("/console/app/initiatives?scope=bound");
+  await page.getByRole("button", { name: "New item" }).click();
+  await expect(page.getByTestId("create-target")).toHaveText("Saved to the task store and recorded in the audit log.");
+  expect((await page.getByRole("dialog").getByLabel("Kind").locator("option").allInnerTexts()).length).toBeGreaterThan(3);
+});

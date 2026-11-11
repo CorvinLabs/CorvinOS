@@ -176,8 +176,9 @@ export function getTaskItem(id: string, signal?: AbortSignal): Promise<ItemDetai
   return api<ItemDetail>(`${BASE}/items/${encodeURIComponent(id)}`, { signal, timeoutMs: POLL_TIMEOUT_MS });
 }
 
-export function createTaskItem(body: ItemCreateBody, csrf: string): Promise<Item> {
-  return api<Item>(`${BASE}/items`, { method: "POST", body, csrf });
+/** `scope`: the board the item is made on - `project:<id>` writes it into that project's knowledge base (REVIEW-0083 N32). */
+export function createTaskItem(body: ItemCreateBody, csrf: string, scope?: string): Promise<Item> {
+  return api<Item>(`${BASE}/items${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`, { method: "POST", body, csrf });
 }
 
 export function patchTaskItem(id: string, body: ItemPatchBody, csrf: string): Promise<Item> {

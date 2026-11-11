@@ -235,5 +235,34 @@ class ProjectGraphScopeE2E(unittest.TestCase):
             self.assertEqual(set(kb_projection.project_status("_default")), {"alpha", "beta"})
 
 
+    def test_an_item_made_on_a_project_board_goes_into_that_project(self):
+        # REVIEW-0083 N32: "New item" on alpha's board wrote the initiative into the tenant's own knowledge base
+        import subprocess as _sp
+        with _sandbox(self.tmp / "s", tenants=("_default",)) as (_c, _t, home, clients):
+            from corvin_console import kb_projection
+            alpha = fx._make_project(self.tmp / "p", "alpha")
+            fx._write_registry(home, "_default", [("alpha", alpha)])
+            kb_projection.sync("_default", force=True)
+            kb_projection.sync_projects("_default")
+            own, csrf = clients["_default"]
+            h = {"X-CSRF-Token": csrf}
+            commits = lambda repo: _sp.run(["git", "-C", str(repo), "rev-list", "--count", "HEAD"], capture_output=True, text=True).stdout.strip()  # noqa: E731
+            bound_before = commits(self.bound)
+            r = own.post(f"{_TT}/items", params={"scope": "project:alpha"}, json={"kind": "initiative", "title": "made on alpha board"}, headers=h)
+            self.assertEqual(r.status_code, 201, r.text)
+            self.assertTrue(r.json()["external_ref"].endswith("@alpha"), r.json())
+            self.assertTrue(list((alpha / "docs" / "kb" / "initiatives").glob("*made-on-alpha-board*")))
+            self.assertEqual(commits(self.bound), bound_before, "the tenant's own knowledge base was written")
+            scoped = {it["id"] for it in own.get(f"{_TT}/items", params={"scope": "project:alpha"}).json()["items"]}
+            self.assertIn(r.json()["id"], scoped)
+            # a project's board holds only its knowledge base's kinds, and an epic needs its initiative
+            self.assertEqual(own.post(f"{_TT}/items", params={"scope": "project:alpha"}, json={"kind": "issue", "title": "x"}, headers=h).status_code, 409)
+            self.assertEqual(own.post(f"{_TT}/items", params={"scope": "project:alpha"}, json={"kind": "epic", "title": "x"}, headers=h).status_code, 409)
+            epic = own.post(f"{_TT}/items", params={"scope": "project:alpha"}, json={"kind": "epic", "title": "alpha child", "parent_id": r.json()["id"]}, headers=h)
+            self.assertEqual(epic.status_code, 201, epic.text)
+            self.assertTrue(epic.json()["external_ref"].endswith("@alpha"))
+            self.assertEqual(own.post(f"{_TT}/items", params={"scope": "project:ghost"}, json={"kind": "initiative", "title": "x"}, headers=h).status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1282,7 +1282,10 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   (REVIEW-0081 N27-N29). A card's project comes from its KB reference (`kb:<uid>@<project>`, written only by the
   projector, `projection.scope_of_ref`), never from a `prj-*` label a person can type (REVIEW-0082 N30). Every reader of
   the projector's per-project state goes through `_load_project_state` (memory, else the file), so a board move right
-  after a restart keeps the other projects carried (N31). A chain failure between two opening records of `_audited` closes the ones already
+  after a restart keeps the other projects carried (N31). `POST /task-tracking/items?scope=project:<id>` (sent by "New item" on a project's
+  board) writes into THAT project's knowledge base: only an initiative, an epic or a task (409 otherwise), each but an
+  initiative under its parent, 404 for a project the board does not carry; the dialog offers just those kinds and names the
+  target. Without a scope nothing changes (REVIEW-0083 N32). A chain failure between two opening records of `_audited` closes the ones already
   open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
   feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,

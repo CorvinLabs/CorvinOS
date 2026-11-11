@@ -194,7 +194,8 @@ export default function TasksPage() {
   const [createParent, setCreateParent] = useState<Item | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const create = useMutation({
-    mutationFn: (body: ItemCreateBody) => createTaskItem(body, csrf),
+    // made on a project's board, the item goes into that project's knowledge base (REVIEW-0083 N32)
+    mutationFn: (body: ItemCreateBody) => createTaskItem(body, csrf, scope.kind === "project" ? scopeKey : undefined),
     onSuccess: (it) => {
       setCreateOpen(false);
       qc.invalidateQueries({ queryKey: ["task-tracking"] });
@@ -566,6 +567,7 @@ export default function TasksPage() {
       )}
 
       <CreateDialog open={createOpen} onOpenChange={setCreateOpen} items={items} defaultParent={createParent}
+        project={scope.kind === "project" ? scopeName : null}
         busy={create.isPending} error={createError} onCreate={(b) => create.mutate(b)} />
 
       <Dialog open={linkRun !== null} onOpenChange={(v) => { if (!v) setLinkRun(null); }}>
