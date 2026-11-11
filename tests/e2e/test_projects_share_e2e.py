@@ -410,6 +410,8 @@ class ImportValidate(ShareBase):
             data = self.exported(c, pid)
             body = self.upload(c, data).json()
             kinds = {x["kind"]: x for x in body["projects"][0]["conflicts"]}
+            self.assertEqual(set(kinds), {"id_taken", "same_source"})            # the place is the suggested id's, not the source's
+            self.assertTrue(body["projects"][0]["default_location"]["path"].endswith(f"{pid}-2"))
             self.assertEqual(kinds["id_taken"]["fix"], {"suggested_id": f"{pid}-2"})
             self.assertEqual(kinds["id_taken"]["message"], f'A project "{pid}" already exists in this list.')
             self.assertEqual(kinds["same_source"]["message"],

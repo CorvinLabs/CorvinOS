@@ -2671,7 +2671,8 @@ def _conflicts(tenant_id: str, card: dict[str, Any], *, location: Optional[str] 
     if location:
         place = {"storage": "own", "path": location}
     else:
-        place = _default_place(tenant_id, pid)
+        # a taken id is never the import's id: the default place is the suggested id's (not the existing project's folder)
+        place = _default_place(tenant_id, _unique_id(tenant_id, pid))
     try:
         registry.validate_location(tenant_id, place["path"], purpose="import")
     except registry.ProjectPathError as exc:

@@ -538,7 +538,8 @@ slots (429 `busy` at once): a failing stage deletes the staging and answers 422 
 | `nested` | `validate_location(purpose="import")` says `nested` - "It lies inside another project (<id>)." | `{choose_location: true}` |
 
 Any other location refusal is listed with its own `reason_class` and sentence. The default place follows ADR-2321
-Decision 3 (`registry.default_location`): `storage` is the tenant's `default_storage` (`managed` or `root`). A nested
+Decision 3 (`registry.default_location`) for the id the import would get - the suggested id when the bundle's id is
+taken, never the existing project's folder: `storage` is the tenant's `default_storage` (`managed` or `root`). A nested
 CorvinOS manifest never gets here (V4 refuses it). `GET /-/import/{staging_id}` answers the report again,
 `GET /-/import/{staging_id}/verdict?project=&location=&project_id=` recomputes the conflicts for a chosen place/id,
 `DELETE /-/import/{staging_id}` (CSRF) is Cancel (204). Another tenant's staging is 404. TTL 1 h, swept by the projector
