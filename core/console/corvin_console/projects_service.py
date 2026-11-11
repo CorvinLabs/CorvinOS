@@ -1994,11 +1994,31 @@ VIDEO_SECTIONS = ("Videoeigenschaften", "Inhalt", "Reproduktion", "Konfiguration
                   "Quellen im Codebase", "Bekannte Einschränkungen", "Verwandte ADRs/Konzepte")
 
 
+#: the shared sibling folder of the projects folder (the operator's Corvin-Videos convention); also the former template value
+_VIDEOS_SIBLING = "../Corvin-Videos"
+
+
+def _default_videos_root(tenant_id: str, root: Path) -> str:
+    """Where videos go when project.yaml names no ``videos.root`` (or the former template value ``../Corvin-Videos``):
+    the shared sibling ``../Corvin-Videos`` only when the project lies DIRECTLY in the projects folder - the one place where
+    that sibling passes the location rule below - else ``videos`` inside the project. A managed project (the shipped
+    default) and an own folder elsewhere keep their videos inside (REVIEW-0068 #1): the managed workspace holds project
+    folders only, and a sibling of an own folder lies outside every place the rule allows."""
+    try:
+        parent = registry._resolve_forgiving(Path(os.path.abspath(root)).parent)
+        pr = registry._resolve_forgiving(registry.projects_root(tenant_id))
+    except OSError:
+        return "videos"
+    return _VIDEOS_SIBLING if parent == pr else "videos"
+
+
 def _videos_root(tenant_id: str, root: Path, man: dict[str, Any]) -> Path:
     """Where a project's videos go: ``videos.root`` of project.yaml, relative to the project or absolute.
     Refused inside CORVIN_HOME (the platform's own stores) and under the tenants directory."""
     cfg = man.get("videos") if isinstance(man.get("videos"), dict) else {}
-    raw = str(cfg.get("root") or "../Corvin-Videos")
+    raw = str(cfg.get("root") or "")
+    if not raw or raw.replace("\\", "/").rstrip("/") == _VIDEOS_SIBLING:
+        raw = _default_videos_root(tenant_id, root)
     if "\x00" in raw or len(raw) > 500:
         raise ProjectsError("videos.root is not a usable path")
     try:

@@ -140,6 +140,51 @@ class ProjectVideosE2E(unittest.TestCase):
             self.assertEqual(again.status_code, 409, again.text)
             self.assertEqual(again.json()["detail"]["reason_class"], "exists")
 
+    # REVIEW-0068 #1: the shipped default storage is the managed workspace; New video must work there and for an own folder
+    def test_new_video_works_in_the_managed_workspace_the_shipped_default(self):
+        with self._ctx() as (c, hdr, root, home):
+            p = c.post(f"{_URL}/plan", json={"template": "video-engineering", "title": "Managed videos", "storage": "managed"},
+                       headers=hdr)
+            self.assertEqual(p.status_code, 200, p.text)
+            r = c.post(_URL, json={"plan_id": p.json()["plan_id"]}, headers=hdr)
+            self.assertEqual(r.status_code, 201, r.text)
+            pid = p.json()["project_id"]
+            proj = Path(c.get(f"{_URL}/{pid}").json()["path"])
+            self.assertEqual(c.get(f"{_URL}/{pid}").json()["storage"], "managed")
+            v = c.post(f"{_URL}/{pid}/videos", json={"name": "managed-intro"}, headers=hdr)
+            self.assertEqual(v.status_code, 201, v.text)
+            vdir = Path(v.json()["video"]["path"])
+            self.assertEqual(vdir, (proj / "videos" / "managed-intro").resolve(), "a managed project keeps its videos inside")
+            self.assertTrue((vdir / "sources.md").is_file())
+            self.assertIn("| managed-intro | yes | yes |", (proj / "videos" / "INDEX.md").read_text(encoding="utf-8"))
+            # a managed project created from the former template default (`root: ../Corvin-Videos`) works too
+            import yaml
+            m = yaml.safe_load((proj / "project.yaml").read_text())
+            m["videos"]["root"] = "../Corvin-Videos"
+            (proj / "project.yaml").write_text(yaml.safe_dump(m))
+            v2 = c.post(f"{_URL}/{pid}/videos", json={"name": "legacy-root"}, headers=hdr)
+            self.assertEqual(v2.status_code, 201, v2.text)
+            self.assertEqual(Path(v2.json()["video"]["path"]), (proj / "videos" / "legacy-root").resolve())
+            # an explicit root outside the project and outside the projects folder is still refused (the location rule holds)
+            m["videos"]["root"] = "../elsewhere"
+            (proj / "project.yaml").write_text(yaml.safe_dump(m))
+            bad = c.post(f"{_URL}/{pid}/videos", json={"name": "outside"}, headers=hdr)
+            self.assertEqual(bad.status_code, 400, bad.text)
+            self.assertFalse((proj.parent / "elsewhere").exists())
+
+    def test_new_video_works_for_an_own_folder_outside_the_projects_folder(self):
+        with self._ctx() as (c, hdr, root, home):
+            own = self.tmp / "work" / "own-videos"
+            p = c.post(f"{_URL}/plan", json={"template": "video-engineering", "title": "Own videos", "location": str(own)},
+                       headers=hdr)
+            self.assertEqual(p.status_code, 200, p.text)
+            self.assertEqual(c.post(_URL, json={"plan_id": p.json()["plan_id"]}, headers=hdr).status_code, 201)
+            pid = p.json()["project_id"]
+            v = c.post(f"{_URL}/{pid}/videos", json={"name": "own-intro"}, headers=hdr)
+            self.assertEqual(v.status_code, 201, v.text)
+            self.assertEqual(Path(v.json()["video"]["path"]), (own / "videos" / "own-intro").resolve())
+            self.assertFalse((own.parent / "Corvin-Videos").exists())
+
     def test_the_videos_feature_must_be_on(self):
         with self._ctx() as (c, hdr, root, home):
             pid = self._project(c, hdr)

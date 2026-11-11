@@ -432,7 +432,12 @@ the path gate by file path (`importlib.util.spec_from_file_location`, once) - no
 place that knows that root - REVIEW-0064 #1, proven by `tests/e2e/test_projects_wheel_e2e.py`, which builds and installs
 the real wheel and creates a managed project over HTTP). A load failure raises `HintSourceUnavailable`. A NEW folder
 directly in the managed root (`create`/`move`/`import`) whose path the gate's test matches is refused 422 `hint_word`
-("Commands that name this folder would be refused by the assistant's safety check; choose another id."). While the hint
+("The id contains '<word>', a word the assistant's safety check protects: commands that name this folder would be refused.
+Choose another id." - the word is named since REVIEW-0068 #6; the generic sentence "Commands that name this folder would be
+refused by the assistant's safety check; choose another id." remains for a match outside the folder's own name; the wizard shows
+the sentence under the id field). No template's title yields such an id (`project_templates` 1.1.1 renamed "Research with
+compute" to "Research and experiments"; `test_project_templates_catalogue_e2e.py` plans every template title in the managed
+workspace). While the hint
 source cannot be loaded, every such NEW managed folder is refused 422 `hint_source` instead ("The assistant's
 safety-check word list could not be loaded, so no new folder can be made in the Corvin workspace; run the project doctor,
 or choose your own folder.") - its own class, because the id is not at fault; `GET /projects` carries the reason in
@@ -1126,7 +1131,13 @@ console, both themes, 1280/375 px, screenshots in `/tmp/scope-switch`).
 ## New video (T-0361)
 
 `POST /v1/console/projects/{id}/videos` `{name}` (session + CSRF) creates one video's folder under the project's
-`videos.root` (default `../Corvin-Videos`, relative to the project; refused inside CORVIN_HOME): `source/`, `build/`
+`videos.root` (relative to the project, or absolute). It must lie inside the project or inside the projects folder, reached
+without a link, not inside another project and not inside CORVIN_HOME - else 400 `error`. Default (no `videos.root`, or the
+former template value `../Corvin-Videos`, REVIEW-0068 #1): the shared `../Corvin-Videos` only for a project that lies
+DIRECTLY in the projects folder (the one place that sibling passes the rule), else `videos/` inside the project - a project
+in the managed workspace (the shipped default storage) or an own folder elsewhere. No template pins `videos.root` since
+`project_templates` 1.1.1. Proof: `tests/e2e/test_projects_videos_e2e.py` (managed, own folder, legacy value, refused
+explicit root) and `tests/e2e-fresh/projects-fresh.spec.ts` ("New video works ... in the managed workspace"). `source/`, `build/`
 (each with a `.gitkeep`), `sources.md` from the project's `videos/TEMPLATE-sources.md` (its title line replaced; refused
 when the template lacks its eight sections), and a row in `videos/INDEX.md`. With the `kb` feature on it also creates
 the epic `VIDEO-<name>` under the project's first initiative and the tasks Narration/Render per language, the number

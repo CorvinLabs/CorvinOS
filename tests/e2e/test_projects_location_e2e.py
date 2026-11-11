@@ -718,8 +718,9 @@ class MoveNamespaceHints(LocationBase):
         with self._ctx() as c:
             r = self._plan(c, "Forge lab", project_id="forge-lab")
             self.assertEqual(r.status_code, 422, r.text)
-            self.assertEqual(r.json()["detail"], {"message": "Commands that name this folder would be refused by the assistant's "
-                                                             "safety check; choose another id.", "reason_class": "hint_word"})
+            self.assertEqual(r.json()["detail"], {"message": "The id contains 'forge', a word the assistant's safety check protects: "
+                                                             "commands that name this folder would be refused. Choose another id.",
+                                                  "reason_class": "hint_word"})
             plan, made = self._create(c, "Forge lab", project_id="forge-lab", location=str(self.tmp / "code" / "forge-lab"))
             self.assertEqual(made.status_code, 201, made.text)
             self.assertEqual(plan["location_warnings"], ["hint_word"])

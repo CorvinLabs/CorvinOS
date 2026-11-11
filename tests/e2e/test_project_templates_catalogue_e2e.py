@@ -123,7 +123,9 @@ class TemplateCatalogueE2E(unittest.TestCase):
             self.assertEqual(tasks, ["Capture the project goal and audience as an idea", "Check the Video Producer connection",
                                      "Create the first video", "Run the first acceptance"])
             man = (proj / "project.yaml").read_text(encoding="utf-8")
-            self.assertIn("root: ../Corvin-Videos", man)
+            # the template pins no videos folder: the host chooses it from where the project lives (REVIEW-0068 #1)
+            self.assertNotIn("root:", man)
+            self.assertIn("- de", man)
             self.assertIn("peers: []", man)
             tracked = fx._sh("git", "-C", proj, "ls-files").split()
             self.assertEqual(fx._sh("git", "-C", proj, "status", "--porcelain"), "")
@@ -191,6 +193,20 @@ class TemplateCatalogueE2E(unittest.TestCase):
                                "product": "## Product management", "sales": "## Sales", "legal": "## Legal and compliance"}[role], claude)
                 for bad in ("/home/", "shumway"):
                     self.assertNotIn(bad, claude)
+
+    def test_every_template_title_plans_in_the_managed_workspace(self):
+        """REVIEW-0068 #6: the shipped default storage is managed, where an id with a path-gate hint word is refused. A user who
+        names the project after its template must get through; a typed hint word is refused with the word named."""
+        with self._sandboxed() as (client, hdr, root):
+            for tid, tpl in F.load_catalogue(_SRC).templates.items():
+                with self.subTest(template=tid):
+                    p = client.post(f"{_URL}/plan", json={"template": tid, "title": tpl.title, "storage": "managed"}, headers=hdr)
+                    self.assertEqual(p.status_code, 200, f"{tid} ({tpl.title!r}): {p.text}")
+            bad = client.post(f"{_URL}/plan", json={"template": "research-compute", "title": "Compute lab", "storage": "managed"},
+                              headers=hdr)
+            self.assertEqual(bad.status_code, 422, bad.text)
+            self.assertEqual(bad.json()["detail"]["reason_class"], "hint_word")
+            self.assertIn("'compute'", bad.json()["detail"]["message"])
 
     def test_acs_warns_about_the_worker_and_the_licence_it_cannot_verify(self):
         with self._sandboxed() as (c, hdr, root):

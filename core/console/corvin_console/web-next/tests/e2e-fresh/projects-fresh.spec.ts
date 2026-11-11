@@ -186,4 +186,26 @@ test.describe.serial("projects on a fresh install", () => {
     await expect(page.getByTestId("projects-empty")).toBeVisible({ timeout: 30_000 });
     expect(fs.existsSync(path.join(PROJECTS, "fresh-billing", "project.yaml"))).toBe(true);
   });
+
+  // REVIEW-0068 #1: the shipped default storage is the managed workspace; New video must work there (the steps above chose a
+  // projects folder first, which hid that it did not)
+  test("New video works for a video project in the managed workspace", async ({ page }) => {
+    test.setTimeout(180_000);
+    const csrf = await login(page);
+    const h = { "X-CSRF-Token": csrf };
+    const plan = await page.request.post(`${API}/projects/plan`, { headers: h,
+      data: { template: "video-engineering", title: "Fresh managed videos", storage: "managed" } });
+    expect(plan.status(), await plan.text()).toBe(200);
+    const p = await plan.json();
+    const made = await page.request.post(`${API}/projects`, { headers: h, data: { plan_id: p.plan_id } });
+    expect(made.status(), await made.text()).toBe(201);
+    const detail = await (await page.request.get(`${API}/projects/${p.project_id}`)).json();
+    expect(detail.storage).toBe("managed");
+    const v = await page.request.post(`${API}/projects/${p.project_id}/videos`, { headers: h, data: { name: "fresh-intro" } });
+    expect(v.status(), await v.text()).toBe(201);
+    const folder = (await v.json()).video.path as string;
+    expect(folder).toBe(path.join(fs.realpathSync(detail.path), "videos", "fresh-intro"));
+    expect(fs.existsSync(path.join(folder, "sources.md"))).toBe(true);
+    expect((await page.request.delete(`${API}/projects/${p.project_id}`, { headers: h })).ok()).toBe(true);
+  });
 });

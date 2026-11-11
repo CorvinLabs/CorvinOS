@@ -949,16 +949,20 @@ def validate_location(tenant_id: str, raw: str, *, purpose: Optional[str] = None
         from . import hints  # noqa: PLC0415
         try:
             bad = any(hints.looks_protected(str(f)) for f in forms)
+            words = [w for f in forms for w in hints.hint_words(str(f.name))] if bad else []
         except hints.HintSourceUnavailable:
             # cannot tell (REVIEW-0064 #1): refused under its OWN class - the id is not at fault - until the doctor's
             # hint_source check passes; an own folder only warns and is never refused for this
             _refuse("hint_source")
         if bad:
-            _refuse("hint_word")
+            # the word is named, so the wizard's sentence under the id field says what to change (REVIEW-0068 #6)
+            _refuse("hint_word", HINT_REFUSAL.format(word=words[0]) if words else None)
     return resolved
 
 
 HINT_WARNING = "The assistant may refuse some shell commands in a folder whose path contains '{word}'."
+HINT_REFUSAL = ("The id contains '{word}', a word the assistant's safety check protects: commands that name this folder would be "
+                "refused. Choose another id.")
 
 
 def location_warnings(path: "Path | str") -> list[dict[str, str]]:
