@@ -339,7 +339,9 @@ export default function TasksPage() {
       </div>
 
       {notAvailable && (
-        <Card><CardContent className="py-6 text-sm text-muted-foreground">The task store is not available on this build.</CardContent></Card>
+        <Card><CardContent className="py-6 text-sm text-muted-foreground" data-testid="tasks-not-available">{scope.kind === "project"
+          ? `${scopeName}'s knowledge base cannot be read right now. Its project page says why.`
+          : "The task store is not available on this build."}</CardContent></Card>
       )}
       {q.isError && !notAvailable && !q.data && (
         <Card><CardContent className="flex items-center gap-2 py-4 text-sm text-destructive">

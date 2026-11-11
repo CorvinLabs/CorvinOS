@@ -173,3 +173,10 @@ describe("an unfinished import is named as such in the switcher (REVIEW-0080 N25
     expect(projectUnavailableReason({ ...p, stale: true } as never)).toBe("import unfinished - Repair is on the project's page");
   });
 });
+
+describe("a knowledge base the board cannot read is not offered (REVIEW-0081 N28)", () => {
+  it("names the server's reason", () => {
+    const p = { id: "x", path: "/x", template: "t@1", state: "ok", kb: true, features: { kb: true }, kb_problem: "docs/kb/_meta/sources.yaml is missing" };
+    expect(projectUnavailableReason(p as never)).toBe("knowledge base cannot be read: docs/kb/_meta/sources.yaml is missing");
+  });
+});

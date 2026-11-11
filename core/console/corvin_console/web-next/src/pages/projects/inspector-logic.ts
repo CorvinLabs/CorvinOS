@@ -162,7 +162,11 @@ export function settingsSections(d: ProjectDetail, ctx: { workspace?: WorkspaceS
   if (ok) out.push(sec("share", { export: ON, duplicate: d.classification === "secret" ? off("Secret projects cannot be duplicated.") : ON }));
   // Deleting files exists only for a project in the Corvin workspace whose folder is there (ADR-2321 Decision 6); an own folder
   // has no delete row at all - Corvin never deletes in a folder it does not own
-  out.push(sec("danger", managed && ok ? { remove: ON, delete: ON } : { remove: ON }));
+  // a running import holds the project: removing its entry meanwhile left the finished import in a folder nobody could open
+  // (REVIEW-0081 N29); the server refuses it too
+  const importing = d.state === "pending" && d.pending === "import" && !d.stale;
+  out.push(sec("danger", managed && ok ? { remove: ON, delete: ON }
+    : { remove: importing ? off("An import of this project is running; remove it from the list once the import has finished.") : ON }));
   return out;
 }
 

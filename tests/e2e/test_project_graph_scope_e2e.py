@@ -163,5 +163,37 @@ class ProjectGraphScopeE2E(unittest.TestCase):
             self.assertEqual(every["summary"]["total"], 2)
 
 
+    def test_a_project_whose_manifest_names_another_id_feeds_neither_board_nor_graph(self):
+        # REVIEW-0081 N27: the list called it invalid while the board, the graph and kb-transition still served its knowledge base
+        with _sandbox(self.tmp / "s", tenants=("_default",)) as (_c, _t, home, clients):
+            from corvin_console import kb_projection
+            alpha = fx._make_project(self.tmp / "p", "alpha")
+            fx._write_registry(home, "_default", [("alpha", alpha)])
+            kb_projection.sync("_default", force=True)
+            kb_projection.sync_projects("_default")
+            own, _ = clients["_default"]
+            self.assertEqual(own.get(f"{_TT}/items", params={"scope": "project:alpha"}).status_code, 200)
+            y = alpha / "project.yaml"
+            y.write_text(y.read_text().replace("id: alpha", "id: other-id"))
+            self.assertEqual(own.get(f"{_TT}/items", params={"scope": "project:alpha"}).status_code, 404)
+            self.assertEqual(own.get(f"{_KG}/graph", params={"project": "alpha"}).status_code, 404)
+            self.assertEqual(kb_projection.project_kbs("_default"), [])
+            self.assertEqual(kb_projection.project_kb_problem("_default", "alpha"), "project.yaml does not name this project")
+            kb_projection.sync_projects("_default")
+            every = own.get(f"{_TT}/items").json()["items"]
+            self.assertFalse([it for it in every if it.get("project") == "alpha" and not it.get("deleted_at")
+                              and it.get("status") != "archived"], "the invalid project's cards are still on the board")
+
+    def test_the_list_names_a_knowledge_base_the_board_cannot_read(self):
+        # REVIEW-0081 N28: without sources.yaml the switcher offered the project, the board and the graph answered 404
+        with _sandbox(self.tmp / "s", tenants=("_default",)) as (_c, _t, home, clients):
+            alpha = fx._make_project(self.tmp / "p", "alpha")
+            fx._write_registry(home, "_default", [("alpha", alpha)])
+            (alpha / "docs" / "kb" / "_meta" / "sources.yaml").unlink()
+            own, _ = clients["_default"]
+            row = next(p for p in own.get("/v1/console/projects").json()["projects"] if p["id"] == "alpha")
+            self.assertEqual(row["kb_problem"], "docs/kb/_meta/sources.yaml is missing")
+
+
 if __name__ == "__main__":
     unittest.main()

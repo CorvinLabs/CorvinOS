@@ -1128,10 +1128,15 @@ def _summary(tenant_id: str, e: dict[str, Any]) -> dict[str, Any]:
         return {**out, "state": "missing" if not root.exists() else "invalid", "reason": str(exc)}
     if man.get("tenant") != tenant_id or man.get("id") != e["id"]:
         return {**out, "state": "invalid", "reason": "project.yaml does not match the registry entry"}
+    kb_dir = not passes_link(root, root / "docs" / "kb" / "_meta") and (root / "docs" / "kb" / "_meta").is_dir()
+    feats = man.get("features", {})
+    # the board and the graph's own rule, asked here so a switcher never offers what they refuse (REVIEW-0081 N28)
+    kb_problem = (kb_projection.project_kb_problem(tenant_id, e["id"])
+                  if kb_dir and isinstance(feats, dict) and feats.get("kb") is True else None)
     return {**out, "state": "ok", "title": man.get("title", e["id"]), "docs_mode": man.get("docs_mode", "nested"),
-            "features": man.get("features", {}), "active": manifest.active_features(man),
+            "features": feats, "active": manifest.active_features(man),
             "role": man.get("role") or "", **_protection_of(tenant_id, e["id"], man),
-            "kb": not passes_link(root, root / "docs" / "kb" / "_meta") and (root / "docs" / "kb" / "_meta").is_dir()}
+            "kb": kb_dir, "kb_problem": kb_problem}
 
 
 def _protection_of(tenant_id: str, project_id: str, man: dict[str, Any]) -> dict[str, str]:
@@ -1398,8 +1403,19 @@ def shell_commands(path: str) -> dict[str, Optional[str]]:
 
 
 def remove_from_registry(tenant_id: str, project_id: str) -> dict[str, Any]:
+    """Take a project off the list; its folder stays. Refused while an import of it is running (REVIEW-0081 N29: the import
+    finished into a folder nobody could open, and the next import to that place failed on a non-empty folder)."""
     _refuse_builtin(project_id)
-    _entry(tenant_id, project_id)
+    e = _entry(tenant_id, project_id)
+    if e.get("pending") == "import" and not _pending_import_unlocked(tenant_id, project_id):
+        raise Conflict("an import of this project is running; remove it from the list once the import has finished",
+                       "import_running")
+    return _remove_locked(tenant_id, project_id)
+
+
+@_project_locked
+def _remove_locked(tenant_id: str, project_id: str) -> dict[str, Any]:
+    e = _entry(tenant_id, project_id)                            # again under the project lock: an apply may have started meanwhile
     _audit(tenant_id, "project.registry_removed", project_id=project_id)
     registry.unregister(tenant_id, project_id)
     from core.projects import attachment  # noqa: PLC0415

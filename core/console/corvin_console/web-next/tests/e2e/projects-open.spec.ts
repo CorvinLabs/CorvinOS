@@ -242,3 +242,12 @@ test("a missing workspace marker is listed in the repair preview and can be appl
   await page.getByTestId("repair-apply").click();
   await expect.poll(() => applied).toBe(true);
 });
+
+test("Remove from the list waits while an import of the project runs (REVIEW-0081 N29)", async ({ page }) => {
+  await stub(page);
+  const P = { ...LIST_ITEM, state: "pending", pending: "import", title: ID, stale: false, features: {}, active: [], reason: "Being imported" };
+  await page.route(new RegExp(`/v1/console/projects/${ID}$`), (r) => r.fulfill({ json: P }));
+  await page.goto(`/console/app/projects/${ID}?tab=settings`);
+  await expect(page.getByTestId("remove-start")).toBeDisabled();
+  await expect(page.getByTestId("remove-note")).toContainText("import of this project is running");
+});

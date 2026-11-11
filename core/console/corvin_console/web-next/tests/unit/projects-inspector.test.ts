@@ -283,3 +283,13 @@ describe("an unfinished import nobody applies any more offers Repair (REVIEW-007
     expect(settingsSections({ ...base, stale: false }, {}).some((x) => x.id === "maintenance")).toBe(false);
   });
 });
+
+describe("Remove is held while an import of the project runs (REVIEW-0081 N29)", () => {
+  const base = { id: "p", path: "/x", template: "t@1", storage: "own", state: "pending", pending: "import" } as unknown as ProjectDetail;
+  it("running: off with a note; stale: on", () => {
+    const run = settingsSections({ ...base, stale: false }, {}).find((x) => x.id === "danger")?.actions.remove;
+    expect(run?.enabled).toBe(false);
+    expect(run?.note).toContain("import of this project is running");
+    expect(settingsSections({ ...base, stale: true }, {}).find((x) => x.id === "danger")?.actions.remove?.enabled).toBe(true);
+  });
+});

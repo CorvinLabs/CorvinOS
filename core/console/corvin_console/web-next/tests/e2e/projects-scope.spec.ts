@@ -260,3 +260,27 @@ test("switching the board's knowledge base closes an item that belongs to the ol
   await page.getByTestId("scope-select").selectOption("bound");
   await expect(page).not.toHaveURL(/item=/);
 });
+
+test("in the joined graph a knowledge base that cannot be read is named, the others are shown (REVIEW-0081 N28)", async ({ page }) => {
+  await stub(page);
+  await page.unroute(/\/v1\/console\/plugins\/corvin-knowledge\/graph(\?|$)/);
+  await page.route(/\/v1\/console\/plugins\/corvin-knowledge\/graph(\?|$)/, (r) => {
+    if (new URL(r.request().url()).searchParams.get("project")) return r.fulfill({ status: 404, json: { detail: "no such project" } });
+    return r.fulfill({ json: { entities: [{ id: "uid-bound", label: "T-0001", file: "b.md", type: "decision", title: "Bound decision", status: "accepted", tags: [] }],
+      relations: [], duplicate_rows: 0, graph_state: "ok", graph_error: null, repo_path: "/k" } });
+  });
+  await page.goto("/console/app/corvin-knowledge?scope=all");
+  await expect(page.getByTestId("knowledge-build-error")).toContainText("Plumbline");
+  await page.getByTestId("knowledge-search-input").fill("decision");
+  await expect(page.getByTestId("knowledge-search-hits")).toContainText("T-0001");
+});
+
+test("a project's board that cannot be read says so instead of 'not available on this build' (REVIEW-0081 N28)", async ({ page }) => {
+  await stub(page);
+  await page.unroute(/\/v1\/console\/task-tracking\/items/);
+  await page.route(/\/v1\/console\/task-tracking\/items/, (r) => new URL(r.request().url()).searchParams.get("scope")
+    ? r.fulfill({ status: 404, json: { detail: "no such project" } })
+    : r.fulfill({ json: { items: [], server_time: new Date().toISOString(), summary: { open: 0, in_progress: 0, blocked: 0, complete: 0, archived: 0, total: 0, overdue: 0, approvals_pending: 0, done_7d: 0, initiatives_active: 0 }, import_available: false } }));
+  await page.goto("/console/app/initiatives?scope=project:alpha");
+  await expect(page.getByTestId("tasks-not-available")).toContainText("Plumbline's knowledge base cannot be read right now");
+});

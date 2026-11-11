@@ -22,6 +22,8 @@ export function projectUnavailableReason(p: ProjectSummary): string | null {
   // the knowledge-base switch is in the project's Features tab (the Settings tab has none: REVIEW-0067 M2)
   if (p.features && p.features.kb !== true) return NO_KB_REASON;
   if (p.kb !== true) return p.features?.kb === true ? "knowledge base not created yet" : NO_KB_REASON;
+  // the board's and the graph's own rule, reported by the server: offering it would end in their refusal (REVIEW-0081 N28)
+  if (p.kb_problem) return `knowledge base cannot be read: ${p.kb_problem}`;
   return null;
 }
 

@@ -319,7 +319,7 @@ function Danger({ d, csrf, actions, onRemoved }: { d: ProjectDetail; csrf: strin
   const [open, setOpen] = useState(false);
   return (
     <div className="space-y-3">
-      {actions.remove && <RemoveRow projectId={d.id} csrf={csrf} onDone={onRemoved} />}
+      {actions.remove && <RemoveRow projectId={d.id} csrf={csrf} onDone={onRemoved} gate={actions.remove} />}
       {actions.delete && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" data-testid="delete-row">
           <p className="text-sm">{DELETE_ROW_TEXT}</p>
@@ -382,7 +382,7 @@ function DeleteFilesDialog({ d, csrf, open, onOpenChange }: { d: ProjectDetail; 
   );
 }
 
-function RemoveRow({ projectId, csrf, onDone }: { projectId: string; csrf: string; onDone: (msg: string) => void }) {
+function RemoveRow({ projectId, csrf, onDone, gate }: { projectId: string; csrf: string; onDone: (msg: string) => void; gate?: ActionGate }) {
   const [sure, setSure] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const mut = useMutation({
@@ -395,7 +395,8 @@ function RemoveRow({ projectId, csrf, onDone }: { projectId: string; csrf: strin
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm">Remove from the list — the folder and every file stay.</p>
         {!sure ? (
-          <Button size="sm" variant="outline" className="self-start sm:self-auto" onClick={() => setSure(true)} data-testid="remove-start">Remove from the list…</Button>
+          <Button size="sm" variant="outline" className="self-start sm:self-auto" onClick={() => setSure(true)} disabled={gate ? !gate.enabled : false}
+            title={gate?.note ?? undefined} data-testid="remove-start">Remove from the list…</Button>
         ) : (
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="destructive" onClick={() => mut.mutate()} disabled={mut.isPending} data-testid="remove-confirm">Yes, remove from the list</Button>
@@ -403,6 +404,7 @@ function RemoveRow({ projectId, csrf, onDone }: { projectId: string; csrf: strin
           </div>
         )}
       </div>
+      {gate && !gate.enabled && gate.note && <p className="text-xs text-muted-foreground" data-testid="remove-note">{gate.note}</p>}
       {msg && <p role="status" className="text-sm" data-testid="remove-message">{msg}</p>}
     </div>
   );

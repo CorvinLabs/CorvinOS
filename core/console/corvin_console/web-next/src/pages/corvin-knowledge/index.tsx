@@ -114,13 +114,22 @@ export function CorvinKnowledgePage() {
     queryKey: [...KEY_GRAPH, scopeKey, scope.kind === "all" ? pickable.map((p) => p.id).join(",") : ""],
     queryFn: async ({ signal }) => {
       const ids = graphScopes(scope, pickable.map((p) => p.id));
-      const parts = await Promise.all(ids.map(async (pid) => {
+      const load = async (pid: string | null) => {
         // a project graph that is missing or stale is built by the server first (kb index), which can take a moment
         const g = await api<GraphResponse>(`${BASE_PATH}/graph${pid ? `?project=${encodeURIComponent(pid)}` : ""}`, { signal, timeoutMs: 90_000 });
         const info: KnowledgeGraphPart = { projectId: pid ?? null, repoPath: g.repo_path ?? "", entities: g.entities.length,
           relations: g.relations.length, state: g.graph_state ?? (g.entities.length ? "ok" : "empty"), error: g.graph_error ?? null };
         return { projectId: pid ?? null, entities: g.entities.map((e) => ({ ...e, label: e.label ?? e.id })), relations: g.relations, info };
-      }));
+      };
+      // one knowledge base that cannot be read must not take the joined view down: it is named as a failed part, the rest is
+      // shown (REVIEW-0081 N28). A single scope still fails as a whole - there is nothing else to show.
+      const settled = ids.length > 1 ? await Promise.allSettled(ids.map((pid) => load(pid ?? null))) : null;
+      const parts = settled
+        ? settled.map((r, i) => r.status === "fulfilled" ? r.value : {
+            projectId: ids[i] ?? null, entities: [] as (KnowledgeEntity & { label: string })[], relations: [] as KnowledgeRelation[],
+            info: { projectId: ids[i] ?? null, repoPath: "", entities: 0, relations: 0, state: "error" as const,
+              error: r.reason instanceof Error ? r.reason.message : "this knowledge base could not be read" } })
+        : [await load(ids[0] ?? null)];
       const merged = mergeGraphs(parts);
       return { entities: merged.entities, relations: merged.relations, parts: parts.map((p) => p.info) } as KnowledgeGraph & { parts: KnowledgeGraphPart[] };
     },

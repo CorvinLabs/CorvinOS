@@ -1272,7 +1272,14 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   which removes the entry and its leftover folders and shows the same confirmation page as Remove (N22). `stale` and its reason come from the
   shared summary, so the list card ("Import unfinished") and the scope switchers ("import unfinished - Repair is on the
   project's page") say the same (REVIEW-0080 N25). The repair preview lists a missing `workspace.json (workspace marker)`
-  like any other pending write, so its Apply is offered (N26). A chain failure between two opening records of `_audited` closes the ones already
+  like any other pending write, so its Apply is offered (N26).
+- **One rule for "this project's knowledge base is carried"** (`kb_projection._project_kb_verdict`): `project_kbs` (board,
+  graph, writes) and the project list's `kb_problem` (switchers) both ask it, and it requires project.yaml to name THIS
+  project. The board's `items`/`summary` show only the projects the projector carries now (`_carried_only`), so the "all"
+  view never shows the cards of a removed, trashed, switched-off or mismatched project. The joined graph loads its parts with
+  `allSettled` and names a part that cannot be read; a scoped Tasks 404 says that project's knowledge base cannot be read.
+  "Remove from the list" is refused (409 `import_running`) and drawn disabled while an import of the project runs
+  (REVIEW-0081 N27-N29). A chain failure between two opening records of `_audited` closes the ones already
   open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a
   feature switch (one record per feature) and repair record `outcome=requested` first and close with `applied` or `error`,

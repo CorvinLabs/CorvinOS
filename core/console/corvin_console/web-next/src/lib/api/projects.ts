@@ -23,6 +23,8 @@ export interface ProjectSummary {
   pending?: "import";
   /** A pending import that no apply runs any more: Repair removes it (REVIEW-0079 N22). */
   stale?: boolean;
+  /** Why the board and the graph do not carry this project's knowledge base although it is switched on (REVIEW-0081 N28). */
+  kb_problem?: string | null;
   title?: string;
   docs_mode?: "nested" | "plain";
   /** Every feature the template offers, on or off. */

@@ -358,6 +358,23 @@ class AdoptRenameMove(_Base):
             self.assertEqual(r.status_code, 200, r.text)
             self.assertTrue((mr / "workspace.json").exists())
 
+    def test_remove_from_the_list_is_refused_while_an_import_of_the_project_runs(self):
+        # REVIEW-0081 N29: removing the entry during a running import left the finished import in a folder nobody could open
+        from core.projects import registry
+        from core.projects.fsutil import file_lock
+        with self._ctx() as c:
+            pid, root = self._new(c)
+            registry.set_pending("_default", pid, "import")
+            lock = registry.registry_path("_default").with_name(f"project-{pid}.lock")
+            with file_lock(lock, timeout=1.0):                                  # what a running apply holds
+                r = c.own.delete(f"{_URL}/{pid}", headers=self._h(c))
+                self.assertEqual(r.status_code, 409, r.text)
+                self.assertIn("import of this project is running", r.text)
+                self.assertIsNotNone(registry.get("_default", pid))
+            r = c.own.delete(f"{_URL}/{pid}", headers=self._h(c))              # an unfinished import nobody applies: removable
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertIsNone(registry.get("_default", pid))
+
     def test_a_successful_adopt_closes_its_request(self):
         with self._ctx() as c:
             dst = c.root / "plain-two"

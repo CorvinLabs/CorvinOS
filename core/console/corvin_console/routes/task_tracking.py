@@ -174,6 +174,7 @@ def get_items(
         raise
     for it in body["items"]:
         it["project"] = _project_of(it)
+    _carried_only(rec.tenant_id, body)
     if want is not ...:
         body["items"] = [it for it in body["items"] if it["project"] == want]
         body["scope"] = scope
@@ -187,9 +188,22 @@ def get_items(
     return body
 
 
+def _carried_only(tenant_id: str, body: dict) -> None:
+    """A project's cards stay in the store when the projector stops carrying it (removed, in the Trash, knowledge base off, a
+    project.yaml that names another project). The board and its counters show only the projects the projector carries NOW, so
+    the "all" view never shows what every scoped view refuses (REVIEW-0081 N27)."""
+    from .. import kb_projection as _kp  # noqa: PLC0415
+    carried = set(_kp.project_status(tenant_id))
+    proj = [(it, it.get("project", _project_of(it))) for it in body["items"]]
+    if any(p is not None and p not in carried for _, p in proj):
+        body["items"] = [it for it, p in proj if p is None or p in carried]
+        body["summary"] = service.summary(body["items"], service.parse_ts(body["server_time"]) or time.time())
+
+
 @router.get("/summary")
 def get_summary(rec: Annotated[session_auth.SessionRecord, Depends(require_session)]) -> dict:
     body = service.list_items(rec.tenant_id)
+    _carried_only(rec.tenant_id, body)
     return {"server_time": body["server_time"], "summary": body["summary"]}
 
 

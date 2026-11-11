@@ -627,74 +627,107 @@ def _project_sources_contained(docs: Path) -> bool:
         return False
 
 
-def project_kbs(tenant_id: str, *, only: str | None = None) -> list[tuple[str, Path]]:
-    """``[(project_id, docs_path)]`` of this tenant's registered projects whose manifest names
-    this tenant and turns ``kb`` on, and whose ``docs/`` is a knowledge base. Anything else is
-    skipped (logged at debug), never guessed: a path resolving into ANOTHER tenant's home, a
-    manifest of another tenant, a duplicate id. ``only``: check just that registry entry (a request
-    names one project; the other projects' folders and .git walks are not touched - REVIEW-0066 M2)."""
+def _registry_entries(tenant_id: str) -> list[dict[str, Any]]:
     try:
         reg = json.loads(project_registry_path(tenant_id).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return []
     entries = reg.get("projects") if isinstance(reg, dict) else None
-    if not isinstance(entries, list):
-        return []
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
+def _project_kb_verdict(tenant_id: str, e: dict[str, Any], own: Path, tenants_root: Path) -> tuple[Path | None, str | None]:
+    """The ONE rule for "this project's knowledge base is projected" (board, graph, writes) - ``(docs, None)`` when it is, else
+    ``(None, reason)``. The console's project list asks the same rule (``project_kb_problem``) so a scope switcher never offers a
+    project the board and the graph then refuse (REVIEW-0081 N27, N28). The reason is a sentence for the operator; never a path."""
+    pid = e.get("id")
+    raw = e.get("path")
+    if not isinstance(pid, str) or not _PROJECT_ID.match(pid) or not isinstance(raw, str):
+        return None, "the registry entry is not usable"
+    if e.get("pending") or e.get("storage") == "trashed":
+        return None, "an import that is not applied yet, or in the Trash"   # ADR-2323 D13, REVIEW-0061 M12; ADR-2321 D12
+    try:
+        root = Path(raw).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, "the project folder is missing"
+    if root.is_relative_to(tenants_root) and not root.is_relative_to(own):
+        log.debug("project %s of %s resolves into another tenant's home: skipped", pid, tenant_id)
+        return None, "the project folder lies in another tenant's home"
+    man = _project_manifest(root)
+    feats = man.get("features") if isinstance(man.get("features"), dict) else {}
+    # the manifest must name THIS project of THIS tenant - the same rule as the project list's state (REVIEW-0081 N27)
+    if man.get("tenant") != tenant_id or man.get("id") != pid:
+        return None, "project.yaml does not name this project"
+    if feats.get("kb") is not True:
+        return None, "the knowledge base is switched off"
+    docs = root / "docs"
+    from core.projects.fsutil import passes_link  # noqa: PLC0415
+    # docs/ (or anything below it on the way to kb/) must be the project's own folder: a junction there could hand this
+    # tenant another tenant's knowledge base, its board and its graph (adversarial review 2026-11-10)
+    if passes_link(root, docs / "kb" / "_meta" / "sources.yaml"):
+        log.debug("project %s of %s has a link in docs/: skipped", pid, tenant_id)
+        return None, "docs/ is reached through a link"
+    try:
+        real_docs = docs.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, "docs/ is missing"
+    if not real_docs.is_relative_to(root) or (real_docs.is_relative_to(tenants_root) and not real_docs.is_relative_to(own)):
+        return None, "docs/ lies outside the project"
+    if not (docs / "kb" / "_meta" / "sources.yaml").is_file():
+        return None, "docs/kb/_meta/sources.yaml is missing"
+    if not _project_sources_contained(docs):
+        log.debug("project %s of %s: sources.yaml names a folder outside its docs/: skipped", pid, tenant_id)
+        return None, "docs/kb/_meta/sources.yaml names a folder outside docs/"
+    try:
+        from core.projects import changes as _ch  # noqa: PLC0415
+        _ch.require_own_repo(docs)
+        _ch.require_own_repo(root)
+    except Exception:  # noqa: BLE001 - a repository the console does not read (junction, gitdir file, shared objects): not projected
+        log.debug("project %s of %s: its git repository is not one the console reads: skipped", pid, tenant_id)
+        return None, "its git repository is not one the console reads"
+    return docs, None
+
+
+def _tenant_roots(tenant_id: str) -> tuple[Path, Path] | None:
     try:
         own = tenant_kb_path(tenant_id).parent.resolve()
     except OSError:
+        return None
+    return own, own.parent
+
+
+def project_kbs(tenant_id: str, *, only: str | None = None) -> list[tuple[str, Path]]:
+    """``[(project_id, docs_path)]`` of this tenant's registered projects whose knowledge base is projected - the rule is
+    :func:`_project_kb_verdict`. Anything else is skipped (logged at debug), never guessed. ``only``: check just that registry
+    entry (a request names one project; the other projects' folders and .git walks are not touched - REVIEW-0066 M2)."""
+    roots = _tenant_roots(tenant_id)
+    if roots is None:
         return []
-    tenants_root = own.parent
+    own, tenants_root = roots
     out: list[tuple[str, Path]] = []
     seen: set[str] = set()
-    for e in entries:
-        pid = e.get("id") if isinstance(e, dict) else None
-        raw = e.get("path") if isinstance(e, dict) else None
-        if not isinstance(pid, str) or not _PROJECT_ID.match(pid) or pid in seen or not isinstance(raw, str):
+    for e in _registry_entries(tenant_id):
+        pid = e.get("id")
+        if pid in seen or (only is not None and pid != only):
             continue
-        if only is not None and pid != only:
+        docs, _why = _project_kb_verdict(tenant_id, e, own, tenants_root)
+        if docs is None:
             continue
-        if e.get("pending") or e.get("storage") == "trashed":
-            continue                    # an import that is not applied yet (ADR-2323 D13, REVIEW-0061 M12); in the trash (ADR-2321 D12)
-        try:
-            root = Path(raw).expanduser().resolve(strict=True)
-        except (OSError, RuntimeError):
-            continue
-        if root.is_relative_to(tenants_root) and not root.is_relative_to(own):
-            log.debug("project %s of %s resolves into another tenant's home: skipped", pid, tenant_id)
-            continue
-        man = _project_manifest(root)
-        feats = man.get("features") if isinstance(man.get("features"), dict) else {}
-        if man.get("tenant") != tenant_id or feats.get("kb") is not True:
-            continue
-        docs = root / "docs"
-        from core.projects.fsutil import passes_link  # noqa: PLC0415
-        # docs/ (or anything below it on the way to kb/) must be the project's own folder: a junction there could hand this
-        # tenant another tenant's knowledge base, its board and its graph (adversarial review 2026-11-10)
-        if passes_link(root, docs / "kb" / "_meta" / "sources.yaml"):
-            log.debug("project %s of %s has a link in docs/: skipped", pid, tenant_id)
-            continue
-        try:
-            real_docs = docs.resolve(strict=True)
-        except (OSError, RuntimeError):
-            continue
-        if not real_docs.is_relative_to(root) or (real_docs.is_relative_to(tenants_root) and not real_docs.is_relative_to(own)):
-            continue
-        if not (docs / "kb" / "_meta" / "sources.yaml").is_file():
-            continue
-        if not _project_sources_contained(docs):
-            log.debug("project %s of %s: sources.yaml names a folder outside its docs/: skipped", pid, tenant_id)
-            continue
-        try:
-            from core.projects import changes as _ch  # noqa: PLC0415
-            _ch.require_own_repo(docs)
-            _ch.require_own_repo(root)
-        except Exception:  # noqa: BLE001 - a repository the console does not read (junction, gitdir file, shared objects): not projected
-            log.debug("project %s of %s: its git repository is not one the console reads: skipped", pid, tenant_id)
-            continue
-        seen.add(pid)
-        out.append((pid, docs))
+        seen.add(str(pid))
+        out.append((str(pid), docs))
     return out
+
+
+def project_kb_problem(tenant_id: str, project_id: str) -> str | None:
+    """Why this project's knowledge base is NOT projected (board, graph), or None when it is - for the project list and the scope
+    switchers, so they offer exactly what the board and the graph accept (REVIEW-0081 N28)."""
+    roots = _tenant_roots(tenant_id)
+    if roots is None:
+        return "the tenant's home cannot be read"
+    for e in _registry_entries(tenant_id):
+        if e.get("id") == project_id:
+            return _project_kb_verdict(tenant_id, e, *roots)[1]
+    return "the project is not registered"
 
 
 def project_status(tenant_id: str) -> dict[str, Any]:
