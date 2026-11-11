@@ -1233,3 +1233,327 @@ def _validate(path: Path, known: Optional[Any]) -> dict[str, Any]:
             return {"ok": True, "message": "", "origin": "unverified", "exporter": dict(env["exporter"]),
                     "created_at": env["created_at"], "projects": out_projects,
                     "counts": {"files": len(listed), "bytes": sum(s for _h, s in listed.values())}}
+
+
+# ── import apply: extraction and the git step (T-0400, T-0411; ADR-2323 Decision 13 steps 3 and 6) ───────────────────────
+#
+# Only ever run on a staged file that ``validate`` accepted a moment before (the service re-validates first). Extraction
+# writes into a fresh sibling directory: per entry ``os.open(O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW)``, directories by ``mkdir``
+# without following, never a link created, every byte re-hashed against the envelope (a staging file changed after its
+# validation is refused, nothing trusted). The git step never clones and never checks out: an empty repository is
+# initialised beside the project, the bundle is verified, its ref list judged, unbundled and fsck'd, the refs written, and
+# the ``.git`` directory moved in; the work tree stays what extraction wrote and only the index is read from HEAD.
+
+IMPORTING = ".importing-"
+GITIMPORT = ".gitimport-"
+GIT_IMPORT_WARNING = "Git history could not be imported"
+SYMLINKS_NOTE = ("Links tracked in git were not written to disk; a git checkout writes them back as plain text files "
+                 "naming their target (core.symlinks is off in this repository).")
+MAX_IMPORT_REFS = 10_000
+_EXEC_NAMES = frozenset({"gradlew", "mvnw"})
+_OID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_REF_COMPONENT_BAD = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
+_BUNDLE_HEADERS = (b"# v2 git bundle\n", b"# v3 git bundle\n")
+
+
+class ImportFailed(Exception):
+    """Extraction or the target refused; ``reason_class`` for the route (``folder_not_empty``, ``integrity``, ...)."""
+
+    def __init__(self, reason_class: str, message: str):
+        super().__init__(message)
+        self.reason_class = reason_class
+        self.message = message
+
+
+@dataclass
+class GitImportResult:
+    ok: bool
+    warning: Optional[str] = None
+    notes: list[str] = field(default_factory=list)
+    refs: int = 0
+
+
+def sibling(parent: Path, pid: str, kind: str) -> Path:
+    """``<parent>/<pid><kind><8 hex>`` - hex only, so the name carries no path-gate hint (REVIEW-0061 m4)."""
+    return Path(parent) / f"{pid}{kind}{secrets.token_hex(4)}"
+
+
+def leftovers(parent: Path, pid: str, *, strict: bool = False) -> list[Path]:
+    """The siblings an unfinished import of *pid* left in *parent* (bounded listing, never following a link): every
+    ``<pid>.importing-*`` / ``<pid>.gitimport-*`` for the doctor; with ``strict`` only the names an import creates
+    (``-<8 hex>``) - the only ones repair deletes."""
+    out: list[Path] = []
+    pat = re.escape(pid) + (r"\.(?:importing|gitimport)-[0-9a-f]{8}" if strict else r"\.(?:importing|gitimport)-.+")
+    try:
+        with os.scandir(parent) as it:
+            for n, e in enumerate(it):
+                if n > 10_000:
+                    break
+                if re.fullmatch(pat, e.name):
+                    out.append(Path(e.path))
+    except OSError:
+        return out
+    return sorted(out)
+
+
+def _mkdirs(dest: str, parts: list[str]) -> str:
+    cur = dest
+    for p in parts:
+        cur = os.path.join(cur, p)
+        try:
+            os.mkdir(cur, 0o755)
+        except FileExistsError:
+            st = os.lstat(cur)
+            if not stat.S_ISDIR(st.st_mode) or is_link(cur):
+                raise ImportFailed("integrity", "The bundle's contents do not match its manifest.") from None
+    return cur
+
+
+def _file_mode(name: str) -> int:
+    return 0o755 if name.endswith(".sh") or name in _EXEC_NAMES else 0o644
+
+
+def extract_project(zip_path: Path, pid: str, dest: Path, *, kb: bool = True, history: bool = True) -> dict[str, int]:
+    """Write the entries of ``projects/<pid>/`` into the EMPTY directory *dest* (Decision 13 step 3). ``kb=False`` skips
+    ``docs/kb/**``, ``history=False`` the two git payloads. Every file is created ``O_EXCL|O_NOFOLLOW`` and hashed while it
+    is written; a mismatch against the envelope (the staging changed after its validation) raises :class:`ImportFailed`."""
+    dest_s = os.path.abspath(dest)
+    if is_link(dest_s) or not os.path.isdir(dest_s) or os.listdir(dest_s):
+        raise ImportFailed("folder_not_empty", "That folder already exists and is not empty.")
+    prefix = f"{PROJECTS_PREFIX}{pid}/"
+    files = nbytes = 0
+    with zipfile.ZipFile(zip_path) as zf:
+        info_env = zf.getinfo(ENVELOPE_NAME)
+        if info_env.file_size > LIMITS["max_envelope_bytes"]:
+            raise ImportFailed("envelope", "This file is not a valid project bundle (its manifest is too large).")
+        env = json.loads(zf.read(info_env).decode("utf-8"))
+        proj = next((p for p in env.get("projects", []) if isinstance(p, dict) and p.get("id") == pid), None)
+        if proj is None:
+            raise ImportFailed("envelope", "This file is not a valid project bundle (the project is not in it).")
+        listed = {f["path"]: (f["sha256"], f["size"]) for f in proj["files"]}
+        for info in sorted(zf.infolist(), key=lambda i: i.header_offset):
+            name = info.filename
+            if not name.startswith(prefix):
+                continue
+            rel = name[len(prefix):].rstrip("/")
+            if not rel:
+                continue
+            parts = rel.split("/")
+            if any(p in ("", ".", "..") for p in parts) or V1_PROTECTED(PurePosixPath(*parts)) is not None \
+                    or bundle_rules.export_payload_problem(parts) or (info.external_attr >> 16) & 0o170000 == 0o120000:
+                raise ImportFailed("container", "This file is not a valid project bundle (it contains a protected entry).")
+            if info.is_dir():
+                _mkdirs(dest_s, parts)
+                continue
+            if not kb and parts[:2] == ["docs", "kb"]:
+                continue
+            if not history and rel in bundle_rules.GIT_PAYLOADS:
+                continue
+            want = listed.get(name)
+            if want is None:
+                raise ImportFailed("integrity", "The bundle's contents do not match its manifest.")
+            sha, size = want
+            parent = _mkdirs(dest_s, parts[:-1])
+            target = os.path.join(parent, parts[-1])
+            mode = _file_mode(parts[-1])
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_BINARY, mode)
+            h = hashlib.sha256()
+            n = 0
+            with os.fdopen(fd, "wb") as out, zf.open(info) as src:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(out.fileno(), mode)
+                while True:
+                    b = src.read(_CHUNK)
+                    if not b:
+                        break
+                    n += len(b)
+                    if n > size:
+                        break
+                    h.update(b)
+                    out.write(b)
+            if n != size or h.hexdigest() != sha:
+                raise ImportFailed("integrity", "The bundle's contents do not match its manifest.")
+            files += 1
+            nbytes += n
+    return {"files": files, "bytes": nbytes}
+
+
+def import_ref_ok(ref: str) -> bool:
+    """A ref an import accepts (Decision 13 step 6c): ``refs/heads/*`` or ``refs/tags/*`` that passes git's ref-name rules
+    (``git check-ref-format``: no ``..``, ``@{``, control characters, space, ``~^:?*[\\``, no component starting with ``.``
+    or ending in ``.lock``, no empty component, no trailing ``/`` or ``.``, not ``@``)."""
+    if not isinstance(ref, str) or len(ref) > 1000 or not ref.startswith(("refs/heads/", "refs/tags/")):
+        return False
+    if ".." in ref or "@{" in ref or ref.endswith(("/", ".")) or _REF_COMPONENT_BAD.search(ref):
+        return False
+    comps = ref.split("/")
+    if len(comps) < 3:
+        return False
+    for c in comps:
+        if not c or c.startswith(".") or c.endswith(".lock") or c == "@":
+            return False
+    return True
+
+
+def _bundle_header_ok(path: Path) -> bool:
+    """The bundle's text header: a v2/v3 signature, no prerequisite (a thin bundle), no capability but the object format
+    (a filtered, partial bundle is refused too)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(1 << 16)
+    except OSError:
+        return False
+    if not head.startswith(_BUNDLE_HEADERS) or b"\n\n" not in head:
+        return False
+    for line in head.split(b"\n\n", 1)[0].split(b"\n")[1:]:
+        if line.startswith(b"-"):
+            return False
+        if line.startswith(b"@") and line not in (b"@object-format=sha1", b"@object-format=sha256"):
+            return False
+    return True
+
+
+def _gitx(cwd: Path, env: dict[str, str], *args: str, timeout: int = _GIT_TIMEOUT, stdin: Optional[bytes] = None):
+    argv = ["git", "--no-pager", "-C", str(cwd), *changes.neutral_git_args(Path(cwd)), *args]
+    return subprocess.run(argv, capture_output=True, env=env, timeout=timeout, input=stdin)
+
+
+def _import_base_env() -> dict[str, str]:
+    env = changes._env()
+    env.update(GIT_ALLOW_PROTOCOL="none", GIT_NO_LAZY_FETCH="1")
+    env.pop("GIT_DIR", None)
+    env.pop("GIT_WORK_TREE", None)
+    return env
+
+
+def git_import(tree: Path, bundle_file: Path, head: str) -> GitImportResult:
+    """Decision 13 step 6 for one repository: make *tree* a git repository holding exactly the branches and tags of
+    *bundle_file* with ``HEAD`` -> *head*, its index read from HEAD and the work tree left as extracted. Any failure drops
+    the part: nothing of it stays (no ``.git`` in *tree*, no temporary repository) and the result carries the warning."""
+    tree = Path(os.path.abspath(tree))
+    tmp = sibling(tree.parent, tree.name, GITIMPORT)
+    base = _import_base_env()
+    moved = False
+
+    def drop() -> GitImportResult:
+        shutil.rmtree(tmp, ignore_errors=True)
+        if moved:
+            shutil.rmtree(tree / bundle_rules.GIT_DIR, ignore_errors=True)
+        changes.forget_repo_cache()
+        return GitImportResult(ok=False, warning=GIT_IMPORT_WARNING)
+
+    if os.path.lexists(tree / bundle_rules.GIT_DIR) or is_link(tree) or not tree.is_dir():
+        return GitImportResult(ok=False, warning=GIT_IMPORT_WARNING)
+    if not _bundle_header_ok(Path(bundle_file)):
+        return GitImportResult(ok=False, warning=GIT_IMPORT_WARNING)
+    try:
+        # a. an empty repository beside the project: no template (no hooks, no config from a template directory)
+        r = _gitx(tree.parent, base, "init", "-q", "--template=", str(tmp))
+        if r.returncode != 0 or not (tmp / bundle_rules.GIT_DIR).is_dir():
+            return drop()
+        env = changes.neutral_git_env(tmp, base)
+        bundle_abs = os.path.abspath(bundle_file)
+        # b. verify (a thin bundle fails here too: its prerequisites are not in an empty repository)
+        if _gitx(tmp, env, "bundle", "verify", "-q", bundle_abs).returncode != 0:
+            return drop()
+        # c. the ref list: only branches and tags with valid names, at most 10 000
+        lh = _gitx(tmp, env, "bundle", "list-heads", bundle_abs, timeout=120)
+        if lh.returncode != 0:
+            return drop()
+        refs: list[tuple[str, str]] = []
+        for line in lh.stdout.decode("utf-8", "replace").splitlines():
+            oid, _sp, ref = line.partition(" ")
+            if ref == "HEAD":
+                continue
+            if not _OID_RE.match(oid) or not import_ref_ok(ref):
+                return drop()
+            refs.append((ref, oid))
+            if len(refs) > MAX_IMPORT_REFS:
+                return drop()
+        names = [x for x, _ in refs]
+        if not refs or head not in names or len(set(names)) != len(names):
+            return drop()
+        # d. unbundle: writes the pack, no transport, no checkout, no remote
+        if _gitx(tmp, env, "bundle", "unbundle", bundle_abs).returncode != 0:
+            return drop()
+        # e. every object checked
+        if _gitx(tmp, env, "fsck", "--strict", "--no-dangling", "--no-progress").returncode != 0:
+            return drop()
+        # f. the refs, one transaction (update-ref --stdin applies git's own ref-name check to each one again)
+        lines = "".join(f"create {ref} {oid}\n" for ref, oid in refs).encode("utf-8")
+        if _gitx(tmp, env, "update-ref", "--stdin", stdin=lines).returncode != 0:
+            return drop()
+        # g. HEAD
+        if _gitx(tmp, env, "symbolic-ref", "HEAD", head).returncode != 0:
+            return drop()
+        # h. the repository moves into the tree (siblings: same disk, one rename)
+        os.rename(tmp / bundle_rules.GIT_DIR, tree / bundle_rules.GIT_DIR)
+        moved = True
+        shutil.rmtree(tmp, ignore_errors=True)
+        changes.forget_repo_cache()
+        tenv = changes.neutral_git_env(tree, base)
+        # i. the index from HEAD; the work tree is what extraction wrote
+        if _gitx(tree, tenv, "read-tree", "HEAD").returncode != 0:
+            return drop()
+        # j. a later checkout writes a tracked link as a text file, never a link (REVIEW-0062 N6)
+        if _gitx(tree, tenv, "config", "--local", "core.symlinks", "false").returncode != 0:
+            return drop()
+        notes = _import_notes(tree, tenv)
+        return GitImportResult(ok=True, notes=notes, refs=len(refs))
+    except (OSError, subprocess.TimeoutExpired, changes.ChangesError):
+        return drop()
+
+
+def _import_notes(tree: Path, env: dict[str, str]) -> list[str]:
+    """What ``git status`` will show and why: tracked links and tracked files the bundle left out read as deleted."""
+    notes: list[str] = []
+    ls = _gitx(tree, env, "ls-files", "-s", "-z", timeout=120)
+    links = []
+    for rec in ls.stdout.decode("utf-8", "surrogateescape").split("\0"):
+        if rec.startswith("120000 ") and "\t" in rec:
+            links.append(rec.split("\t", 1)[1])
+    gone = _gitx(tree, env, "ls-files", "-d", "-z", timeout=120)
+    deleted = [x for x in gone.stdout.decode("utf-8", "surrogateescape").split("\0") if x and x not in links]
+    if links:
+        notes.append(SYMLINKS_NOTE + " Links: " + ", ".join(links[:10]) + (" ..." if len(links) > 10 else ""))
+    if deleted:
+        notes.append("Files tracked in git but not in the bundle show as deleted in git status: "
+                     + ", ".join(deleted[:10]) + (" ..." if len(deleted) > 10 else ""))
+    return notes
+
+
+def import_git(tree: Path, git: Optional[dict[str, str]]) -> GitImportResult:
+    """Decision 13 step 6 for a project: ``history.bundle`` into the project repository and ``docs-history.bundle`` into
+    ``docs/`` (each with its envelope head), then ``<tree>/.corvin-export/`` removed. A dropped or absent part leaves that
+    repository without git; the caller runs ``git init`` as the ``core`` fragment does. ``ok`` is the root part's."""
+    tree = Path(os.path.abspath(tree))
+    git = git or {}
+    out = GitImportResult(ok=False)
+    for inner, key, where in ((bundle_rules.HISTORY_BUNDLE, "head", tree), (bundle_rules.DOCS_HISTORY_BUNDLE, "docs_head", tree / "docs")):
+        f = tree / inner
+        if key not in git or is_link(f) or not f.is_file():
+            continue
+        if passes_link_safe(tree, where) or not where.is_dir():
+            res = GitImportResult(ok=False, warning=GIT_IMPORT_WARNING)
+        else:
+            res = git_import(where, f, git[key])
+        if key == "head":
+            out.ok, out.refs = res.ok, res.refs
+        if res.warning and res.warning not in ([out.warning] if out.warning else []):
+            out.warning = res.warning
+        out.notes += [("docs/: " + n) if key == "docs_head" else n for n in res.notes]
+    ex = tree / bundle_rules.EXPORT_DIR
+    if os.path.lexists(ex):
+        if is_link(ex) or not ex.is_dir():
+            os.unlink(ex)
+        else:
+            shutil.rmtree(ex)
+    return out
+
+
+def passes_link_safe(root: Path, target: Path) -> bool:
+    from .fsutil import passes_link  # noqa: PLC0415
+    try:
+        return passes_link(root, target)
+    except (OSError, ValueError):
+        return True

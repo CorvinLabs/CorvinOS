@@ -317,7 +317,9 @@ def _refuse_foreign_config(gitdir: Path, base: dict[str, str]) -> None:
         if is_link(f) or not f.is_file():
             raise ChangesError("the repository's config is not a regular file; the console refuses it")
         try:
-            r = subprocess.run(["git", "config", "--file", str(f), "--no-includes", "--list", "-z"], capture_output=True, timeout=10,
+            # the fixed -c set here too: every git call on a project carries it (ADR-2323 Decision 13, T-0411 spy)
+            r = subprocess.run(["git", *neutral_git_args(Path(f).parent), "config", "--file", str(f), "--no-includes", "--list", "-z"],
+                               capture_output=True, timeout=10,
                                env={k: v for k, v in base.items() if not k.startswith("GIT_")})
         except (OSError, subprocess.TimeoutExpired):
             raise ChangesError("the repository's configuration could not be read in time") from None
