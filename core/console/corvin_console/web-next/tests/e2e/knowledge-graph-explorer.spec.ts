@@ -112,7 +112,8 @@ test("the whole graph is drawn as separate islands, not one clump; Force is stil
   await page.getByRole("button", { name: "All", exact: true }).click();
   const canvas = page.getByTestId("knowledge-graph-canvas");
   await expect(canvas).toHaveAttribute("data-layout", "islands", { timeout: 20_000 });
-  expect(Number(await canvas.getAttribute("data-islands"))).toBeGreaterThanOrEqual(8);
+  // the island count follows the loaded graph; on a busy host the first layout can still be of a smaller one
+  await expect.poll(async () => Number(await canvas.getAttribute("data-islands")), { timeout: 30_000 }).toBeGreaterThanOrEqual(8);
   await expect(page.getByRole("button", { name: "Islands", exact: true })).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Force", exact: true }).click();
   await expect(canvas).toHaveAttribute("data-layout", "force");

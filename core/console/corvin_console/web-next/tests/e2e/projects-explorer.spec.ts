@@ -86,7 +86,7 @@ test("a turn is followed live: working card, tool rows collapse, file rows link,
   expect(texts[1]).toContain("Ran pytest");
   expect(texts[2]).toContain("Read invoice.py");
   expect(texts[2]).toContain("×3");                                                            // three Reads, one row
-  await expect(page.getByTestId("explorer-link")).toHaveAttribute("href", /\/app\/initiatives\?scope=project:alpha/);
+  await expect(page.getByTestId("explorer-link")).toHaveAttribute("href", /\/app\/initiatives\?scope=project:alpha&q=T-0012$/);
   await page.locator('[data-testid="explorer-filter"][data-filter="files"]').click();
   await expect(page.getByTestId("explorer-row")).toHaveCount(1);
   await page.locator('[data-testid="explorer-filter"][data-filter="tools"]').click();

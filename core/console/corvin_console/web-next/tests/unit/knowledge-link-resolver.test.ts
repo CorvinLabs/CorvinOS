@@ -127,3 +127,31 @@ describe("the Links and Linked from lists open the node of the document's own kn
     expect(resolveKey(index, "UID-A", null)).toBe("UID-A");
   });
 });
+
+describe("a project's document never links into another knowledge base (REVIEW-0073 N10)", () => {
+  // Corvin (bound, unqualified labels) has T-0002 and ADR-0009; project p has ADR-0009 twice and no T-0002
+  const joined = buildLinkIndex([
+    { id: "C1", uid: "C1", label: "T-0002", file: "T-0002-c.md", scope: null },
+    { id: "C2", uid: "C2", label: "ADR-0009", file: "ADR-0009-c.md", scope: null },
+    { id: "P1", uid: "P1", label: "p/ADR-0009", file: "ADR-0009-p1.md", scope: "p" },
+    { id: "P2", uid: "P2", label: "p/ADR-0009", file: "ADR-0009-p2.md", scope: "p" },
+    { id: "P3", uid: "P3", label: "p/T-0001", file: "T-0001-p.md", scope: "p" },
+  ]);
+  it("an id missing from the project's own base stays plain text", () => {
+    expect(linkifyMarkdown("see T-0002", joined, "P3", "p")).toBe("see T-0002");
+  });
+  it("an id ambiguous in the project's own base stays plain text", () => {
+    expect(linkifyMarkdown("see ADR-0009", joined, "P3", "p")).toBe("see ADR-0009");
+  });
+  it("a relative .md link to another base's file stays as written, in either direction", () => {
+    expect(linkifyMarkdown("[f](ADR-0009-c.md)", joined, "P3", "p")).toBe("[f](ADR-0009-c.md)");
+    expect(linkifyMarkdown("[f](T-0001-p.md)", joined, "C1", null)).toBe("[f](T-0001-p.md)");
+  });
+  it("Corvin's document does not reach into a project either", () => {
+    expect(linkifyMarkdown("see T-0001", joined, "C1", null)).toBe("see T-0001");
+  });
+  it("the project's own ids still link, and a qualified label in a wikilink names its base explicitly", () => {
+    expect(linkifyMarkdown("see T-0001", joined, "C1", "p")).toBe("see [T-0001](?node=P3)");
+    expect(linkifyMarkdown("see [[p/T-0001]]", joined, "C1", null)).toBe("see [p/T-0001](?node=P3)");
+  });
+});

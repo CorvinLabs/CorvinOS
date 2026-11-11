@@ -63,12 +63,18 @@ function buildScoped(entities: LinkTarget[]): Map<string, ScopedLookups> | undef
   return res;
 }
 
-/** The lookups a document of `scope` resolves against: its own knowledge base first, then the whole view. */
+/**
+ * The lookups a document of `scope` resolves against: ONLY its own knowledge base. A project and Corvin both number from T-0001, so a
+ * project's id never means another knowledge base's node, and an id that is missing from (or ambiguous in) the document's own base stays
+ * plain text - the global lookups must not show through (REVIEW-0073 N10). What may cross is a qualified label (`alpha/T-0001`), which
+ * names its knowledge base explicitly, in a wikilink.
+ */
 export function viewFor(index: LinkIndex, scope: string | null | undefined): LinkIndex {
   const own = scope === undefined ? undefined : index.scoped?.get(scope ?? "");
   if (!own) return index;
-  const layer = (own: Map<string, string>, all: Map<string, string>) => new Map([...all, ...own]);
-  return { byLabel: layer(own.byLabel, index.byLabel), byKey: layer(own.byKey, index.byKey), byFile: layer(own.byFile, index.byFile), scoped: index.scoped };
+  const byLabel = new Map(own.byLabel);
+  index.byLabel.forEach((v, k) => { if (k.includes("/") && !byLabel.has(k)) byLabel.set(k, v); });
+  return { byLabel, byKey: own.byKey, byFile: own.byFile, scoped: index.scoped };
 }
 
 /**

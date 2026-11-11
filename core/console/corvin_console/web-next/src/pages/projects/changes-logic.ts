@@ -58,10 +58,14 @@ export function parseDiff(diff: string): DiffLine[] {
   });
 }
 
-/** Where an id found in a file name or commit subject leads: tasks to the project's board, the rest to its graph. */
+/**
+ * Where an id found in a file name or commit subject leads: a task to the project's board filtered to that id (a KB task's title
+ * starts with it), anything else to that node of the project's graph (`?node=<human id>` resolves in one project's view).
+ */
 export function linkTarget(projectId: string, l: ChangeLink): string {
   const scope = `scope=project:${encodeURIComponent(projectId)}`;
-  return l.kind === "task" ? `/app/initiatives?${scope}` : `/app/corvin-knowledge?${scope}`;
+  const id = encodeURIComponent(l.id);
+  return l.kind === "task" ? `/app/initiatives?${scope}&q=${id}` : `/app/corvin-knowledge?${scope}&node=${id}`;
 }
 
 /** "5 min ago" for the commit list; absolute date once it is older than two days. */

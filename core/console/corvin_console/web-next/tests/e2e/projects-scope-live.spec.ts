@@ -55,8 +55,9 @@ for (const t of ["light", "dark"] as const) {
       await page.getByTestId("scope-select").selectOption(`project:${PID}`);
       await expect(page).toHaveURL(new RegExp(`scope=project(%3A|:)${PID}`));
       await expect(counts).toContainText(`: `, { timeout: 30_000 });
-      await expect(counts).not.toContainText("All knowledge bases");
-      await expect(page.getByTestId("kpi-scope-note")).not.toContainText("All knowledge bases");
+      // the project's answer can take a while on a busy host (the projector may be rebuilding its graph): wait for it, not 5 s
+      await expect(counts).not.toContainText("All knowledge bases", { timeout: 30_000 });
+      await expect(page.getByTestId("kpi-scope-note")).not.toContainText("All knowledge bases", { timeout: 30_000 });
       const itemsText = (await counts.textContent()) ?? "";
       const nItems = Number(/: (\d+) items/.exec(itemsText)?.[1] ?? NaN);
       expect(nItems).toBeGreaterThan(0);

@@ -89,7 +89,7 @@ test("the change view groups files, opens a diff and a new file, links ids, swit
   await expect(page.getByTestId("changes-summary")).toHaveText("4 files, +10 -1");
   const areas = await page.getByTestId("changes-group").evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.area));
   expect(areas).toEqual(["code", "docs", "knowledge"]);
-  await expect(panel.locator('[data-testid="change-link"][data-id="T-0001"]')).toHaveAttribute("href", /\/app\/initiatives\?scope=project:alpha/);
+  await expect(panel.locator('[data-testid="change-link"][data-id="T-0001"]')).toHaveAttribute("href", /\/app\/initiatives\?scope=project:alpha&q=T-0001$/);
   // a modified file: the diff keeps +/- and marks lines by kind
   await panel.locator('[data-testid="change-row"][data-path="src/app.py"]').getByTestId("change-open").click();
   await expect(page.locator('[data-testid="change-diff"] [data-kind="add"]')).toHaveText("+new line");

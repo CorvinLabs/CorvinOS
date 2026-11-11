@@ -1152,12 +1152,15 @@ Pure decisions in `pages/projects/scope.ts` (`tests/unit/projects-scope.test.ts`
   and that part's relation endpoints are remapped the same way (a dangling endpoint gets a key no node has), so the joined
   total is the sum of the parts - until REVIEW-0071 N6 the later node was dropped (live: 19 entities of two copies missing)
   and the copy's relations attached to the original's nodes. A node's document is read with its own uid and project
-  (`/doc/{uid}?project=<id>`). References resolve inside the knowledge base the document belongs to (`buildLinkIndex`
-  keeps per-scope lookups, `viewFor`/`resolveKey` layer them over the joined ones): a bare id, a `[[uid]]`, a relative
+  (`/doc/{uid}?project=<id>`). References resolve ONLY inside the knowledge base the document belongs to (`buildLinkIndex`
+  keeps per-scope lookups; `viewFor`/`resolveKey` use them alone, plus qualified `alpha/T-0001` labels in a wikilink): a project
+  and Corvin both number from T-0001, so an id missing from or ambiguous in the document's own base stays plain text and a
+  `.md` link never crosses bases (REVIEW-0073 N10 - before, the joined lookups showed through and opened Corvin's node). a bare id, a `[[uid]]`, a relative
   `.md` link and the "Links"/"Linked from" lists of a copy's document open the copy's nodes, never the original's
   (REVIEW-0071 follow-up, REVIEW-0072 N7). In ONE project's view `?node=ADR-2206` resolves against that project's own
   ids, although its labels are qualified. Opening a node only sets `node` and keeps every other parameter: until
-  REVIEW-0072 the first click replaced the query with `?node=` and dropped the chosen knowledge base. `projects-scope-live.spec.ts` computes the expected All total from the per-scope counts it
+  REVIEW-0072 the first click replaced the query with `?node=` and dropped the chosen knowledge base. On the Tasks board a
+  scope switch drops `?item=`, so the drawer never shows another knowledge base's card. `projects-scope-live.spec.ts` computes the expected All total from the per-scope counts it
   reads (every selectable scope, same endpoint), not from an assumption about which projects exist. Each answer carries `repo_path` and `graph_state` (`ok`/`built`/`empty`/`missing`/
   `error` + `graph_error`); the stats line shows "<scope> · Repository: <that path>" (or "N knowledge bases"), an
   empty project KB says so with its own path, and a graph that could not be built is named in a banner. Pull/Push/Sync
@@ -1325,7 +1328,8 @@ fixed full-width sheet. See "UI" below.
 - **Changes panel** (`changes-panel.tsx`, logic in `changes-logic.ts`): a side panel next to the chat. Files grouped Code, Documents, Knowledge base,
   each with a status letter AND word, +/- counts; click opens the diff (lines typed add/del/hunk/ctx, the leading +/- stays in the text) or the text of a
   new file; a binary is listed, not shown. "Show" switches between changes not yet committed and a recent commit. Ids in file names and commit subjects
-  link to the project's Tasks board (`/app/initiatives?scope=project:<id>`) and Knowledge Graph (`/app/corvin-knowledge?scope=project:<id>`); a change
+  link to the project's Tasks board filtered to that id (`/app/initiatives?scope=project:<id>&q=T-0001`) and to that node of its Knowledge Graph
+  (`/app/corvin-knowledge?scope=project:<id>&node=ADR-0001`) - until REVIEW-0073 N11 they opened the board unfiltered and the newest decision; a change
   with no id has no link. The list is read again every time the panel opens and every 10 s, and the menu button reloads the count when an answer finishes.
 - **Perception choices, checked on screenshots** (both themes, 1280 and 375 px): nine roles in three rows (chunking, Hick's law), outcomes before feature
   jargon (recognition over recall), badges always in the same shape and place (similarity), safe default (read only) and a second look only in the

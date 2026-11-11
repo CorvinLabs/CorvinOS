@@ -45,8 +45,8 @@ describe("diff lines", () => {
 
 describe("links and wording", () => {
   it("tasks go to the project's board, everything else to its graph, scoped to the project", () => {
-    expect(linkTarget("plum", { id: "T-0001", kind: "task" })).toBe("/app/initiatives?scope=project:plum");
-    expect(linkTarget("plum", { id: "ADR-2319", kind: "knowledge" })).toBe("/app/corvin-knowledge?scope=project:plum");
+    expect(linkTarget("plum", { id: "T-0001", kind: "task" })).toBe("/app/initiatives?scope=project:plum&q=T-0001");
+    expect(linkTarget("plum", { id: "ADR-2319", kind: "knowledge" })).toBe("/app/corvin-knowledge?scope=project:plum&node=ADR-2319");
     expect(linkTarget("a b", { id: "T-0001", kind: "task" })).toContain("project:a%20b");
   });
   it("says how long ago, in plain words", () => {

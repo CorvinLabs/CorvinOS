@@ -253,3 +253,10 @@ test("in one project's view a hand-written link with a human id opens that proje
   await page.getByTestId("knowledge-search-hits").getByRole("button").first().click();
   await expect(page).toHaveURL(/scope=project(%3A|:)alpha/);
 });
+
+test("switching the board's knowledge base closes an item that belongs to the old one", async ({ page }) => {
+  await stub(page);
+  await page.goto("/console/app/initiatives?scope=project:alpha&item=a-1");
+  await page.getByTestId("scope-select").selectOption("bound");
+  await expect(page).not.toHaveURL(/item=/);
+});

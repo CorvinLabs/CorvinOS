@@ -147,7 +147,8 @@ export default function TasksPage() {
   const scopeKey = scope.kind === "all" ? "" : scopeParam(scope);
   // the name every number on the page is qualified with: the counters and the list come from this scope only
   const scopeName = scopeLabel(scope, Object.fromEntries(listedProjects(projectList).map((p) => [p.id, p.title || p.id])));
-  const setScope = (raw: string) => setParams((p) => { const n = new URLSearchParams(p); if (raw === "all") n.delete("scope"); else n.set("scope", raw); return n; }, { replace: true });
+  // an open item belongs to the scope it was opened in; switching drops it, so the drawer never shows another knowledge base's card
+  const setScope = (raw: string) => setParams((p) => { const n = new URLSearchParams(p); if (raw === "all") n.delete("scope"); else n.set("scope", raw); n.delete("item"); return n; }, { replace: true });
 
   const setQuery = useCallback((patch: { view?: View; item?: string | null; filters?: Filters }) => {
     const next = new URLSearchParams();
