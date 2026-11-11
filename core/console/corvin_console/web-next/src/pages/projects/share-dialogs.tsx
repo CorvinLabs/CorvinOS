@@ -433,19 +433,21 @@ function DuplicateBody({ d, onClose, setBusy }: { d: ProjectDetail; onClose: () 
   const suggested = useMemo(() => (list.data ? suggestId(d.id, list.data.projects.map((p) => p.id)) : ""), [list.data, d.id]);
   const [id, setId] = useState<string | null>(null);
   const value = id ?? suggested;
+  // the copy's name: told apart from the original in the list, the scope switchers and the graph (the server uses the same default)
+  const [title, setTitle] = useState(`${d.title || d.id} (copy)`);
   const [location, setLocation] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [parts, setParts] = useState({ git_history: true, kb: true, generated: false });
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<ImportApplied | null>(null);
   const mut = useMutation({
-    mutationFn: () => duplicateProject(d.id, { project_id: value.trim(), ...(location ? { location } : {}), parts }, csrf),
+    mutationFn: () => duplicateProject(d.id, { project_id: value.trim(), ...(title.trim() ? { title: title.trim() } : {}), ...(location ? { location } : {}), parts }, csrf),
     onMutate: () => { setError(null); setBusy(true); },
     onSettled: () => setBusy(false),
     onSuccess: (r) => { setDone(r); void qc.invalidateQueries({ queryKey: LIST }); },
     onError: (e) => setError(explain(e)),
   });
-  const valid = ID_RULE.test(value.trim()) && value.trim() !== d.id;
+  const valid = ID_RULE.test(value.trim()) && value.trim() !== d.id && title.trim().length > 0;
   const defaultPlace = list.data?.default_storage === "root" && list.data.projects_root_set
     ? `Projects folder › ${value.trim() || "…"}` : `Corvin workspace › ${value.trim() || "…"}`;
   if (done) {
@@ -476,6 +478,11 @@ function DuplicateBody({ d, onClose, setBusy }: { d: ProjectDetail; onClose: () 
           <input className="mt-1 w-full rounded border bg-background px-2 py-1 font-mono text-sm" value={value} maxLength={28} spellCheck={false}
             onChange={(e) => { setId(e.target.value); setError(null); }} data-testid="duplicate-id" disabled={mut.isPending} />
           {value.trim() && !ID_RULE.test(value.trim()) && <span className="mt-1 block text-xs text-red-700 dark:text-red-300">Use lowercase letters, digits and dashes, at most 28 characters.</span>}
+        </label>
+        <label className="block text-sm">Title
+          <input className="mt-1 w-full rounded border bg-background px-2 py-1 text-sm" value={title} maxLength={120}
+            onChange={(e) => { setTitle(e.target.value); setError(null); }} data-testid="duplicate-title" disabled={mut.isPending} />
+          {!title.trim() && <span className="mt-1 block text-xs text-red-700 dark:text-red-300">Give the copy a title.</span>}
         </label>
         <Line label="Where" testid="duplicate-where">
           <span className="flex flex-wrap items-center gap-2">

@@ -1088,6 +1088,19 @@ class Duplicate(ApplyBase):
             self.assertFalse(self.events(c, "project.imported"))
             self.assert_no_path_in_chain(c, "_default", new)
 
+    # integration test 2026-11-11 D3: a copy and its original had the same title in the list, the scope switcher and the graph
+    def test_a_duplicate_is_told_apart_by_its_title(self):
+        with self.ctx() as c:
+            pid, _root = self.make(c, "Original")
+            r = self.dup(c, pid, project_id="original-copy")
+            self.assertEqual(r.status_code, 201, r.text[:500])
+            self.assertEqual(c.own.get(f"{_URL}/original-copy").json()["title"], "Original (copy)")
+            self.assertEqual(c.own.get(f"{_URL}/{pid}").json()["title"], "Original", "the original keeps its title")
+            r = self.dup(c, pid, project_id="original-two", title="Second take")
+            self.assertEqual(r.status_code, 201, r.text[:500])
+            self.assertEqual(c.own.get(f"{_URL}/original-two").json()["title"], "Second take")
+            self.assertEqual(self.dup(c, pid, project_id="original-three", title="  ").status_code, 422, "a blank title is refused")
+
     # T-0401 AC1a (REVIEW-0062 N4)
     def test_duplicate_of_an_adopted_clone_keeps_its_history_without_remote_refs(self):
         with self.ctx() as c:

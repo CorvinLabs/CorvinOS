@@ -844,7 +844,11 @@ outcome=error reason_class=unfinished`; a folder at the target itself is never d
 
 ### Duplicate (Decision 14, T-0401)
 
-`POST /{id}/duplicate {project_id, location?, parts?}` = `bundle.build` into a private staging (admitted like an upload:
+The copy's title is `title` (one line, 1-120 characters, not blank) or, without one, "<original title> (copy)" - a copy and its
+original are told apart in the list, the scope switchers and the graph (integration test 2026-11-11, D3); the dialog pre-fills
+the same default. Test: `test_projects_share_e2e.py::Duplicate::test_a_duplicate_is_told_apart_by_its_title`.
+
+`POST /{id}/duplicate {project_id, title?, location?, parts?}` = `bundle.build` into a private staging (admitted like an upload:
 host budget, per-tenant cap, TTL; one of the two apply slots) + the apply above with `project.duplicated` instead of
 `project.imported` (`project_id` = the new id), in-process - never a raw copy of the folder. Because the staging is a bundle,
 the export's scans run (secret shapes, the history scan when `git_history` is on): a hit is 409 `secret_shape` /

@@ -3945,8 +3945,18 @@ def _remove_unfinished_import(tenant_id: str, project_id: str, e: dict[str, Any]
             "folder_kept": root.exists()}
 
 
+def _copy_title(title: Optional[str], man: dict[str, Any], project_id: str) -> str:
+    """The copy's title: the one given (one line, trimmed), else "<title> (copy)" - a copy and its original must be told apart in
+    the list, the scope switchers and the graph (integration test 2026-11-11 D3)."""
+    given = " ".join(str(title or "").split())
+    if given:
+        return given[:120]
+    base = " ".join(str(man.get("title") or project_id).split())
+    return f"{base[:113]} (copy)"
+
+
 def duplicate_project(tenant_id: str, project_id: str, *, new_id: str, location: Optional[str] = None,
-                      parts: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                      parts: Optional[dict[str, Any]] = None, title: Optional[str] = None) -> dict[str, Any]:
     """Decision 14: export to a private staging plus apply in one call (no download). The staging is a bundle, so the export's
     scans run (secret shapes, the history scan); protection is the source's own record, chat attachments are not copied,
     the copy gets a new random uid. Audit ``project.duplicated`` requested/applied/error. The staging is always removed."""
@@ -3984,7 +3994,7 @@ def duplicate_project(tenant_id: str, project_id: str, *, new_id: str, location:
             raise Conflict(rep["message"], rep["reason_class"])
         card = rep["projects"][0]
         return _apply_into(tenant_id, new_id, z, card, location=location,
-                           parts={"git_history": pr.git_history, "kb": pr.kb}, title=None, event="project.duplicated",
+                           parts={"git_history": pr.git_history, "kb": pr.kb}, title=_copy_title(title, man, project_id), event="project.duplicated",
                            protection=prot)
     finally:
         if handle is not None:

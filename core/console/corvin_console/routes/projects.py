@@ -638,6 +638,8 @@ class DuplicateParts(BaseModel):
 class DuplicateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     project_id: str = Field(min_length=1, max_length=28)
+    # the copy's name; none = "<title> (copy)" so a copy is told apart in the list, the scope switchers and the graph
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120, pattern=r"\S")
     location: Optional[str] = Field(default=None, min_length=1, max_length=1000)
     parts: Optional[DuplicateParts] = None
 
@@ -645,7 +647,7 @@ class DuplicateBody(BaseModel):
 @router.post("/{project_id}/duplicate", status_code=201)
 async def duplicate(project_id: str, body: DuplicateBody, rec: SessCsrf) -> dict:
     """Duplicate = export to a private staging + apply (ADR-2323 Decision 14, T-0401), in an awaited worker thread."""
-    return await asyncio.to_thread(_call, svc.duplicate_project, rec.tenant_id, project_id, new_id=body.project_id,
+    return await asyncio.to_thread(_call, svc.duplicate_project, rec.tenant_id, project_id, new_id=body.project_id, title=body.title,
                                    location=body.location, parts=body.parts.model_dump() if body.parts is not None else None)
 
 

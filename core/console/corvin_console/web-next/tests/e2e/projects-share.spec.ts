@@ -344,11 +344,17 @@ test("duplicate: the next free id is suggested, the copy appears in the list", a
   await page.getByTestId("share-duplicate").click();
   const dlg = page.getByTestId("duplicate-dialog");
   await expect(dlg.getByTestId("duplicate-id")).toHaveValue("alpha-2");
+  // the copy is told apart by its title (integration test 2026-11-11 D3)
+  await expect(dlg.getByTestId("duplicate-title")).toHaveValue("Alpha research (copy)");
   await expect(dlg.getByTestId("duplicate-where-path")).toHaveText("Corvin workspace › alpha-2");
   await dlg.getByTestId("duplicate-part-history").uncheck();
+  // an empty title cannot be sent
+  await dlg.getByTestId("duplicate-title").fill("");
+  await expect(dlg.getByTestId("duplicate-submit")).toBeDisabled();
+  await dlg.getByTestId("duplicate-title").fill("Alpha, second take");
   await dlg.getByTestId("duplicate-submit").click();
   await expect(dlg).toHaveAttribute("data-stage", "done");
-  expect(st.duplicated).toEqual([{ from: "alpha", project_id: "alpha-2", parts: { git_history: false, kb: true, generated: false } }]);
+  expect(st.duplicated).toEqual([{ from: "alpha", project_id: "alpha-2", title: "Alpha, second take", parts: { git_history: false, kb: true, generated: false } }]);
   await cleanText(page, "duplicate-dialog");
   await dlg.getByTestId("duplicate-close").click();
   await page.goto("/console/app/projects");

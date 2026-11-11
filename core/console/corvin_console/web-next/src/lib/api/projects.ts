@@ -674,7 +674,7 @@ export function importCancel(stagingId: string, csrf: string): Promise<void> {
 
 /** A copy under a new id, through the same bundle pipeline (no download). */
 export function duplicateProject(
-  id: string, body: { project_id: string; location?: string; parts?: { git_history: boolean; kb: boolean; generated: boolean } }, csrf: string,
+  id: string, body: { project_id: string; title?: string; location?: string; parts?: { git_history: boolean; kb: boolean; generated: boolean } }, csrf: string,
 ): Promise<ImportApplied> {
   return api<ImportApplied>(`/projects/${encodeURIComponent(id)}/duplicate`, { method: "POST", body, csrf, timeoutMs: 300_000 });
 }
