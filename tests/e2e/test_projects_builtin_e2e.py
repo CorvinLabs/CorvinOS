@@ -88,6 +88,28 @@ class BuiltinCorvin(_Base):
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(c.own.get("/v1/console/task-tracking/items", params={"scope": "project:nope"}).status_code, 404)
 
+    def test_its_knowledge_counts_follow_the_knowledge_bases_own_layout(self):
+        """REVIEW-0067 M1: the built-in KB keeps its kinds at the repository root (decisions/, concepts/, kb/tasks ...), as its
+        kb/_meta/sources.yaml says; the counts must come from there, not from a project's docs/ layout."""
+        (self.bound / "kb" / "_meta" / "sources.yaml").write_text(
+            "sources:\n  - name: kb\n    root: .\n    writable: true\n    dirs:\n"
+            "      decisions: decision\n      concepts: concept\n      implementation-plans: plan\n      implementation: plan\n"
+            "      adversarial-reviews: review\n      notes: note\n"
+            "      kb/initiatives: initiative\n      kb/epics: epic\n      kb/tasks: task\n"
+            "  - name: elsewhere\n    root: ../outside\n    dirs:\n      decisions: decision\n", encoding="utf-8")
+        for d, n in (("decisions", 5), ("concepts", 2), ("implementation-plans", 1), ("implementation", 2), ("notes", 1)):
+            (self.bound / d).mkdir(exist_ok=True)
+            for i in range(n):
+                (self.bound / d / f"X-{i:04d}-x.md").write_text("---\nid: x\n---\n")
+        (self.tmp / "outside" / "decisions").mkdir(parents=True)
+        (self.tmp / "outside" / "decisions" / "ADR-9-x.md").write_text("x\n")
+        with self._ctx() as c:
+            counts = c.own.get(f"{_URL}/corvin/structure").json()["kb_counts"]
+            self.assertEqual({k: counts.get(k) for k in ("decisions", "concepts", "implementation-plans", "notes",
+                                                         "adversarial-reviews", "initiatives", "epics", "tasks")},
+                             {"decisions": 5, "concepts": 2, "implementation-plans": 3, "notes": 1, "adversarial-reviews": 0,
+                              "initiatives": 1, "epics": 1, "tasks": 1})
+
 
 if __name__ == "__main__":
     unittest.main()

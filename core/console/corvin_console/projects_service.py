@@ -2348,17 +2348,72 @@ def structure(tenant_id: str, project_id: str, depth: int = 2) -> dict[str, Any]
             return 0
         return n
 
+    from core.projects import builtin as _builtin  # noqa: PLC0415
+    kb_base = root if _builtin.is_builtin(project_id) else root / "docs"      # Corvin's KB keeps its kinds at its root
+    if _builtin.is_builtin(project_id):
+        docs_dir = root / "kb"
     if not passes_link(root, docs_dir) and docs_dir.is_dir():
         for sub in ("initiatives", "epics", "tasks"):
             kb_counts[sub] = _count(docs_dir / sub)
     for sub in ("concepts", "decisions", "ideas", "implementation-plans", "notes", "adversarial-reviews"):
-        kb_counts[sub] = _count(root / "docs" / sub)
+        kb_counts[sub] = _count(kb_base / sub)
+    layout = _kb_layout(kb_base)
+    if layout:
+        # the knowledge base's OWN layout (kb/_meta/sources.yaml): what the engine indexes, so the counts agree with the
+        # Knowledge tab - Corvin's KB has 1128 decisions at its root, the docs/ layout counted 0 (REVIEW-0067 M1)
+        got: dict[str, int] = {}
+        for d, key in layout:
+            got[key] = got.get(key, 0) + _count(d)
+        kb_counts.update({k: got.get(k, 0) for k in kb_counts if k in _KIND_KEYS.values()})
+        kb_counts.update({k: v for k, v in got.items() if k not in kb_counts})
     try:
         vroot: Optional[Path] = _videos_root(tenant_id, root, man)
     except ProjectsError:
         vroot = None                    # a videos.root the rules refuse: the structure still shows; no row is looked up anywhere
     return {"project_id": project_id, "entries": entries, "truncated": truncated, "kb_counts": kb_counts,
             "videos": _video_rows(root, man, vroot), "videos_root": str(vroot) if vroot is not None else ""}
+
+
+#: KB entity type -> the kb_counts key the inspector shows
+_KIND_KEYS = {"decision": "decisions", "concept": "concepts", "idea": "ideas", "plan": "implementation-plans", "note": "notes",
+              "review": "adversarial-reviews", "initiative": "initiatives", "epic": "epics", "task": "tasks"}
+
+
+def _kb_layout(base: Path) -> list[tuple[Path, str]]:
+    """``[(folder, kb_counts key)]`` from ``<base>/kb/_meta/sources.yaml``: every source root and dir that lies lexically
+    inside *base* (no absolute path, drive, ``..`` or git ref; a link on the way is refused by the counter). [] when the
+    file is missing or unreadable - the caller keeps the docs/ layout."""
+    from core.projects import safe_yaml  # noqa: PLC0415
+    from core.projects.fsutil import read_text_any  # noqa: PLC0415
+    f = base / "kb" / "_meta" / "sources.yaml"
+    if passes_link(base, f) or not f.is_file():
+        return []
+    try:
+        cfg = safe_yaml.load(read_text_any(f, limit=64 * 1024)) or {}
+    except Exception:  # noqa: BLE001 - unreadable: the docs/ layout stays
+        return []
+    out: list[tuple[Path, str]] = []
+
+    def inside(rel: Any) -> Optional[Path]:
+        if not isinstance(rel, str) or not rel or "\x00" in rel:
+            return None
+        p = Path(rel)
+        if p.is_absolute() or p.drive or p.root or ".." in p.parts or ":" in rel:
+            return None
+        return p
+
+    for src in (cfg.get("sources") if isinstance(cfg, dict) else None) or []:
+        if not isinstance(src, dict) or src.get("ref"):
+            continue
+        r = inside(str(src.get("root", ".")))
+        dirs = src.get("dirs")
+        if r is None or not isinstance(dirs, dict):
+            continue
+        for d, typ in dirs.items():
+            dp, key = inside(str(d)), _KIND_KEYS.get(str(typ))
+            if dp is not None and key:
+                out.append((base / r / dp, key))
+    return out
 
 
 def _bounded_children(d: Path, limit: int = _STRUCTURE_MAX * 4) -> list[Path]:

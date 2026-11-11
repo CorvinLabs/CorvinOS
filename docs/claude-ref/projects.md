@@ -1313,3 +1313,9 @@ Every mutation (remove, rename, move, settings, features, repair, new video) ans
 uses the same gates, deny rules and per-turn judgement. A tenant without a knowledge base gets state `missing` with the reason - never another tenant's repository.
 UI: a "Built in" card at the top of the Projects page (the "no project of your own yet" hint stays), an inspector with Overview/Structure/Docs/Knowledge/Tasks and a
 Settings tab that only offers attaching it to a chat, an entry in the chat menu. Proof: `tests/e2e/test_projects_builtin_e2e.py`, `web-next/tests/e2e/projects-builtin.spec.ts`.
+**Knowledge counts** (`structure` -> `kb_counts`, shown by the At-a-glance tile and the Docs tab; REVIEW-0067 M1): counted from the
+knowledge base's OWN layout, `<kb>/kb/_meta/sources.yaml` (`projects_service._kb_layout`: each source root + dir mapped by its entity
+type, several dirs of one type summed, only paths lexically inside the KB, no git ref, a link on the way counts 0) - the folders the
+engine indexes. `<kb>` is the repository root for Corvin (its kinds sit at the root: `decisions/`, `concepts/`, `kb/tasks` ...) and
+`docs/` for a project. Without a readable sources.yaml the former `docs/<kind>` + `docs/kb/<kind>` layout is counted. Before, Corvin
+showed "Knowledge 17" and "decisions 0" for a KB with 1128 decisions.
