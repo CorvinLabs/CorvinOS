@@ -432,5 +432,357 @@ class Build(BundleBase):
             self.assertEqual(len([n for n in self.names(z) if n.lower().endswith("/same.txt")]), 1)
 
 
+# ── T-0398: validation V1-V6 and the hostile corpus ──────────────────────────────────────────────────────────────────────
+
+import builtins  # noqa: E402
+import stat as _stat  # noqa: E402
+
+KNOWN = {"templates": {"plain@1", "agentic@1", "demo@1"}, "features": {"core", "kb", "tasks", "claude", "acs", "videos"}}
+
+
+def _manifest_bytes(pid: str, **extra) -> bytes:
+    data = {"schema": 1, "id": pid, "title": pid.title(), "template": "plain@1", "docs_mode": "plain",
+            "classification": "internal", "features": {"core": True}, **extra}
+    return manifest.dumps({k: v for k, v in data.items() if v is not None}).encode()
+
+
+def make_bundle(path: Path, projects: dict[str, dict[str, bytes]] | None = None, *, extra=(), list_extra=True,
+                envelope_patch=None, raw_envelope: bytes | None = None, compression=zipfile.ZIP_DEFLATED) -> Path:
+    """A valid bundle (every file listed) plus ``extra`` raw entries ``(name_or_ZipInfo, bytes)``, listed unless
+    ``list_extra`` is False, so a defect isolates the stage that must refuse it."""
+    projects = projects if projects is not None else {"alpha": {"README.md": b"# Alpha\n" + MARKER.encode()}}
+    env_projects = []
+    entries: list[tuple] = []
+    for pid, files in projects.items():
+        files = {"project.yaml": _manifest_bytes(pid), **files}
+        listed = []
+        for rel, data in files.items():
+            name = f"projects/{pid}/{rel}"
+            entries.append((name, data))
+            listed.append({"path": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
+        env_projects.append({"id": pid, "title": pid.title(), "template": "plain@1", "role": "", "classification": "internal",
+                             "docs_mode": "plain", "features": {"core": True}, "export_id": bundle.new_ulid(),
+                             "source_project_uid": "ab" * 16,
+                             "parts": [{"name": n, "included": n == "files"} for n in bundle.PART_NAMES],
+                             "left_out": [], "files": listed, "counts": {"files": len(listed), "bytes": sum(x["size"] for x in listed)}})
+    for item, data in extra:
+        name = item.filename if isinstance(item, zipfile.ZipInfo) else item
+        entries.append((item, data))
+        if list_extra and not name.endswith("/"):
+            pid = name.split("/")[1] if name.startswith("projects/") and name.count("/") >= 2 else None
+            target = next((p for p in env_projects if p["id"] == pid), env_projects[0])
+            target["files"].append({"path": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
+            target["counts"] = {"files": len(target["files"]), "bytes": sum(x["size"] for x in target["files"])}
+    env = {"format": bundle.FORMAT, "format_version": 1, "created_at": "2026-11-11T00:00:00Z",
+           "exporter": {"app": "corvinos", "version": "2.0.0"}, "origin": "unverified", "projects": env_projects}
+    if envelope_patch:
+        envelope_patch(env)
+    with zipfile.ZipFile(path, "w", compression) as zf:
+        for item, data in entries:
+            zf.writestr(item, data)
+        zf.writestr(bundle.ENVELOPE_NAME, raw_envelope if raw_envelope is not None else json.dumps(env).encode())
+    return path
+
+
+class WriteSpy:
+    """Every write-mode open and every new path under a root while validating."""
+
+    def __init__(self, root: Path):
+        self.root, self.writes = root, []
+
+    def _tree(self):
+        out = {}
+        for dp, dns, fns in os.walk(self.root):
+            for n in dns + fns:
+                p = os.path.join(dp, n)
+                with contextlib.suppress(OSError):
+                    st = os.lstat(p)
+                    out[p] = (st.st_size, st.st_mtime_ns)
+        return out
+
+    def __enter__(self):
+        self.before = self._tree()
+        real_open, real_os_open = builtins.open, os.open
+
+        def spy_open(f, mode="r", *a, **k):
+            if any(c in str(mode) for c in "wax+"):
+                self.writes.append(str(f))
+            return real_open(f, mode, *a, **k)
+
+        def spy_os_open(p, flags, *a, **k):
+            if flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT):
+                self.writes.append(str(p))
+            return real_os_open(p, flags, *a, **k)
+        self._p = [mock.patch.object(builtins, "open", spy_open), mock.patch.object(os, "open", spy_os_open)]
+        for p in self._p:
+            p.start()
+        return self
+
+    def __exit__(self, *exc):
+        for p in self._p:
+            p.stop()
+        self.after = self._tree()
+        return False
+
+
+import contextlib  # noqa: E402
+
+
+class Validate(BundleBase):
+    def check(self, path: Path, stage: str | None, *, known=KNOWN, contains: str | None = None) -> dict:
+        with WriteSpy(self.tmp) as spy:
+            rep = bundle.validate(path, known)
+        self.assertEqual(spy.writes, [], "validation wrote")
+        self.assertEqual(spy.before, spy.after, "validation changed the sandbox")
+        blob = json.dumps(rep)
+        self.assertNotIn(MARKER, blob)
+        self.assertNotIn(JWT[:16], blob)
+        if stage is None:
+            self.assertTrue(rep["ok"], rep)
+        else:
+            self.assertFalse(rep["ok"], rep)
+            self.assertEqual((rep["stage"], rep["reason_class"]), (stage, stage), rep)
+            if contains:
+                self.assertIn(contains, rep["message"])
+        return rep
+
+    def z(self, name="h.zip", **kw) -> Path:
+        return make_bundle(self.tmp / name, **kw)
+
+    # AC1 + AC6 (N3)
+    def test_build_validate_round_trip_incl_the_acs_tenants_and_submodule_project(self):
+        pid, root = self.project("Agentic", template="agentic")
+        (root / ".corvin" / "forge").mkdir(parents=True, exist_ok=True)
+        (root / ".corvin" / "forge" / "README.md").write_text("forge\n")
+        (root / "src" / "tenants").mkdir(parents=True)
+        (root / "src" / "tenants" / "a.txt").write_text("a\n")
+        (root / "vendor" / "lib").mkdir(parents=True)
+        (root / "vendor" / "lib" / ".git").write_text("gitdir: ../../.git/modules/lib\n")
+        (root / "sub").mkdir()
+        (root / "sub" / "project.yaml").write_text("name: not a corvin manifest\n")
+        _commit_all(root, "tracked")
+        pid2, _ = self.project("Beta")
+        z, res = self.build([pid, pid2], git_history=True)
+        rep = self.check(z, None)
+        self.assertEqual({p["id"]: p["counts"] for p in rep["projects"]},
+                         {p["id"]: p["counts"] for p in res.envelope["projects"]})
+        self.assertEqual(rep["origin"], "unverified")
+        self.assertIs(bundle.V1_PROTECTED, bundle_rules.protected_entry)
+        self.assertIs(bundle.V1_PROTECTED, bundle.NEVER_LIST)
+
+    def test_bundle_py_carries_no_protected_name_literal_of_its_own(self):
+        src = Path(bundle.__file__).read_text(encoding="utf-8")
+        for comp in registry.PROTECTED_COMPONENTS | {".mcp.json", "ENGINE.json", ".env"}:
+            self.assertNotIn(f'"{comp}"', src, comp)
+            self.assertNotIn(f"'{comp}'", src, comp)
+        self.assertIn("bundle_rules", src)
+
+    def test_a_valid_hand_made_bundle_passes_with_the_must_pass_cases(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as inner:
+            inner.writestr("t.txt", JWT + MARKER)
+        z = self.z(extra=[("projects/alpha/data/archive.zip", buf.getvalue()),
+                          ("projects/alpha/sub/project.yaml", b"name: a docker-compose like file\nversion: 3\n"),
+                          ("projects/alpha/docs/", b"")])
+        rep = self.check(z, None)
+        self.assertEqual(rep["projects"][0]["id"], "alpha")
+        for pid in ("import", "trash", "files"):
+            self.check(make_bundle(self.tmp / f"{pid}.zip", {pid: {"a.txt": b"x"}}), None)
+
+    def test_an_unknown_template_is_a_warning_not_a_refusal(self):
+        z = self.z(projects={"alpha": {"project.yaml": _manifest_bytes("alpha", template="mystery@9")}})
+        rep = self.check(z, None)
+        self.assertTrue(rep["projects"][0]["warnings"])
+        self.assertTrue(any("mystery@9" in w for w in rep["projects"][0]["warnings"]))
+
+    # AC2 - container
+    def test_container_corpus(self):
+        def zi(name, mode=None):
+            i = zipfile.ZipInfo(name)
+            if mode is not None:
+                i.external_attr = mode << 16
+            return i
+        cases = {
+            "zip slip": [("projects/alpha/../../x", b"x")],
+            "absolute": [("/projects/alpha/x", b"x")],
+            "backslash": [("projects\\alpha\\x", b"x")],
+            "drive letter": [("C:/projects/alpha/x", b"x")],
+            "symlink entry": [(zi("projects/alpha/link", _stat.S_IFLNK | 0o777), b"/etc/passwd")],
+            "duplicate": [("projects/alpha/d.txt", b"1"), ("projects/alpha/d.txt", b"2")],
+            "casefold duplicate": [("projects/alpha/A.txt", b"1"), ("projects/alpha/a.txt", b"2")],
+            "NFC duplicate": [("projects/alpha/caf\u00e9.txt", b"1"), ("projects/alpha/cafe\u0301.txt", b"2")],
+            "con.txt": [("projects/alpha/con.txt", b"x")],
+            "aux": [("projects/alpha/aux", b"x")],
+            "ADS colon": [("projects/alpha/a:b", b"x")],
+            "trailing dot": [("projects/alpha/name.", b"x")],
+            "outside projects": [("README.md", b"x")],
+            "bad id dir": [("projects/Bad_Id/x", b"x")],
+            "ratio bomb": [("projects/alpha/zeros.bin", b"\0" * (8 << 20))],
+            "too deep": [("projects/alpha/" + "d/" * 70 + "x", b"x")],
+        }
+        for label, extra in cases.items():
+            with self.subTest(label):
+                self.check(self.z(name=f"c-{abs(hash(label))}.zip", extra=extra), "container",
+                           contains="This file is not a valid project bundle (")
+
+    def test_protected_entries_are_container_refusals_naming_the_entry(self):
+        for rel in (".git/config", ".git/hooks/post-checkout", "sub/.git/config", ".GIT/config", ".corvin/local/x",
+                    "session_ledger/x", "tenants/x", ".mcp.json", "ENGINE.json", "docs/kb/graph/entities.jsonl", ".env",
+                    ".corvin-export/other", ".corvin-export/git/evil.bundle"):
+            with self.subTest(rel):
+                rep = self.check(self.z(name="p.zip", extra=[(f"projects/alpha/{rel}", MARKER.encode())]), "container")
+                self.assertEqual(rep["message"], "This file is not a valid project bundle (it contains a protected entry: "
+                                                 f"projects/alpha/{rel}).")
+
+    def test_too_many_entries(self):
+        p = self.tmp / "many.zip"
+        with zipfile.ZipFile(p, "w", zipfile.ZIP_STORED) as zf:
+            for i in range(50_001):
+                zf.writestr(f"projects/alpha/f{i}", b"")
+        self.check(p, "container")
+
+    def test_not_a_zip_and_too_large_file(self):
+        p = self.tmp / "nz.zip"
+        p.write_bytes(b"not a zip " + MARKER.encode())
+        self.check(p, "container")
+        z = self.z()
+        with mock.patch.dict(bundle.LIMITS_MUTABLE, {"max_compressed_bytes": 100}):
+            self.check(z, "container")
+
+    # AC2 - envelope
+    def test_envelope_corpus(self):
+        def drop(k):
+            return lambda e: e.pop(k)
+        cases = {
+            "missing": dict(raw_envelope=None, extra=[], envelope_patch=None),
+            "not json": dict(raw_envelope=b"{not json" + MARKER.encode()),
+            "4 MiB + 1": dict(raw_envelope=os.urandom((4 << 20) + 1)),          # incompressible: not a ratio refusal
+            "wrong format": dict(envelope_patch=lambda e: e.update(format="corvin.forge-bundle")),
+            "version 2": dict(envelope_patch=lambda e: e.update(format_version=2)),
+            "no projects": dict(envelope_patch=lambda e: e.update(projects=[])),
+            "unknown key": dict(envelope_patch=lambda e: e.update(extra_key=1)),
+            "no origin": dict(envelope_patch=drop("origin")),
+            "bad uid": dict(envelope_patch=lambda e: e["projects"][0].update(source_project_uid="xyz")),
+            "bad sha": dict(envelope_patch=lambda e: e["projects"][0]["files"][0].update(sha256="zz")),
+            "counts lie": dict(envelope_patch=lambda e: e["projects"][0]["counts"].update(files=99)),
+            "id not its directory": dict(envelope_patch=lambda e: e["projects"][0].update(id="beta")),
+            "history without head": dict(envelope_patch=lambda e: e["projects"][0]["parts"][2].update(included=True)),
+            "bad left_out reason": dict(envelope_patch=lambda e: e["projects"][0]["left_out"].append({"path": "x", "reason": "nope"})),
+        }
+        for label, kw in cases.items():
+            with self.subTest(label):
+                if label == "missing":
+                    p = self.tmp / "m.zip"
+                    with zipfile.ZipFile(p, "w") as zf:
+                        zf.writestr("projects/alpha/project.yaml", _manifest_bytes("alpha"))
+                else:
+                    p = self.z(name="e.zip", **kw)
+                self.check(p, "envelope")
+        many = {f"p{i}": {"a.txt": b"x"} for i in range(21)}
+        self.check(make_bundle(self.tmp / "21.zip", many), "envelope")
+
+    # AC2 - integrity
+    def test_integrity_corpus(self):
+        def bad_hash(e):
+            e["projects"][0]["files"][1]["sha256"] = "0" * 64
+
+        def bad_size(e):
+            e["projects"][0]["files"][1]["size"] += 1
+            e["projects"][0]["counts"]["bytes"] += 1
+
+        def missing(e):
+            f = {"path": "projects/alpha/ghost.txt", "sha256": "0" * 64, "size": 1}
+            e["projects"][0]["files"].append(f)
+            e["projects"][0]["counts"] = {"files": len(e["projects"][0]["files"]),
+                                          "bytes": sum(x["size"] for x in e["projects"][0]["files"])}
+        for label, kw in {"unlisted": dict(extra=[("projects/alpha/extra.txt", b"x")], list_extra=False),
+                          "hash mismatch": dict(envelope_patch=bad_hash), "size mismatch": dict(envelope_patch=bad_size),
+                          "missing listed": dict(envelope_patch=missing)}.items():
+            with self.subTest(label):
+                self.check(self.z(name="i.zip", **kw), "integrity",
+                           contains="The bundle's contents do not match its manifest.")
+
+    # AC2 - manifest
+    def test_manifest_corpus(self):
+        cases = {
+            "tenant key": {"alpha": {"project.yaml": _manifest_bytes("alpha", tenant="evil")}},
+            "unknown docs_mode": {"alpha": {"project.yaml": _manifest_bytes("alpha", docs_mode="weird")}},
+            "reserved id corvin": {"corvin": {"a.txt": b"x"}},
+            "not yaml": {"alpha": {"project.yaml": b"::: [" + MARKER.encode()}},
+        }
+        for label, projects in cases.items():
+            with self.subTest(label):
+                self.check(make_bundle(self.tmp / "m.zip", projects), "manifest",
+                           contains="The project description in the bundle is invalid.")
+        rep = self.check(self.z(name="n.zip", extra=[("projects/alpha/sub/project.yaml", _manifest_bytes("inner", tenant="_default"))]),
+                         "manifest")
+        self.assertEqual(rep["message"], "The bundle contains a project inside the project; it was not imported.")
+
+    # AC2 - secrets
+    def test_planted_token_is_a_secrets_refusal_naming_the_path(self):
+        rep = self.check(self.z(extra=[("projects/alpha/notes/creds.md", f"use {JWT} {MARKER}".encode())]), "secrets")
+        self.assertEqual(rep["message"],
+                         "projects/alpha/notes/creds.md in the bundle looks like it contains a secret; the bundle was not imported.")
+
+    def test_stage_order_integrity_before_secrets(self):
+        def bad(e):
+            e["projects"][0]["files"][-1]["sha256"] = "0" * 64
+        self.check(self.z(extra=[("projects/alpha/t.md", JWT.encode())], envelope_patch=bad), "integrity")
+
+    # AC5
+    @unittest.skipUnless(POSIX and shutil.which("git"), "resource.getrusage")
+    def test_a_500_mib_bundle_validates_with_flat_memory_and_no_temp_file(self):
+        big = self.tmp / "big.zip"
+        chunk = b"\0" * (1 << 20)
+        files = []
+        with zipfile.ZipFile(big, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
+            zf.writestr("projects/alpha/project.yaml", _manifest_bytes("alpha"))
+            files.append(("projects/alpha/project.yaml", _manifest_bytes("alpha")))
+            sizes = [53] * 8 + [40]
+            for i, mb in enumerate(sizes):
+                name = f"projects/alpha/blob{i}.bin" if i < 8 else "projects/alpha/text.txt"
+                piece = chunk if i < 8 else (b"lorem ipsum dolor sit amet\n" * 40000)[: 1 << 20]
+                h = hashlib.sha256()
+                info = zipfile.ZipInfo(name)
+                info.file_size = mb << 20
+                with zf.open(info, "w", force_zip64=True) as w:
+                    for _ in range(mb):
+                        w.write(piece)
+                        h.update(piece)
+                files.append((name, (h.hexdigest(), mb << 20)))
+            listed = [{"path": n, "sha256": hashlib.sha256(d).hexdigest(), "size": len(d)} if isinstance(d, bytes)
+                      else {"path": n, "sha256": d[0], "size": d[1]} for n, d in files]
+            env = {"format": bundle.FORMAT, "format_version": 1, "created_at": "2026-11-11T00:00:00Z",
+                   "exporter": {"app": "corvinos", "version": "2.0.0"}, "origin": "unverified",
+                   "projects": [{"id": "alpha", "title": "Alpha", "template": "plain@1", "role": "", "classification": "internal",
+                                 "docs_mode": "plain", "features": {}, "export_id": bundle.new_ulid(), "source_project_uid": "cd" * 16,
+                                 "parts": [{"name": n, "included": n == "files"} for n in bundle.PART_NAMES], "left_out": [],
+                                 "files": listed, "counts": {"files": len(listed), "bytes": sum(x["size"] for x in listed)}}]}
+            zf.writestr(bundle.ENVELOPE_NAME, json.dumps(env))
+        self.assertGreater(big.stat().st_size, 450 << 20)
+        self.assertLess(big.stat().st_size, 500 << 20)
+        code = ("import json,resource,sys,os; sys.path.insert(0, os.getcwd()); from core.projects import bundle;"
+                "b=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss; r=bundle.validate(__import__('pathlib').Path(sys.argv[1]), None);"
+                "a=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss; print(json.dumps({'ok': r['ok'], 'delta_kib': a-b, 'before_kib': b, 'after_kib': a, 'files': r.get('counts'), 'r': r.get('message')}))")
+        before = set(os.listdir(tempfile_dir())) if os.path.isdir(tempfile_dir()) else set()
+        env = dict(os.environ, TMPDIR=str(self.tmp / "tmpdir"))
+        (self.tmp / "tmpdir").mkdir()
+        r = subprocess.run([sys.executable, "-c", code, str(big)], capture_output=True, text=True, env=env,
+                           cwd=str(Path(bundle.__file__).resolve().parents[2]), timeout=600)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertTrue(out["ok"], out)
+        self.assertLess(out["delta_kib"], 64 * 1024, out)
+        self.assertEqual(os.listdir(self.tmp / "tmpdir"), [])
+        self.assertEqual(out["files"]["files"], 10)                         # positive control: every entry was read
+        print(f"\n500 MiB validate: peak RSS {out['before_kib']} -> {out['after_kib']} KiB (delta {out['delta_kib']} KiB), "
+              f"{out['files']['bytes'] >> 20} MiB hashed")
+
+
+def tempfile_dir() -> str:
+    import tempfile
+    return tempfile.gettempdir()
+
+
 if __name__ == "__main__":
     unittest.main()

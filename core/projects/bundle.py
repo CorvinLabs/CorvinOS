@@ -201,7 +201,7 @@ def _git(repo: Path, *args: str, timeout: int = _GIT_TIMEOUT, stdin=None, stdout
 
 
 def _is_repo(d: Path) -> bool:
-    g = d / ".git"
+    g = d / bundle_rules.GIT_DIR
     return g.is_dir() and not is_link(g) and not is_link(d)
 
 
@@ -676,3 +676,390 @@ def _version() -> str:
         return version("corvinos")
     except Exception:  # noqa: BLE001
         return "0.0.0"
+
+
+# ── validation V1-V6 (T-0398, ADR-2323 Decisions 2, 10, 17) ─────────────────────────────────────────────────────────────
+#
+# A pure function over the staged file: ``zipfile.ZipFile(path)`` on a seekable file, entries read in 1 MiB chunks through
+# the budget, nothing extracted, nothing written. The first failing stage names itself (``reason_class`` = the stage) and
+# never the content.
+
+from core.bundle_common import names as _names  # noqa: E402
+from core.bundle_common import ratio as _ratio  # noqa: E402
+
+STAGES = ("container", "envelope", "integrity", "manifest", "staleness", "secrets")
+
+#: V1's protected-entry predicate IS the export's never-list (REVIEW-0062 N3)
+V1_PROTECTED = bundle_rules.protected_entry
+
+V_MESSAGES = {
+    "container": "This file is not a valid project bundle ({detail}).",
+    "protected": "This file is not a valid project bundle (it contains a protected entry: {path}).",
+    "envelope": "This file is not a valid project bundle ({detail}).",
+    "integrity": "The bundle's contents do not match its manifest.",
+    "manifest": "The project description in the bundle is invalid.",
+    "nested": "The bundle contains a project inside the project; it was not imported.",
+    "secrets": "{path} in the bundle looks like it contains a secret; the bundle was not imported.",
+}
+
+_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+_UID_RE = re.compile(r"^[0-9a-f]{32}$")
+_ULID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+_HEAD_RE = re.compile(r"^refs/heads/[A-Za-z0-9._/+-]{1,200}$")
+_TOP_KEYS = {"format", "format_version", "created_at", "exporter", "origin", "projects"}
+_PROJECT_KEYS = {"id", "title", "template", "role", "classification", "docs_mode", "features", "export_id",
+                 "source_project_uid", "parts", "git", "left_out", "files", "counts"}
+_PROJECT_REQUIRED = _PROJECT_KEYS - {"git"}
+
+
+class _Fail(Exception):
+    def __init__(self, stage: str, message: str):
+        super().__init__(message)
+        self.stage = stage
+        self.message = message
+
+
+def _fail(stage: str, detail: str = "", *, key: Optional[str] = None, path: str = "") -> _Fail:
+    return _Fail(stage, V_MESSAGES[key or stage].format(detail=detail, path=path))
+
+
+def _limits_for_container() -> dict[str, int]:
+    return dict(LIMITS)
+
+
+def _eocd_entries(fh) -> int:
+    """The entry count of the end-of-central-directory record, read BEFORE ``zipfile`` parses the central directory (a
+    hostile directory of millions of entries must not be materialised first)."""
+    try:
+        end = zipfile._EndRecData(fh)          # noqa: SLF001 - stable since Python 2; the only way to read the count first
+    except (OSError, ValueError, struct_error()):
+        end = None
+    if not end:
+        raise _fail("container", "the file is not a readable ZIP archive")
+    return int(end[zipfile._ECD_ENTRIES_TOTAL])  # noqa: SLF001
+
+
+def struct_error():
+    import struct  # noqa: PLC0415
+    return struct.error
+
+
+def _entry_rule_factory(protected_hit: dict[str, str]):
+    seen_nfc: set[str] = set()
+
+    def rule(info: zipfile.ZipInfo) -> Optional[tuple[str, str]]:
+        name = info.filename
+        if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            return "an entry uses an unsupported compression method", "unsupported compression"
+        nfc = unicodedata.normalize("NFC", name.rstrip("/")).casefold()
+        if nfc in seen_nfc:
+            return "two entries have the same name after Unicode normalisation", "NFC duplicate"
+        seen_nfc.add(nfc)
+        parts = name.rstrip("/").split("/")
+        if len(parts) > LIMITS["max_depth"]:
+            return f"an entry path is nested deeper than {LIMITS['max_depth']} levels", "too deep"
+        if any(bundle_rules.unportable_component(p) for p in parts):
+            return ("an entry name is not valid on Windows (a device name, a reserved character or a trailing dot or space)",
+                    "unportable name")
+        if name == ENVELOPE_NAME:
+            return None
+        if parts[0] != PROJECTS_PREFIX.rstrip("/") or len(parts) < 2 or not manifest.PROJECT_ID_RE.match(parts[1]):
+            return "an entry lies outside projects/<id>/", "outside projects/<id>/"
+        if len(parts) == 2 and not info.is_dir():
+            return "an entry lies outside projects/<id>/", "outside projects/<id>/"
+        rel = parts[2:]
+        if rel and (V1_PROTECTED(PurePosixPath(*rel)) is not None or bundle_rules.export_payload_problem(rel)):
+            protected_hit["path"] = name.rstrip("/")
+            return "protected entry", "protected entry"
+        return None
+    return rule
+
+
+def _read_entry(zf: zipfile.ZipFile, info: zipfile.ZipInfo, budget: _ratio.Budget, sink: Callable[[bytes], None],
+                stage: str = "integrity") -> None:
+    try:
+        with zf.open(info) as src:
+            while True:
+                b = src.read(_CHUNK)
+                if not b:
+                    break
+                try:
+                    budget.spend(len(b), info.filename)
+                except BundleCheckError as exc:
+                    raise _fail("container", exc.detail) from None
+                sink(b)
+    except _Fail:
+        raise
+    except BundleCheckError:
+        raise
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError, RuntimeError, NotImplementedError, ValueError,
+            __import__("zlib").error):
+        raise _fail(stage) from None
+
+
+def _parse_envelope(raw: bytes) -> dict[str, Any]:
+    def bad(detail: str) -> _Fail:
+        return _fail("envelope", f"its manifest {detail}")
+    try:
+        env = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        raise bad("is not UTF-8 JSON") from None
+    if not isinstance(env, dict) or set(env) != _TOP_KEYS:
+        raise bad("has missing or unknown keys")
+    if env["format"] != FORMAT or type(env["format_version"]) is not int or env["format_version"] != FORMAT_VERSION:
+        raise bad("names another format or version")
+    if env["origin"] != "unverified" or not isinstance(env["created_at"], str) or len(env["created_at"]) > 40:
+        raise bad("has an invalid origin or date")
+    ex = env["exporter"]
+    if not isinstance(ex, dict) or set(ex) != {"app", "version"} or not all(isinstance(v, str) and len(v) <= 64 for v in ex.values()):
+        raise bad("has an invalid exporter")
+    projects = env["projects"]
+    if not isinstance(projects, list) or not 1 <= len(projects) <= LIMITS["max_projects"]:
+        raise bad(f"must list 1 to {LIMITS['max_projects']} projects")
+    ids: set[str] = set()
+    total_files = 0
+    for p in projects:
+        if not isinstance(p, dict) or not _PROJECT_REQUIRED <= set(p) or not set(p) <= _PROJECT_KEYS:
+            raise bad("has a project with missing or unknown keys")
+        pid = p["id"]
+        if not isinstance(pid, str) or not manifest.PROJECT_ID_RE.match(pid) or pid in ids:
+            raise bad("has an invalid or repeated project id")
+        ids.add(pid)
+        if not isinstance(p["title"], str) or not 0 < len(p["title"]) <= 120:
+            raise bad("has an invalid title")
+        if not isinstance(p["template"], str) or len(p["template"]) > 64 or not isinstance(p["role"], str) or len(p["role"]) > 32:
+            raise bad("has an invalid template or role")
+        if p["classification"] not in manifest.CLASSES or not isinstance(p["docs_mode"], str) or len(p["docs_mode"]) > 16:
+            raise bad("has an invalid classification or docs mode")
+        feats = p["features"]
+        if not isinstance(feats, dict) or len(feats) > 64 or not all(
+                isinstance(k, str) and manifest.FEATURE_ID_RE.match(k) and isinstance(v, bool) for k, v in feats.items()):
+            raise bad("has invalid features")
+        if not isinstance(p["export_id"], str) or not _ULID_RE.match(p["export_id"]):
+            raise bad("has an invalid export id")
+        if not isinstance(p["source_project_uid"], str) or not _UID_RE.match(p["source_project_uid"]):
+            raise bad("has an invalid source id")
+        parts = p["parts"]
+        if not isinstance(parts, list) or len(parts) > len(PART_NAMES):
+            raise bad("has invalid parts")
+        seen_parts: dict[str, bool] = {}
+        for row in parts:
+            if (not isinstance(row, dict) or not {"name", "included"} <= set(row) <= {"name", "included", "note"}
+                    or row["name"] not in PART_NAMES or row["name"] in seen_parts or type(row["included"]) is not bool
+                    or ("note" in row and (not isinstance(row["note"], str) or len(row["note"]) > 120))):
+                raise bad("has invalid parts")
+            seen_parts[row["name"]] = row["included"]
+        git = p.get("git")
+        if seen_parts.get("git_history"):
+            if (not isinstance(git, dict) or "head" not in git or not set(git) <= {"head", "docs_head"}
+                    or not all(isinstance(v, str) and _HEAD_RE.match(v) and ".." not in v and not v.endswith((".lock", "/", "."))
+                               for v in git.values())):
+                raise bad("has git history without a valid branch")
+        elif git is not None:
+            raise bad("names git history that is not included")
+        lo = p["left_out"]
+        if not isinstance(lo, list) or len(lo) > LIMITS["max_entries"] or not all(
+                isinstance(r, dict) and set(r) == {"path", "reason"} and isinstance(r["path"], str) and len(r["path"]) <= 1000
+                and r["reason"] in LEFT_OUT_REASONS for r in lo):
+            raise bad("has an invalid list of left-out files")
+        files = p["files"]
+        if not isinstance(files, list) or len(files) > LIMITS["max_entries"]:
+            raise bad("has an invalid file list")
+        prefix = f"{PROJECTS_PREFIX}{pid}/"
+        nbytes = 0
+        for f in files:
+            if (not isinstance(f, dict) or set(f) != {"path", "sha256", "size"} or not isinstance(f["path"], str)
+                    or not f["path"].startswith(prefix) or len(f["path"]) > 1000 or not isinstance(f["sha256"], str)
+                    or not _SHA_RE.match(f["sha256"]) or type(f["size"]) is not int or f["size"] < 0):
+                raise bad("has an invalid file entry")
+            nbytes += f["size"]
+        total_files += len(files)
+        c = p["counts"]
+        if (not isinstance(c, dict) or set(c) != {"files", "bytes"} or c.get("files") != len(files) or c.get("bytes") != nbytes):
+            raise bad("has counts that do not match its file list")
+        listed = {f["path"][len(prefix):] for f in files}
+        for inner, key in ((bundle_rules.HISTORY_BUNDLE, "head"), (bundle_rules.DOCS_HISTORY_BUNDLE, "docs_head")):
+            has_key = isinstance(git, dict) and key in git
+            if (inner in listed) != has_key:
+                raise bad("lists git history that does not match its parts")
+    if total_files > LIMITS["max_entries"]:
+        raise bad("lists too many files")
+    return env
+
+
+def _decode_yaml(data: bytes) -> Any:
+    text = data.decode("utf-16") if data.startswith((b"\xff\xfe", b"\xfe\xff")) else data.decode("utf-8-sig")
+    if "\x00" in text:
+        raise UnicodeError("NUL")
+    return yaml.safe_load(text)
+
+
+def _check_manifest(pid: str, data: Optional[bytes]) -> dict[str, Any]:
+    if data is None or len(data) > _MANIFEST_MAX:
+        raise _fail("manifest")
+    try:
+        doc = _decode_yaml(data)
+    except Exception:  # noqa: BLE001 - not YAML / not text
+        raise _fail("manifest") from None
+    if not isinstance(doc, dict) or "tenant" in doc:
+        raise _fail("manifest")
+    try:
+        manifest.validate({**doc, "tenant": "_default"})
+    except manifest.ManifestError:
+        raise _fail("manifest") from None
+    if doc.get("id") != pid:
+        raise _fail("manifest")
+    return doc
+
+
+def _staleness(doc: dict[str, Any], known: Optional[Any]) -> list[str]:
+    if not known:
+        return []
+    warns = []
+    tpl = doc.get("template")
+    templates = set(known.get("templates") or ())
+    if tpl and tpl not in templates and str(tpl).split("@", 1)[0] not in templates:
+        warns.append(f"The template {tpl} is not available on this installation; the project imports without it.")
+    feats = set(known.get("features") or ())
+    for f, on in (doc.get("features") or {}).items():
+        if on and f not in feats:
+            warns.append(f"The feature {f} is not available on this installation.")
+    return warns
+
+
+def validate(path: Path, known: Optional[Any] = None) -> dict[str, Any]:
+    """V1-V6 over the staged file. ``known``: ``{"templates": {...}, "features": {...}}`` of the target (None: no staleness
+    warnings). Returns the BundleReport ``{ok, stage?, reason_class?, message, projects, exporter, created_at, origin}``."""
+    try:
+        return _validate(Path(path), known)
+    except _Fail as f:
+        return {"ok": False, "stage": f.stage, "reason_class": f.stage, "message": f.message}
+
+
+def _validate(path: Path, known: Optional[Any]) -> dict[str, Any]:
+    # V1 container
+    try:
+        fh = open(path, "rb")                                  # noqa: SIM115 - closed below
+    except OSError:
+        raise _fail("container", "the file could not be read") from None
+    with fh:
+        if os.fstat(fh.fileno()).st_size > LIMITS["max_compressed_bytes"]:
+            raise _fail("container", "the file is larger than 500 MB")
+        if _eocd_entries(fh) > LIMITS["max_entries"]:
+            raise _fail("container", "too many entries")
+        fh.seek(0)
+        try:
+            zf = zipfile.ZipFile(fh)
+        except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, ValueError, EOFError, NotImplementedError):
+            raise _fail("container", "the file is not a readable ZIP archive") from None
+        with zf:
+            hit: dict[str, str] = {}
+            try:
+                infos = _names.check_container(zf, where="bundle", limits=_limits_for_container(),
+                                               entry_rule=_entry_rule_factory(hit))
+            except BundleCheckError as exc:
+                if exc.detail == "protected entry" and hit.get("path"):
+                    raise _fail("container", key="protected", path=hit["path"][:1000]) from None
+                raise _fail("container", exc.detail) from None
+            by_name = {i.filename: i for i in infos}
+            # V2 envelope
+            env_info = by_name.get(ENVELOPE_NAME)
+            if env_info is None:
+                raise _fail("envelope", "its manifest project-bundle.json is missing")
+            if env_info.file_size > LIMITS["max_envelope_bytes"]:
+                raise _fail("envelope", "its manifest is larger than 4 MB")
+            budget = _ratio.Budget(LIMITS["max_uncompressed_bytes"], limits=LIMITS)
+            raw = bytearray()
+            _read_entry(zf, env_info, budget, raw.extend, stage="envelope")
+            env = _parse_envelope(bytes(raw))
+            env_ids = {p["id"] for p in env["projects"]}
+            dir_ids = {n.split("/")[1] for n in by_name if n.startswith(PROJECTS_PREFIX)}
+            dir_ids |= {i.filename.split("/")[1] for i in zf.infolist() if i.is_dir() and i.filename.count("/") >= 2}
+            if not dir_ids <= env_ids or not env_ids <= {n.split("/")[1] for n in by_name if n.startswith(PROJECTS_PREFIX)}:
+                raise _fail("envelope", "a project's id does not match its directory")
+            # V3 integrity (one pass; manifests kept for V4, the first secret finding kept for V6)
+            listed: dict[str, tuple[str, int]] = {}
+            folded: set[str] = set()
+            for p in env["projects"]:
+                for f in p["files"]:
+                    if f["path"].casefold() in folded:
+                        raise _fail("integrity")
+                    folded.add(f["path"].casefold())
+                    listed[f["path"]] = (f["sha256"], f["size"])
+            present = set(by_name) - {ENVELOPE_NAME}
+            if present != set(listed):
+                raise _fail("integrity")
+            manifests: dict[str, bytes] = {}
+            nested: list[str] = []
+            finding: list[str] = []
+            git_payloads = {f"{PROJECTS_PREFIX}{pid}/{inner}" for pid in env_ids for inner in bundle_rules.GIT_PAYLOADS}
+            for info in sorted((by_name[n] for n in listed), key=lambda i: i.header_offset):
+                sha, size = listed[info.filename]
+                if info.file_size != size:
+                    raise _fail("integrity")
+                h = hashlib.sha256()
+                state = {"n": 0, "scanner": None, "first": True}
+                is_yaml = info.filename.rsplit("/", 1)[-1].casefold() == manifest.FILE
+                keep = bytearray() if is_yaml else None
+                scan_this = not finding and info.filename not in git_payloads
+
+                def sink(b: bytes, _st=state, _keep=keep, _name=info.filename) -> None:
+                    h.update(b)
+                    _st["n"] += len(b)
+                    if _keep is not None and len(_keep) <= _MANIFEST_MAX:
+                        _keep.extend(b[: _MANIFEST_MAX + 1 - len(_keep)])
+                    if scan_this and not finding:
+                        if _st["first"]:
+                            _st["scanner"] = _secrets.StreamScanner(_name) if is_text(b[:_SNIFF]) else None
+                            _st["first"] = False
+                        sc = _st["scanner"]
+                        if sc is not None:
+                            try:
+                                sc.feed(b)
+                            except BundleCheckError:
+                                finding.append(_name)
+                                _st["scanner"] = None
+                _read_entry(zf, info, budget, sink)
+                if state["n"] != size or h.hexdigest() != sha:
+                    raise _fail("integrity")
+                sc = state["scanner"]
+                if scan_this and not finding and state["first"]:
+                    sc = _secrets.StreamScanner(info.filename)      # an empty file: scanned as empty text
+                if sc is not None and not finding:
+                    try:
+                        sc.close()
+                    except BundleCheckError:
+                        finding.append(info.filename)
+                if keep is not None:
+                    parts = info.filename.split("/")
+                    if len(parts) == 3:
+                        manifests[parts[1]] = bytes(keep)
+                    elif len(keep) <= _MANIFEST_MAX and looks_like_manifest(bytes(keep)):
+                        nested.append(info.filename)
+            # V4 manifest
+            reports = []
+            for p in env["projects"]:
+                doc = _check_manifest(p["id"], manifests.get(p["id"]))
+                reports.append((p, doc))
+            if nested:
+                raise _fail("manifest", key="nested")
+            # V5 staleness (warnings only)
+            out_projects = []
+            for p, doc in reports:
+                out_projects.append({
+                    "id": p["id"], "title": p["title"], "role": p["role"], "classification": p["classification"],
+                    "docs_mode": doc.get("docs_mode", "nested"), "template": doc.get("template") or "",
+                    "features": dict(doc.get("features") or {}), "counts": dict(p["counts"]), "parts": list(p["parts"]),
+                    "git": dict(p.get("git") or {}), "left_out": list(p["left_out"]),
+                    "warnings": _staleness(doc, known), "source_project_uid": p["source_project_uid"]})
+            # V6 secrets (the envelope itself too)
+            if not finding:
+                try:
+                    _secrets.scan_bytes(bytes(raw), ENVELOPE_NAME)
+                except BundleCheckError:
+                    finding.append(ENVELOPE_NAME)
+            if finding:
+                raise _fail("secrets", path=finding[0][:1000])
+            return {"ok": True, "message": "", "origin": "unverified", "exporter": dict(env["exporter"]),
+                    "created_at": env["created_at"], "projects": out_projects,
+                    "counts": {"files": len(listed), "bytes": sum(s for _h, s in listed.values())}}

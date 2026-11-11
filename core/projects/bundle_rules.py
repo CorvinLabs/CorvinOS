@@ -27,6 +27,7 @@ REASONS = ("machine_local", "git_internal", "protected_name", "engine_copy", "gr
 #: the platform's machine-local directory and the git directory (members of PROTECTED_COMPONENTS)
 _MACHINE_LOCAL_COMPONENT = ".corvin"
 _GIT_COMPONENT = ".git"
+GIT_DIR = _GIT_COMPONENT
 assert {_MACHINE_LOCAL_COMPONENT, _GIT_COMPONENT} <= PROTECTED_COMPONENTS
 _MCP_FILE = ".mcp.json"
 _ENGINE_FILE = "engine.json"                       # casefolded

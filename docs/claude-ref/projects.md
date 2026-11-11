@@ -467,6 +467,28 @@ and `HEAD`. Every git call carries `changes.neutral_git_args` and `changes.neutr
 bundle's, git bundles aside), `left_out`, `parts`, `commits` (`rev-list --count HEAD`), `kb_entries`, plus the note
 "Archives inside the project are not checked for secrets."
 
+### Validation V1-V6 - `bundle.validate(path, known) -> BundleReport` (Decision 10, T-0398)
+
+A pure function over the staged file: `zipfile.ZipFile` on the seekable file (never bytes in memory), the entry count of
+the end-of-central-directory record checked BEFORE the central directory is parsed, every entry read in 1 MiB chunks
+through a 2 GiB budget, nothing extracted, nothing written (a write spy proves it; a 464 MiB bundle validated at a peak
+RSS of 59 MiB). The first failing stage answers `{ok: false, stage, reason_class: <stage>, message}`; the message never
+carries content.
+
+| Stage | Refuses | Message |
+|---|---|---|
+| `container` (V1) | > 500 MiB file, > 50 000 entries, unreadable ZIP; names absolute, with `\`, `:`, `..`, empty segments or control characters (`bundle_common.names`); duplicates exact, after casefold and after NFC; a Windows device name (any extension), `<>"|?*` or a trailing dot/space in any component; depth > 64, name > 1000 bytes; symlink, encrypted or not stored/deflated entries; > 2 GiB declared; 100:1 per entry above 1 MiB; an entry outside `projects/<id>/` (id rule) or the envelope | "This file is not a valid project bundle (<detail>)." |
+| `container`, protected | `bundle_rules.protected_entry(<path below projects/<id>/>)` answers (`bundle.V1_PROTECTED` IS `bundle.NEVER_LIST`); a `.corvin-export` component other than the two git payload paths | "This file is not a valid project bundle (it contains a protected entry: <entry path>)." |
+| `envelope` (V2) | missing, > 4 MiB, not UTF-8 JSON; strict schema (unknown keys refused), `format`/`format_version` 1, 1-20 projects, id rule, ULID, 32-hex uid, closed part and `left_out` vocabularies, `git.head`/`docs_head` a `refs/heads/*` name exactly when the history part is included and its bundle listed, counts equal to the file list, each file below its project; every project directory is an envelope id and vice versa | "This file is not a valid project bundle (<detail>)." |
+| `integrity` (V3) | an unlisted or missing entry, a path listed twice, size or sha256 mismatch, CRC / stream error | "The bundle's contents do not match its manifest." |
+| `manifest` (V4) | the root `project.yaml` missing, > 64 KiB, not YAML, with a `tenant` key, failing `manifest.validate` (unknown `docs_mode`, a reserved id such as `corvin` - `import`, `trash`, `files` pass), id not the envelope's; a CorvinOS manifest below the root | "The project description in the bundle is invalid." / "The bundle contains a project inside the project; it was not imported." |
+| `staleness` (V5) | nothing: an unknown template or feature is a `warnings` line of that project | - |
+| `secrets` (V6) | a credential shape in a text entry (same `is_text` rule as the export; the git payloads and nested archives are not opened) or in the envelope | "<entry path> in the bundle looks like it contains a secret; the bundle was not imported." |
+
+V3 and V6 share one read pass (the first secret finding is held until V4 and V5 have run, so the stage order holds).
+The report on success: `{ok, origin: "unverified", exporter, created_at, counts, projects: [{id, title, role,
+classification, docs_mode, template, features, counts, parts, git, left_out, warnings, source_project_uid}]}`.
+
 ## Console panel (T-0357)
 
 `/app/projects` (sidebar: Projects, below Tasks). **Two registrations** are needed and both exist: `PANELS`
