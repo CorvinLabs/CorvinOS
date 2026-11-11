@@ -28,9 +28,13 @@ def test_the_data_dir_variables_point_into_the_session_sandbox_in_a_subprocess()
     out = subprocess.run([sys.executable, "-c", f"import json, os; print(json.dumps({{k: os.environ.get(k) for k in {keys!r}}}))"],
                          capture_output=True, text=True, timeout=60, check=True)
     got = json.loads(out.stdout)
+    import conftest as _root_conftest  # the repo-root conftest: its own rule decides what is "live"
     for k in keys:
         assert got[k], f"{k} is not set in a child process"
-        assert Path(got[k]).resolve().is_relative_to(Path(sandbox).resolve()), (k, got[k], sandbox)
+        # the conftest keeps a NON-live location the invoking shell already chose (run-all-tests.sh exports its own sandbox);
+        # what must hold is that the child never sees a live location, not that it is inside this session's sandbox
+        inside = Path(got[k]).resolve().is_relative_to(Path(sandbox).resolve())
+        assert inside or not _root_conftest._unsafe(k, got[k]), (k, got[k], sandbox)
     real = Path(os.path.expanduser("~")).resolve() / ".local" / "share"
     assert Path(got["XDG_DATA_HOME"]).resolve() != real
 
@@ -40,7 +44,14 @@ def test_the_managed_parent_resolves_into_the_sandbox():
     sandbox = Path(os.environ["CORVIN_PYTEST_SESSION_SANDBOX"]).resolve()
     if sys.platform == "darwin":
         pytest.skip("on macOS the data dir follows HOME, which the conftest leaves alone; the projects Sandbox moves HOME")
-    assert Path(str(user_dirs.managed_parent())).resolve().is_relative_to(sandbox)
+    parent = Path(str(user_dirs.managed_parent())).resolve()
+    if parent.is_relative_to(sandbox):
+        return
+    # the invoking shell gave its own non-live data dir (run-all-tests.sh does): the parent must lie below THAT, never the real one
+    import conftest as _root_conftest
+    data = os.environ.get("XDG_DATA_HOME", "")
+    assert data and not _root_conftest._unsafe("XDG_DATA_HOME", data), data
+    assert parent.is_relative_to(Path(data).resolve()), (parent, data)
 
 
 def _child_pytest(tmp: Path, body: str, workspaces: tuple[str, ...] = ()) -> subprocess.CompletedProcess:
