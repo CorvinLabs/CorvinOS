@@ -260,7 +260,11 @@ def project_of_card(item: Any) -> Optional[str]:
 
 
 def _check_parent(conn: sqlite3.Connection, tenant_id: str, kind: str,
-                  parent_id: Optional[str], item_id: Optional[str], *, child_ref: Optional[str] = None) -> None:
+                  parent_id: Optional[str], item_id: Optional[str], *, child_ref: Optional[str] = None,
+                  placing: bool = True) -> None:
+    """``placing``: the card is being put under ``parent_id`` now (create, a new parent). The project rule judges only that - a
+    card that already sits there (restore, a kind change in place) keeps its place, so a pre-rule card can still be restored
+    and moved away (REVIEW-0087 N39)."""
     allowed = PARENT_RULES[kind]
     if parent_id is None:
         if None not in allowed:
@@ -275,7 +279,7 @@ def _check_parent(conn: sqlite3.Connection, tenant_id: str, kind: str,
     # a card of a PROJECT's knowledge base holds only that knowledge base's children (the projector's own cards): a manual card
     # under it was missing from the project's board and dangled on the tenant's - one rule for create, update and restore
     # (REVIEW-0085 N37, REVIEW-0086 N38)
-    if project_of_card(parent) is not None and not str(child_ref or "").startswith(KB_REF_PREFIX):
+    if placing and project_of_card(parent) is not None and not str(child_ref or "").startswith(KB_REF_PREFIX):
         raise ProjectParentRefused("a card of a project's knowledge base holds only that knowledge base's children: an epic "
                                    "under an initiative, a task under an epic")
     # Cycle: walk up from the new parent; meeting the item itself closes a loop.
@@ -668,7 +672,8 @@ def update(tenant_id: str, item_id: str, patch: ItemPatch, *, actor: str,
 
         if "kind" in changed or "parent_id" in changed:
             _check_parent(conn, tenant_id, kind, changed.get("parent_id", cur["parent_id"]), item_id,
-                          child_ref=cur["external_ref"])
+                          child_ref=cur["external_ref"],
+                          placing=changed.get("parent_id", cur["parent_id"]) != cur["parent_id"])
         if "kind" in changed:
             _check_children_fit(conn, tenant_id, item_id, kind)
         now = now_iso()
@@ -793,7 +798,7 @@ def restore(tenant_id: str, item_id: str, *, actor: str, sid_fingerprint: Option
             if parent is not None and parent["deleted_at"]:
                 raise TaskTrackingError("its parent is deleted — restore the parent first")
         # The parent may have changed kind while this item was deleted.
-        _check_parent(conn, tenant_id, cur["kind"], cur["parent_id"], item_id, child_ref=cur["external_ref"])
+        _check_parent(conn, tenant_id, cur["kind"], cur["parent_id"], item_id, child_ref=cur["external_ref"], placing=False)
         now = now_iso()
         sql = ("UPDATE items SET deleted_at=NULL, deleted_by=NULL, restored_at=?, updated_at=?, version=version+1,"
                " cascading_delete_id=NULL WHERE tenant_id=? AND ")

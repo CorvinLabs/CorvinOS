@@ -1291,7 +1291,9 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   nothing changes (REVIEW-0083 N32, REVIEW-0084 N33-N35). The parent decides, not the board: a KB card takes only the
   knowledge base's hierarchy as children, and a PROJECT's KB card takes nothing else - the dialog (`parentFits`, the
   no-children notice) and the store's one parent rule (`service._check_parent` -> `ProjectParentRefused`, 409) apply it on
-  create, update (PATCH `parent_id`) and restore, from every view (REVIEW-0085 N36, N37, REVIEW-0086 N38).
+  placing a card - create, or a PATCH that changes `parent_id` - from every view (REVIEW-0085 N36, N37, REVIEW-0086 N38).
+  A card that already sits under a project KB card (written before the rule) keeps its place: restore and a kind change in
+  place do not re-judge it, so it can be restored and moved away (REVIEW-0087 N39).
   `service.project_of_card` is the one reader of a card's project; `projection.project_of_card` delegates to it. A chain failure between two opening records of `_audited` closes the ones already
   open as `error`.
 - **Audit records of a change the body can still refuse** (`_audited` in `projects_service.py`): adopt (both branches), a

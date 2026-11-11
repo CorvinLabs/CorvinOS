@@ -281,6 +281,17 @@ class ProjectGraphScopeE2E(unittest.TestCase):
                 self.assertEqual(x.status_code, 409, (item["kind"], x.text))
             kids = own.get(f"{_TT}/items/{r.json()['id']}").json()
             self.assertNotIn("loose issue", str(kids))
+            # a manual card placed under a project KB card before the rule existed keeps its place: it can be deleted, restored
+            # and moved away (REVIEW-0087 N39)
+            from core.task_tracking import store as _store
+            old = own.post(f"{_TT}/items", json={"kind": "task", "title": "pre-rule child"}, headers=h).json()
+            with _store.connect("_default") as conn:
+                conn.execute("UPDATE items SET parent_id=? WHERE id=?", (epic.json()["id"], old["id"]))
+            self.assertEqual(own.post(f"{_TT}/items/{old['id']}/delete", headers=h).status_code, 200)
+            back = own.post(f"{_TT}/items/{old['id']}/restore", headers=h)
+            self.assertEqual(back.status_code, 200, back.text)
+            away = own.patch(f"{_TT}/items/{old['id']}", json={"version": back.json()["version"], "parent_id": None}, headers=h)
+            self.assertEqual(away.status_code, 200, away.text)
 
 
 if __name__ == "__main__":
