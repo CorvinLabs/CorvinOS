@@ -529,7 +529,8 @@ come from the WHOLE trash (REVIEW-0063 m6): every name that matches the entry pa
 names looked at, foreign names never counted), sorted by the deletion time the name carries; only names past the TTL are
 candidates, and only the sidecar reads are capped (200 per tick, `TRASH_SCAN_LIMIT`) - so the 30-day bound holds however
 many young entries or junk names lie in `.trash/`. A candidate (past the TTL by its NAME) whose sidecar is unreadable, names
-another id than the name, or whose `deleted_ts` is more than `TRASH_NAME_SKEW_S` = 300 s from the name's time is moved to
+another id than the name, carries no `deleted_ts`, or whose `deleted_ts` is not yet expired while lying more than
+`TRASH_NAME_SKEW_S` = 300 s after the name's time (young by the sidecar, old by the name) is moved to
 `.trash/.quarantine/` (0o700; under its project lock when the sidecar names a valid id; never deleted - the operator
 decides), audited once per tick as `project.trash_quarantined` WARNING {`entries`, `outcome` requested/applied,
 `tenant_id`} - a count, never a name - so such an entry costs one read once and 200 of them no longer hold the read budget

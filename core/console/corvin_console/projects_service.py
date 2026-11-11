@@ -1705,10 +1705,12 @@ def sweep_trash(tenant_id: str, *, busy: bool = False, now: Optional[float] = No
             broken.append((d, None))
             continue
         ts = side.get("deleted_ts")
-        if not isinstance(ts, (int, float)) or abs(float(ts) - calendar.timegm(time.strptime(name_ts, "%Y%m%dT%H%M%SZ"))) > TRASH_NAME_SKEW_S:
-            broken.append((d, side["id"]))                       # young by the sidecar, old by the name: read every tick otherwise
+        if not isinstance(ts, (int, float)):
+            broken.append((d, side["id"]))
             continue
         if now - float(ts) <= TRASH_TTL_S:
+            if float(ts) - calendar.timegm(time.strptime(name_ts, "%Y%m%dT%H%M%SZ")) > TRASH_NAME_SKEW_S:
+                broken.append((d, side["id"]))                   # young by the sidecar, old by the name: read every tick otherwise
             continue
         try:
             with _project_lock_of(tenant_id, side["id"], timeout=TRASH_SWEEP_LOCK_S):
@@ -1728,7 +1730,8 @@ def sweep_trash(tenant_id: str, *, busy: bool = False, now: Optional[float] = No
     return out
 
 
-#: a trash entry's name carries the second its sidecar's ``deleted_ts`` was taken; more apart than this = not the same deletion
+#: a trash entry's name carries the second its sidecar's ``deleted_ts`` was taken; a sidecar YOUNGER than its name by more than
+#: this (not expired by the sidecar, expired by the name) would be read on every tick and never removed
 TRASH_NAME_SKEW_S = 300.0
 TRASH_QUARANTINE = ".quarantine"
 
