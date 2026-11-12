@@ -106,6 +106,24 @@ class ProjectsApiE2E(unittest.TestCase):
 
     # ── create ─────────────────────────────────────────────────────────────
 
+    def test_a_title_that_is_not_one_line_is_refused_at_planning_and_leaves_no_folder(self):
+        # REVIEW-0089 N41: the plan accepted it, create refused it after making the folder, which stayed behind empty
+        with self._ctx() as c:
+            for bad in ("Alpha\u2028Beta", "Alpha\tBeta", "Alpha\u0085Beta"):
+                plan = c.own.post(f"{_URL}/plan", json={"template": "demo", "title": bad}, headers={"X-CSRF-Token": c.own_csrf})
+                self.assertEqual(plan.status_code, 422, (repr(bad), plan.text))
+            self.assertFalse((c.root / "alpha-beta").exists())
+
+    def test_a_failed_manifest_write_takes_the_new_folder_back(self):
+        with self._ctx() as c:
+            plan = c.own.post(f"{_URL}/plan", json={"template": "demo", "title": "Write fails"}, headers={"X-CSRF-Token": c.own_csrf}).json()
+            def boom(*_a, **_k):
+                raise OSError("disk full")
+            with mock.patch.object(c.svc.manifest, "write_into", boom), mock.patch.object(c.svc.manifest, "write", boom):
+                r = c.own.post(_URL, json={"plan_id": plan["plan_id"]}, headers={"X-CSRF-Token": c.own_csrf})
+            self.assertGreaterEqual(r.status_code, 400, r.text)
+            self.assertFalse(Path(plan["location"]).exists(), "an empty project folder stayed behind")
+
     def test_templates_plan_create_then_a_fresh_kb_check_is_green(self):
         with self._ctx() as c:
             t = c.own.get(f"{_URL}/templates").json()

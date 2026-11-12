@@ -64,6 +64,8 @@ describe("advancing", () => {
     expect(canAdvance(s({ step: 1 }), undefined)).toBe(false);
     expect(canAdvance(s({ step: 1, templateId: "knowledge-only" }), undefined)).toBe(true);
     expect(canAdvance(s({ step: 2, title: "   " }), undefined)).toBe(false);
+    // the server's one-line rule: a tab, a line separator or NEL is refused at the wizard, not after the folder is made (REVIEW-0089 N41)
+    for (const bad of ["Alpha\tBeta", "Alpha\u2028Beta", "Alpha\u0085Beta"]) expect(canAdvance(s({ step: 2, title: bad }), undefined)).toBe(false);
     expect(canAdvance(s({ step: 2, title: "x".repeat(121) }), undefined)).toBe(false);
     expect(canAdvance(s({ step: 2, title: "Plumbline" }), undefined)).toBe(true);
   });

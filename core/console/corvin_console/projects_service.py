@@ -541,6 +541,7 @@ def plan_project(tenant_id: str, *, template: str, title: str, project_id: Optio
     title = (title or "").strip()
     if not title or len(title) > 120:
         raise ProjectsError("the title must be 1-120 characters")
+    manifest.check_title(title)            # the one-line rule at planning, not only when the folder is made (REVIEW-0089 N41)
     pid = project_id or _unique_id(tenant_id, slug(title))
     if not manifest.is_new_id_allowed(pid):
         raise ProjectsError("the project id must be lowercase kebab-case, 1-28 characters, and not a reserved word "
@@ -813,6 +814,7 @@ def _create_project(tenant_id: str, plan_id: str, rec: "PlanRecord") -> dict[str
         bound_engine(tenant_id)
     base = dict(project_id=rec.project_id, template=f"{tpl.id}@{tpl.version}", files=len(plan.writes),
                 storage=registry.storage_of(tenant_id, loc))
+    manifest.check_title(rec.title)          # a plan made by an older build: refused before the record and before any folder
     _audit(tenant_id, "project.created", outcome="requested", **base)          # audit-first
     outcome = "error"
     try:
@@ -827,10 +829,14 @@ def _create_project(tenant_id: str, plan_id: str, rec: "PlanRecord") -> dict[str
             man = _manifest_for(tenant_id, rec.project_id, rec.title, tpl.id, tpl.version, rec.docs_mode,
                                 plan.features, list(tpl.offered), tpl.videos, rec.role, rec.classification,
                                 rec.assistant_access)
-            if hloc.fd is not None:                                             # the truth first, into the folder that was
-                manifest.write_into(hloc.fd, man)                               # made - never through a path (REVIEW-0065)
-            else:
-                manifest.write(loc, man)                                        # Windows: no dir_fd; location_intact below
+            try:
+                if hloc.fd is not None:                                         # the truth first, into the folder that was
+                    manifest.write_into(hloc.fd, man)                           # made - never through a path (REVIEW-0065)
+                else:
+                    manifest.write(loc, man)                                    # Windows: no dir_fd; location_intact below
+            except BaseException:
+                hloc.rollback()                 # a refused or failed manifest write leaves no empty folder (REVIEW-0089 N41)
+                raise
             try:
                 if not registry.location_intact(loc, hloc):                     # re-checked right before it is recorded
                     _audit_refusal(tenant_id, "symlink", rec.project_id)

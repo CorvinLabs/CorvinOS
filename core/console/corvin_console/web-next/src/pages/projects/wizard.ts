@@ -3,6 +3,7 @@
  * with, what a step may advance past, and how the server's error becomes a sentence the user can act on.
  */
 import type { Access, DataClass, DefaultStorage, PlanRequest, ProjectPlan, TemplateCatalogue, TemplateInfo } from "@/lib/api/projects";
+import { titleProblem } from "./share-logic";
 import { ApiError } from "@/lib/api/client";
 import { featureLabel } from "./encodings";
 
@@ -76,7 +77,8 @@ export function choosable(t: TemplateInfo): string[] {
 export function canAdvance(s: WizardState, plan: ProjectPlan | undefined): boolean {
   switch (s.step) {
     case 1: return s.templateId !== null;
-    case 2: return s.title.trim().length > 0 && s.title.trim().length <= 120 && (s.place !== "custom" || s.location.trim().length > 0);
+    // the server's title rule (one line, no control character, at most 120): the plan step refused nothing of it (REVIEW-0089 N41)
+    case 2: return titleProblem(s.title) === null && (s.place !== "custom" || s.location.trim().length > 0);
     case 3: return s.features.length > 0;
     case 4: return !!plan && plan.ready;
   }

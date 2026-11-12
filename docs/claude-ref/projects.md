@@ -1257,7 +1257,9 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   `LLM_lie_detector` repository (every file hashed before and after; only `project.yaml` is new).
 - **Rename** (`PUT /projects/{id}/title`): the title in `project.yaml` only; the id (registry key, KB scope label) never changes.
   The one-line title rule (`manifest.check_title`) runs before the `project.renamed` record, so a refused title (422) leaves
-  no record (REVIEW-0074 N13). Adopt of a folder that already has `project.yaml` checks the per-tenant limit and whether the
+  no record (REVIEW-0074 N13). Create applies the same rule at planning (`plan_project`, 422) and again before its first
+  record, the wizard checks it before "Next" (`titleProblem`), and a manifest write that fails after the folder was made
+  takes that folder back (REVIEW-0089 N41). Adopt of a folder that already has `project.yaml` checks the per-tenant limit and whether the
   folder is already registered (409 `already_registered`) before its record (REVIEW-0075 N14, REVIEW-0076 N17); the
   refusal names the registered project and says to put its id back into project.yaml or remove and re-add it - repair
   refuses a project.yaml that names another project, so it is not offered. The health row `manifest` says which id or

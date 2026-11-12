@@ -12,6 +12,7 @@ import { useAuth } from "@/lib/auth";
 import { createProject, listProjects, listTemplates, planProject, type ProjectPlan, type TemplateInfo } from "@/lib/api/projects";
 import { featureLabel } from "./encodings";
 import { underRoot } from "./picker-logic";
+import { titleProblem } from "./share-logic";
 import { AccessBadge, ClassBadge, StorageBadge } from "./badges";
 import { ACCESS_META, CLASS_META, CLASS_ORDER, badgeLine, groupTemplates } from "./roles";
 import { INITIAL, canAdvance, choosable, chooseTemplate, explain, featureNames, idProblem, initialPlace, planRequest, templateById, toggleFeature,
@@ -122,6 +123,9 @@ export function NewProjectDialog({ open, onOpenChange }: { open: boolean; onOpen
               <span>Project name</span>
               <Input data-testid="wizard-title" value={s.title} maxLength={120} autoFocus
                 onChange={(e) => set({ title: e.target.value })} placeholder="e.g. Plumbline explainer" />
+              {s.title.trim() && titleProblem(s.title) && (
+                <span role="alert" className="block text-xs text-red-700 dark:text-red-300" data-testid="wizard-title-error">{titleProblem(s.title)}</span>
+              )}
             </label>
             <label className="block space-y-1 text-sm">
               <span>Id (optional)</span>
