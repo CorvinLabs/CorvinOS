@@ -1262,7 +1262,10 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   takes that folder back (REVIEW-0089 N41). Import's bundle check reads project.yaml with the reader's own rules (no aliases, the
   rewritten form within 64 KiB) and `manifest.write` refuses what `manifest.load` would refuse (REVIEW-0090 N42). New video
   runs its read-only checks (template sections, the KB initiative) before its record, and takes back the videos root it
-  made (N43). Adopt of a folder that already has `project.yaml` checks the per-tenant limit and whether the
+  made (N43). A lone UTF-16 surrogate anywhere in a parsed project.yaml (a YAML `\uD800` escape) makes the project
+  `invalid`, never a 500 for the whole list (`manifest._has_lone_surrogate`, REVIEW-0091 N44). Import checks the EXACT
+  project.yaml it will write (this tenant, the chosen id and title) before its record and before extraction
+  (`bundled_manifest` + `manifest.encoded`); the bundle check no longer uses a stand-in form (N45, N46). Adopt of a folder that already has `project.yaml` checks the per-tenant limit and whether the
   folder is already registered (409 `already_registered`) before its record (REVIEW-0075 N14, REVIEW-0076 N17); the
   refusal names the registered project and says to put its id back into project.yaml or remove and re-add it - repair
   refuses a project.yaml that names another project, so it is not offered. The health row `manifest` says which id or

@@ -62,6 +62,8 @@ def check_title(title: Any) -> str:
         raise ManifestError(f"title must be a non-empty string of at most {TITLE_MAX} characters")
     if _CONTROL.search(title):
         raise ManifestError("title must be one line (no line break or control character)")
+    if _has_lone_surrogate(title):
+        raise ManifestError("title holds a character that is not valid text")
     return title
 
 
@@ -123,7 +125,26 @@ def parse(text: str) -> dict[str, Any]:
     except (yaml.YAMLError, ValueError, TypeError, RecursionError, OverflowError) as exc:
         # an impossible date (2024-02-30) is a plain ValueError from the YAML constructor - never a 500 for the whole list
         raise ManifestError(f"project.yaml is not valid YAML: {type(exc).__name__}") from None
+    if _has_lone_surrogate(data):
+        # a YAML escape ("\uD800") makes text no UTF-8 encoder can write: the whole project list answered 500 (REVIEW-0091 N44)
+        raise ManifestError("project.yaml holds a character that is not valid text (a lone surrogate)")
     return validate(data)
+
+
+def _has_lone_surrogate(v: Any, depth: int = 0) -> bool:
+    if depth > 64:
+        return False
+    if isinstance(v, str):
+        try:
+            v.encode("utf-8")
+        except UnicodeEncodeError:
+            return True
+        return False
+    if isinstance(v, dict):
+        return any(_has_lone_surrogate(k, depth + 1) or _has_lone_surrogate(x, depth + 1) for k, x in v.items())
+    if isinstance(v, (list, tuple)):
+        return any(_has_lone_surrogate(x, depth + 1) for x in v)
+    return False
 
 
 def load(root: Path) -> dict[str, Any]:
@@ -154,6 +175,8 @@ def encoded(data: dict[str, Any]) -> bytes:
     """The bytes :func:`write` would store - refused here when :func:`load` would refuse them (too large), so nothing writes a
     project.yaml its own reader cannot open (REVIEW-0090 N42)."""
     validate(data)
+    if _has_lone_surrogate(data):
+        raise ManifestError("project.yaml would hold a character that is not valid text")
     raw = dumps(data).encode("utf-8")
     if len(raw) > _MAX_BYTES:
         raise ManifestError("project.yaml is too large")

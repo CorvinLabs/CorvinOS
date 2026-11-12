@@ -825,6 +825,33 @@ class ImportApply(ApplyBase):
 
     # REVIEW-0071 N4: a title the create path refuses (control character, line break, too long) ended in 409 import_incomplete
     # and left an `invalid` project whose project.yaml named the source id; now 422 before anything is written
+    def test_the_exact_manifest_an_import_writes_is_checked_before_anything_is_written(self):
+        # REVIEW-0091 N45/N46: a stand-in at validate was too weak (a long multi-byte title broke the import after extraction)
+        # and too strict (a large but loadable project.yaml from this tenant was refused)
+        import subprocess as _sp
+        from core.projects import manifest, registry
+        with self.ctx() as c:
+            pid, root = self.make(c, "Big", template="plain")
+            man = manifest.load(root)
+            n = 1
+            while len(manifest.dumps({**man, "pad": list(range(n))}).encode()) < 64 * 1024 - 300:
+                n += 200
+            while len(manifest.dumps({**man, "pad": list(range(n))}).encode()) > 64 * 1024 - 300:
+                n -= 1
+            manifest.write(root, {**man, "pad": list(range(n))})          # loadable: under the limit by ~300 bytes
+            _sp.run(["git", "-C", str(root), "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qam", "pad"], check=False)
+            rep = self.stage(c, self.bundle_bytes(c, pid))
+            sid = rep["staging_id"]
+            parent = Path(rep["projects"][0]["default_location"]["path"]).parent
+            before = sorted(p.name for p in parent.iterdir()) if parent.exists() else []
+            r = self.apply(c, sid, project_id="big-wide", title="\U0001F600" * 120)    # 480 bytes: past the limit
+            self.assertIn(r.status_code, (409, 422), r.text[:300])
+            self.assertIsNone(registry.get("acme", "big-wide"))
+            self.assertEqual(sorted(p.name for p in parent.iterdir()) if parent.exists() else [], before)
+            self.assertFalse(self.events(c, "project.imported", tenant="acme"), "a refused manifest is not an import attempt")
+            r = self.apply(c, sid, project_id="big-ok", title="Big")                     # the same staging imports as it is
+            self.assertEqual(r.status_code, 201, r.text[:300])
+
     def test_a_title_create_refuses_is_422_before_anything_is_written_and_the_staging_stays(self):
         from core.projects import registry
         with self.ctx() as c:

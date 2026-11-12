@@ -375,6 +375,18 @@ class AdoptRenameMove(_Base):
             self.assertEqual(r.status_code, 200, r.text)
             self.assertIsNone(registry.get("_default", pid))
 
+    def test_a_lone_surrogate_in_project_yaml_makes_the_project_invalid_not_the_list_a_500(self):
+        # REVIEW-0091 N44: a YAML escape "\uD800" produced text no JSON encoder can write - every projects request answered 500
+        with self._ctx() as c:
+            pid, root = self._new(c)
+            y = root / "project.yaml"
+            y.write_text("\n".join(("title: \"A\\uD800b\"" if ln.startswith("title:") else ln) for ln in y.read_text().splitlines()) + "\n")
+            r = c.own.get(_URL)
+            self.assertEqual(r.status_code, 200, r.text[:300])
+            row = next(p for p in r.json()["projects"] if p["id"] == pid)
+            self.assertEqual(row["state"], "invalid")
+            self.assertEqual(c.own.get(f"{_URL}/{pid}").status_code, 200)
+
     def test_a_successful_adopt_closes_its_request(self):
         with self._ctx() as c:
             dst = c.root / "plain-two"

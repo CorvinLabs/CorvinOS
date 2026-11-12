@@ -1325,6 +1325,19 @@ def _decode_yaml(data: bytes) -> Any:
     return safe_yaml.load(text)         # no aliases: the manifest reader refuses them, so the check does too (REVIEW-0090 N42)
 
 
+def bundled_manifest(zip_path: Path, project_id: str) -> dict[str, Any]:
+    """The project.yaml a validated bundle carries for ``project_id`` (``projects/<id>/project.yaml``), parsed with the reader's
+    rules - for the apply step to check the exact form it will write before it writes anything."""
+    want = f"{PROJECTS_PREFIX}{project_id}/{manifest.FILE}".casefold()
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            if info.filename.casefold() == want and info.file_size <= _MANIFEST_MAX:
+                doc = _decode_yaml(zf.read(info))
+                if isinstance(doc, dict):
+                    return doc
+    raise ImportFailed("manifest", "the bundle's project description could not be read")
+
+
 def _check_manifest(pid: str, data: Optional[bytes]) -> dict[str, Any]:
     if data is None or len(data) > _MANIFEST_MAX:
         raise _fail("manifest")
@@ -1337,9 +1350,10 @@ def _check_manifest(pid: str, data: Optional[bytes]) -> dict[str, Any]:
     try:
         # the form step 5 writes (tenant, id, title, protection set) must fit what the reader accepts - checked here, before
         # anything is extracted, not after the import (REVIEW-0090 N42)
-        manifest.validate({**doc, "tenant": "_default"})           # the document's own fields, its title included
-        manifest.encoded({**doc, "tenant": "t" * 64, "id": pid, "title": "x" * 120, "classification": "confidential",
-                          "assistant_access": "write"})
+        # the document's own fields and a form the reader accepts; the EXACT form the import writes (this tenant, the chosen id
+        # and title) is checked at apply, before anything is written - a stand-in here was both too weak and too strict
+        # (REVIEW-0091 N45, N46)
+        manifest.encoded({**doc, "tenant": "_default"})
     except manifest.ManifestError:
         raise _fail("manifest") from None
     if doc.get("id") != pid:

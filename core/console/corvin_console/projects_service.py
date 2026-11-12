@@ -3830,6 +3830,12 @@ def _place_tree(tmp: Path, loc: Path) -> None:
         raise
 
 
+def _imported_manifest(raw: dict[str, Any], tenant_id: str, pid: str, title: Optional[str], cls: str, access: str) -> dict[str, Any]:
+    """The project.yaml an import writes: the bundle's, naming this tenant, the new id and title and the registry's protection."""
+    return {**raw, "tenant": tenant_id, "id": pid, "title": (title or raw.get("title") or pid)[:120],
+            "classification": cls, "assistant_access": access}
+
+
 def _rewrite_manifest(tenant_id: str, pid: str, loc: Path, title: Optional[str], cls: str, access: str) -> dict[str, Any]:
     """Step 5: the root project.yaml (as the bundle carried it: no tenant) names this tenant, the new id and title, and the
     protection the registry holds (so the doctor's protection check agrees)."""
@@ -3838,9 +3844,7 @@ def _rewrite_manifest(tenant_id: str, pid: str, loc: Path, title: Optional[str],
     raw = safe_yaml.load(read_text_any(loc / manifest.FILE, limit=64 * 1024))
     if not isinstance(raw, dict):
         raise manifest.ManifestError("project.yaml in the bundle is not a mapping")
-    man = {**raw, "tenant": tenant_id, "id": pid, "title": (title or raw.get("title") or pid)[:120],
-           "classification": cls, "assistant_access": access}
-    manifest.write(loc, man)
+    manifest.write(loc, _imported_manifest(raw, tenant_id, pid, title, cls, access))
     return manifest.load(loc)
 
 
@@ -3907,6 +3911,13 @@ def _apply_steps(tenant_id: str, project_id: str, zip_path: Path, card: dict[str
     access = protection["assistant_access"] if protection else manifest.DEFAULT_ACCESS
     base = {"project_id": pid, "files": int(card.get("counts", {}).get("files", 0)), "parts": parts_str}
     template = card.get("template") or ""
+    # (1b) the exact project.yaml step 5 will write must be one the reader accepts - checked before the record and before
+    # anything is extracted, so a refusal keeps the staging and leaves no half import (REVIEW-0091 N45, N46)
+    try:
+        raw = b.bundled_manifest(zip_path, card["id"])
+        manifest.encoded(_imported_manifest(raw, tenant_id, pid, title, cls, access))
+    except b.ImportFailed as exc:
+        raise Conflict(exc.message, exc.reason_class) from None
     # (2) audit-first, then the only state that exists before the rename
     _audit(tenant_id, event, outcome="requested", **base)
     tmp: Optional[Path] = None
