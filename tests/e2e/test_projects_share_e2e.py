@@ -1060,7 +1060,9 @@ class PendingImport(ApplyBase):
                 self.assertFalse(checks["import_leftovers"]["ok"], checks)
                 self.assertEqual(h["repair"], "Remove the unfinished import")
                 listed = [x for x in c.other.get(_URL).json()["projects"] if x["id"] == pid][0]
-                self.assertEqual(listed["reason"], "Being imported")
+                # nobody applies it any more: the list says it is unfinished, like the detail (REVIEW-0080 N25)
+                self.assertEqual(listed["reason"], c.svc.STALE_IMPORT_REASON)
+                self.assertIs(listed["stale"], True)
                 rr = c.other.post(f"{_URL}/{pid}/repair", json={}, headers=c.oh)
             self.assertEqual(rr.status_code, 200, rr.text[:300])
             self.assertTrue(rr.json()["removed_import"])
