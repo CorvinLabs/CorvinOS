@@ -185,6 +185,22 @@ class ProjectVideosE2E(unittest.TestCase):
             self.assertEqual(Path(v.json()["video"]["path"]), (own / "videos" / "own-intro").resolve())
             self.assertFalse((own.parent / "Corvin-Videos").exists())
 
+    def test_a_missing_template_is_refused_before_any_folder_or_record(self):
+        # REVIEW-0090 N43: the template check ran after the record and after the videos root was made, which stayed behind
+        with self._ctx() as (c, hdr, root, home):
+            pid = self._project(c, hdr)
+            proj = Path(c.get(f"{_URL}/{pid}").json()["path"])
+            (proj / "videos" / "TEMPLATE-sources.md").unlink()
+            vroot_before = {p.name for p in root.iterdir()}
+            chain = Path(home) / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+            n_before = chain.read_text().count('"project.video_created"') if chain.is_file() else 0
+            v = c.post(f"{_URL}/{pid}/videos", json={"name": "first"}, headers=hdr)
+            self.assertEqual(v.status_code, 400, v.text)
+            self.assertIn("restore it with Repair", v.text)
+            self.assertEqual({p.name for p in root.iterdir()}, vroot_before, "a folder was left behind")
+            n_after = chain.read_text().count('"project.video_created"') if chain.is_file() else 0
+            self.assertEqual(n_after, n_before, "a refused video wrote audit records")
+
     def test_the_videos_feature_must_be_on(self):
         with self._ctx() as (c, hdr, root, home):
             pid = self._project(c, hdr)

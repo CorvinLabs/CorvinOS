@@ -150,17 +150,25 @@ def dumps(data: dict[str, Any]) -> str:
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
 
 
-def write(root: Path, data: dict[str, Any]) -> None:
+def encoded(data: dict[str, Any]) -> bytes:
+    """The bytes :func:`write` would store - refused here when :func:`load` would refuse them (too large), so nothing writes a
+    project.yaml its own reader cannot open (REVIEW-0090 N42)."""
     validate(data)
-    atomic_write(Path(root) / FILE, dumps(data).encode("utf-8"), root=Path(root))
+    raw = dumps(data).encode("utf-8")
+    if len(raw) > _MAX_BYTES:
+        raise ManifestError("project.yaml is too large")
+    return raw
+
+
+def write(root: Path, data: dict[str, Any]) -> None:
+    atomic_write(Path(root) / FILE, encoded(data), root=Path(root))
 
 
 def write_into(dir_fd: int, data: dict[str, Any]) -> None:
     """:func:`write` into the directory held by *dir_fd* (POSIX), never through a path: create writes the manifest into the
     folder ``make_location`` made, so a component swapped for a link afterwards cannot place it at the link's target
     (REVIEW-0065, REVIEW-0063 m4)."""
-    validate(data)
-    write_at(dir_fd, FILE, dumps(data).encode("utf-8"))
+    write_at(dir_fd, FILE, encoded(data))
 
 
 def active_features(data: dict[str, Any]) -> list[str]:

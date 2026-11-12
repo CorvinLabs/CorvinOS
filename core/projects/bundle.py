@@ -1321,7 +1321,8 @@ def _decode_yaml(data: bytes) -> Any:
     text = data.decode("utf-16") if data.startswith((b"\xff\xfe", b"\xfe\xff")) else data.decode("utf-8-sig")
     if "\x00" in text:
         raise UnicodeError("NUL")
-    return yaml.safe_load(text)
+    from core.projects import safe_yaml  # noqa: PLC0415
+    return safe_yaml.load(text)         # no aliases: the manifest reader refuses them, so the check does too (REVIEW-0090 N42)
 
 
 def _check_manifest(pid: str, data: Optional[bytes]) -> dict[str, Any]:
@@ -1334,7 +1335,11 @@ def _check_manifest(pid: str, data: Optional[bytes]) -> dict[str, Any]:
     if not isinstance(doc, dict) or "tenant" in doc:
         raise _fail("manifest")
     try:
-        manifest.validate({**doc, "tenant": "_default"})
+        # the form step 5 writes (tenant, id, title, protection set) must fit what the reader accepts - checked here, before
+        # anything is extracted, not after the import (REVIEW-0090 N42)
+        manifest.validate({**doc, "tenant": "_default"})           # the document's own fields, its title included
+        manifest.encoded({**doc, "tenant": "t" * 64, "id": pid, "title": "x" * 120, "classification": "confidential",
+                          "assistant_access": "write"})
     except manifest.ManifestError:
         raise _fail("manifest") from None
     if doc.get("id") != pid:

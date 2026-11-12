@@ -2303,12 +2303,27 @@ def new_video(tenant_id: str, project_id: str, name: str) -> dict[str, Any]:
             read_text_any(_idx, limit=1024 * 1024)
         except (UnicodeError, ValueError, OSError):
             raise ProjectsError("videos/INDEX.md is not UTF-8 or UTF-16 text; save it as UTF-8 and try again") from None
+    # everything that only READS is checked before the record and before any folder (REVIEW-0090 N43)
+    tpl = root / "videos" / "TEMPLATE-sources.md"
+    try:
+        from core.projects.fsutil import read_text_any  # noqa: PLC0415
+        text = read_text_any(tpl, limit=256 * 1024) if not passes_link(root, tpl) and tpl.is_file() else ""
+    except (OSError, ValueError):
+        raise ProjectsError("videos/TEMPLATE-sources.md could not be read as text (UTF-8/UTF-16, up to 256 KB); restore it with Repair") from None
+    if [s_ for s_ in VIDEO_SECTIONS if f"## {s_}" not in text]:
+        raise ProjectsError("videos/TEMPLATE-sources.md is missing its eight sections; restore it with Repair")
+    ini = _kb_initiative(root) if kb_on else None
+    if kb_on and ini is None:
+        raise ProjectsError("the project has no initiative in its knowledge base to put the video's epic under")
     _audit(tenant_id, "project.video_created", project_id=project_id, outcome="requested", files=0)
     created: list[Path] = []
     epic_id: Optional[str] = None
     tasks = []
     try:
+        # the videos root and every folder above it that this call makes are taken back on failure too
+        missing = [p for p in [vroot, *vroot.parents] if not p.exists() and not is_link(p)]
         vroot.mkdir(parents=True, exist_ok=True)
+        created.extend(missing)
         vdir.mkdir()
         created.append(vdir)
         for sub in ("source", "build"):
@@ -2316,23 +2331,12 @@ def new_video(tenant_id: str, project_id: str, name: str) -> dict[str, Any]:
             created.append(vdir / sub)
             (vdir / sub / ".gitkeep").write_text("", encoding="utf-8")
             created.append(vdir / sub / ".gitkeep")
-        tpl = root / "videos" / "TEMPLATE-sources.md"
-        try:
-            from core.projects.fsutil import read_text_any  # noqa: PLC0415
-            text = read_text_any(tpl, limit=256 * 1024) if not passes_link(root, tpl) and tpl.is_file() else ""
-        except (OSError, ValueError):
-            raise ProjectsError("videos/TEMPLATE-sources.md could not be read as text (UTF-8/UTF-16, up to 256 KB); restore it with Repair") from None
-        if [s for s in VIDEO_SECTIONS if f"## {s}" not in text]:
-            raise ProjectsError("videos/TEMPLATE-sources.md is missing its eight sections; restore it with Repair")
         body = re.sub(r"^# sources\.md - .*$", f"# sources.md - {name}", text, count=1, flags=re.M)
         (vdir / "sources.md").write_text(body, encoding="utf-8")
         created.append(vdir / "sources.md")
         tasks: list[str] = []
         if kb_on:
             docs = root / "docs"
-            ini = _kb_initiative(root)
-            if ini is None:
-                raise ProjectsError("the project has no initiative in its knowledge base to put the video's epic under")
             rc, out = _project_kb_run(docs, "new", "epic", f"--title=VIDEO-{name}", f"--initiative={ini}",
                                          "--actor=operator", actor="operator", engine=bound_engine(tenant_id))
             if rc != 0 or not isinstance(out, dict) or not out.get("id"):
@@ -2374,7 +2378,7 @@ def new_video(tenant_id: str, project_id: str, name: str) -> dict[str, Any]:
         undo = "The video folder could not be removed completely; delete it by hand." if left else "The video folder was removed again."
         kept = f" The knowledge-base epic {epic_id} and {len(tasks)} task(s) stay; cancel them in the knowledge base." if epic_id else ""
         if isinstance(exc, ProjectsError):
-            exc.args = (f"{exc} {undo}{kept}",)
+            exc.args = (f"{str(exc).rstrip('.')}. {undo}{kept}",)
             raise
         raise ProjectsError(f"the video could not be created ({type(exc).__name__}). {undo}{kept}") from None
     _audit(tenant_id, "project.video_created", project_id=project_id, outcome="applied", files=len(created))
@@ -3830,8 +3834,8 @@ def _rewrite_manifest(tenant_id: str, pid: str, loc: Path, title: Optional[str],
     """Step 5: the root project.yaml (as the bundle carried it: no tenant) names this tenant, the new id and title, and the
     protection the registry holds (so the doctor's protection check agrees)."""
     from core.projects.fsutil import read_text_any  # noqa: PLC0415
-    import yaml  # noqa: PLC0415
-    raw = yaml.safe_load(read_text_any(loc / manifest.FILE, limit=64 * 1024))
+    from core.projects import safe_yaml  # noqa: PLC0415
+    raw = safe_yaml.load(read_text_any(loc / manifest.FILE, limit=64 * 1024))
     if not isinstance(raw, dict):
         raise manifest.ManifestError("project.yaml in the bundle is not a mapping")
     man = {**raw, "tenant": tenant_id, "id": pid, "title": (title or raw.get("title") or pid)[:120],
