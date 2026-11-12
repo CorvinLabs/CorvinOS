@@ -1236,6 +1236,9 @@ def _parse_envelope(raw: bytes) -> dict[str, Any]:
         raise bad("is not UTF-8 JSON") from None
     if not isinstance(env, dict) or set(env) != _TOP_KEYS:
         raise bad("has missing or unknown keys")
+    if manifest._has_lone_surrogate(env):
+        # json.loads accepts "\ud800"; no UTF-8 response can carry it (REVIEW-0092 N47)
+        raise bad("holds a character that is not valid text")
     if env["format"] != FORMAT or type(env["format_version"]) is not int or env["format_version"] != FORMAT_VERSION:
         raise bad("names another format or version")
     if env["origin"] != "unverified" or not isinstance(env["created_at"], str) or len(env["created_at"]) > 40:
@@ -1633,8 +1636,11 @@ def extract_project(zip_path: Path, pid: str, dest: Path, *, kb: bool = True, hi
                 raise ImportFailed("integrity", "The bundle's contents do not match its manifest.")
             sha, size = want
             parent = _mkdirs(dest_s, parts[:-1])
-            target = os.path.join(parent, parts[-1])
-            mode = _file_mode(parts[-1])
+            # the root manifest is stored under the one name the reader opens, whatever its casing in the bundle (a project
+            # exported from a case-insensitive host): validate and step 5 judge the same file (REVIEW-0092 N48)
+            leaf = manifest.FILE if len(parts) == 1 and parts[0].casefold() == manifest.FILE else parts[-1]
+            target = os.path.join(parent, leaf)
+            mode = _file_mode(leaf)
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_BINARY, mode)
             h = hashlib.sha256()
             n = 0

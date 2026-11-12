@@ -576,7 +576,8 @@ def make_bundle(path: Path, projects: dict[str, dict[str, bytes]] | None = None,
     env_projects = []
     entries: list[tuple] = []
     for pid, files in projects.items():
-        files = {"project.yaml": _manifest_bytes(pid), **files}
+        if not any(k.casefold() == "project.yaml" for k in files):         # a bundle may carry the manifest under another casing
+            files = {"project.yaml": _manifest_bytes(pid), **files}
         listed = []
         for rel, data in files.items():
             name = f"projects/{pid}/{rel}"
@@ -773,6 +774,15 @@ class Validate(BundleBase):
             self.check(z, "container")
 
     # AC2 - envelope
+    def test_a_root_manifest_with_another_casing_is_stored_as_project_yaml(self):
+        # REVIEW-0092 N48: validate accepted Project.yaml, extraction kept the name, the importer then could not open it
+        src = self.tmp / "case.zip"
+        make_bundle(src, {"alpha": {"Project.yaml": _manifest_bytes("alpha"), "README.md": b"# A\n"}})
+        bundle.validate(src)
+        dest = self.tmp / "out"
+        bundle.extract_project(src, "alpha", dest)
+        self.assertEqual(sorted(p.name for p in dest.iterdir()), ["README.md", "project.yaml"])
+
     def test_envelope_corpus(self):
         def drop(k):
             return lambda e: e.pop(k)
@@ -791,6 +801,9 @@ class Validate(BundleBase):
             "id not its directory": dict(envelope_patch=lambda e: e["projects"][0].update(id="beta")),
             "history without head": dict(envelope_patch=lambda e: e["projects"][0]["parts"][2].update(included=True)),
             "bad left_out reason": dict(envelope_patch=lambda e: e["projects"][0]["left_out"].append({"path": "x", "reason": "nope"})),
+            # json.loads accepts a lone surrogate; no UTF-8 response can carry it (REVIEW-0092 N47)
+            "lone surrogate in a title": dict(envelope_patch=lambda e: e["projects"][0].update(title="A\ud800b")),
+            "lone surrogate in the exporter": dict(envelope_patch=lambda e: e["exporter"].update(version="2\ud800")),
         }
         for label, kw in cases.items():
             with self.subTest(label):

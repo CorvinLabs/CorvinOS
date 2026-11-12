@@ -1265,7 +1265,9 @@ Browser: `tests/e2e/projects-videos.spec.ts` (4, served bundle, network stubbed)
   made (N43). A lone UTF-16 surrogate anywhere in a parsed project.yaml (a YAML `\uD800` escape) makes the project
   `invalid`, never a 500 for the whole list (`manifest._has_lone_surrogate`, REVIEW-0091 N44). Import checks the EXACT
   project.yaml it will write (this tenant, the chosen id and title) before its record and before extraction
-  (`bundled_manifest` + `manifest.encoded`); the bundle check no longer uses a stand-in form (N45, N46). Adopt of a folder that already has `project.yaml` checks the per-tenant limit and whether the
+  (`bundled_manifest` + `manifest.encoded`); the bundle check no longer uses a stand-in form (N45, N46). A lone surrogate in the
+  bundle envelope is refused at validate (`_parse_envelope`, N47), and extraction stores a root manifest of any casing as
+  `project.yaml`, so validate and import judge the same file (N48). Adopt of a folder that already has `project.yaml` checks the per-tenant limit and whether the
   folder is already registered (409 `already_registered`) before its record (REVIEW-0075 N14, REVIEW-0076 N17); the
   refusal names the registered project and says to put its id back into project.yaml or remove and re-add it - repair
   refuses a project.yaml that names another project, so it is not offered. The health row `manifest` says which id or
