@@ -108,6 +108,55 @@ export async function getChatTurns(
 }
 
 
+// ── Cost / token efficiency (ADR-2324) ────────────────────────────
+
+/** A figure the server could not compute is `null` - never 0. */
+export interface ChatEfficiencyRow {
+  ts: number | null;
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+  cost_usd: number | null;
+  lines_added: number | null;
+  lines_removed: number | null;
+  lines_lower_bound: boolean;
+}
+
+export interface ChatEfficiency {
+  sid: string;
+  schema: number;
+  window: { scope: string; first_ts: number | null; last_ts: number | null; history_truncated: boolean };
+  coverage: {
+    turns: number; measured: number; priced: number; unpriced: number;
+    without_usage: number; incomplete_usage: number; diff_withheld: number;
+    diff_truncated: number; line_turns: number; code_turns: number;
+  };
+  tokens: { input: number; output: number; cache_read: number; cache_write: number };
+  cost: {
+    total_usd: number | null; per_turn_usd: number | null;
+    per_1k_output_tokens_usd: number | null; cache_saving_usd: number | null;
+  };
+  cache: { hit_rate: number | null };
+  code: {
+    lines_added: number; lines_removed: number; lines_changed: number;
+    lines_lower_bound: boolean;
+    output_tokens_per_changed_line: number | null;
+    changed_lines_per_1k_output_tokens: number | null;
+    cost_per_changed_line_usd: number | null;
+  };
+  models: { model: string; turns: number; priced_turns: number; cost_usd: number | null; output_tokens: number }[];
+  unpriced_models: string[];
+  includes_delegated_workers: boolean;
+  price_basis: string;
+  rows: ChatEfficiencyRow[];
+}
+
+export async function getChatEfficiency(sid: string, signal?: AbortSignal): Promise<ChatEfficiency> {
+  return api<ChatEfficiency>(`/chat/sessions/${encodeURIComponent(sid)}/efficiency`, { signal });
+}
+
 // ── Voice (Iter 3b) ────────────────────────────────────────────────
 
 export interface TranscribeResponse {

@@ -400,6 +400,29 @@ def get_chat_turns(
 
     return {"sid": sid, "count": len(turns), "turns": turns}
 
+
+_EFFICIENCY_HISTORY_CAP = 50_000
+
+
+@router.get("/chat/sessions/{sid}/efficiency")
+def get_chat_efficiency(
+    sid: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Cost and token-efficiency metrics of one chat (ADR-2324).
+
+    Derived on every read from the persisted turn log - nothing is stored. Only the
+    caller's own session resolves (404 otherwise, same as ``/turns``). Definitions,
+    denominators and the unknown-is-not-zero rules live in ``chat_efficiency``.
+    """
+    sess = chat_runtime.get_session(rec.tenant_id, sid)
+    if sess is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
+    turns = chat_runtime.read_turns(rec.tenant_id, sid, limit=_EFFICIENCY_HISTORY_CAP)
+    from .. import chat_efficiency  # noqa: PLC0415
+    return {"sid": sid, **chat_efficiency.compute_chat_efficiency(
+        turns, history_truncated=len(turns) >= _EFFICIENCY_HISTORY_CAP)}
+
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # Also allow forward-slash-separated sub-paths (for ACS output files).
 _SAFE_SUBPATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]{0,511}$")

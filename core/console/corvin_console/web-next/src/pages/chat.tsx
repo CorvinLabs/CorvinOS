@@ -116,6 +116,7 @@ import {
   type BtwVia,
 } from "@/lib/btw-steer";
 import { ChatContextSidebar, usePendingCount } from "@/components/chat/ChatContextSidebar";
+import { ChatEfficiencyPanel } from "@/components/chat/ChatEfficiencyPanel";
 import { GroupConversation } from "@/components/chat/GroupConversation";
 import { PeerConversation } from "@/components/chat/PeerConversation";
 import { AttachmentChip } from "@/components/chat/AttachmentChip";
@@ -1727,6 +1728,8 @@ function ChatPane({
           </div>
         </div>
       )}
+
+      {!auditOpen && <ChatEfficiencyPanel sid={sid} streaming={streaming} />}
 
       <div
         ref={scrollRef}
