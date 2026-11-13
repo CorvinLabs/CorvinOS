@@ -419,7 +419,7 @@ if not _IS_TEST_SANDBOX:
         _forge_root = ROOT.parent.parent / "forge"
         if str(_forge_root) not in sys.path:
             sys.path.insert(0, str(_forge_root))
-        from corvin_operator.forge.forge.paths import corvin_home as _corvin_home_resolver  # type: ignore
+        _corvin_home_resolver = _forge_mod("paths").corvin_home  # type: ignore[attr-defined]
         _migrate_tenant = _forge_mod("tenant_migrate").migrate_to_default_tenant_if_needed
         _tenant_result = _migrate_tenant(
             corvin_home_path=_corvin_home_resolver(),
@@ -8614,7 +8614,7 @@ def _call_claude_streaming_impl(
         from corvin_core.aco.htrace_uploader import (  # noqa: PLC0415
             record_active_engine as _record_active_engine,
         )
-        from corvin_operator.forge.forge.paths import corvin_home as _rae_home  # noqa: PLC0415
+        _rae_home = _forge_mod("paths").corvin_home  # noqa: PLC0415
         _record_active_engine(_rae_home(), _eff_engine)
     except Exception:  # noqa: BLE001 — telemetry attribution is best-effort
         pass
@@ -8635,7 +8635,7 @@ def _call_claude_streaming_impl(
         try:
             from license.compute_quota import increment_and_check as _ct_inc2  # type: ignore
             from license.limits import LicenseLimitError as _ct_err2  # type: ignore
-            from corvin_operator.forge.forge.paths import corvin_home as _ct_home2  # type: ignore
+            _ct_home2 = _forge_mod("paths").corvin_home  # type: ignore
         except ImportError:
             _turn_refused("quota_unavailable", _retry_count)
             return f"{_status_icon('warning')} Chat-turn quota enforcement unavailable — refusing turn (fail-closed)."
@@ -14194,7 +14194,7 @@ def _start_telemetry_threads() -> None:
             start_ping_thread as _start_ping,
             start_upload_thread as _start_upload,
         )
-        from corvin_operator.forge.forge.paths import corvin_home as _telemetry_home  # noqa: PLC0415
+        _telemetry_home = _forge_mod("paths").corvin_home  # noqa: PLC0415
         _home = _telemetry_home()
         _start_ping(_home)
         _start_upload(_home)
@@ -14210,7 +14210,7 @@ def _start_telemetry_threads() -> None:
         from corvin_core.aco.heartbeat import (  # noqa: PLC0415
             start_heartbeat_thread as _start_heartbeat,
         )
-        from corvin_operator.forge.forge.paths import corvin_home as _hb_home  # noqa: PLC0415
+        _hb_home = _forge_mod("paths").corvin_home  # noqa: PLC0415
         _start_heartbeat(_hb_home())
         log("telemetry: presence heartbeat thread started (daemon)")
     except Exception as _hb_e:  # noqa: BLE001
@@ -14567,7 +14567,7 @@ def main() -> int:
             _boot_ch = Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
             _boot_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
             try:
-                from corvin_operator.forge.forge.tenants import current_tenant as _boot_ct  # type: ignore[import]
+                _boot_ct = _forge_mod("tenants").current_tenant  # type: ignore[import]
                 _boot_tid = _boot_ct()
             except Exception:  # noqa: BLE001
                 pass
@@ -14657,7 +14657,7 @@ def main() -> int:
             from custom_layer_registry import check_boot_limit as _cl_boot  # type: ignore
         _cl_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
         try:
-            from corvin_operator.forge.forge.tenants import current_tenant as _cl_ct  # type: ignore[import]
+            _cl_ct = _forge_mod("tenants").current_tenant  # type: ignore[import]
             _cl_tid = _cl_ct()
         except Exception:  # noqa: BLE001
             pass
@@ -14731,7 +14731,7 @@ def main() -> int:
         _m2_corvin_home = Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
         _m2_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
         try:
-            from corvin_operator.forge.forge.tenants import current_tenant as _m2_ct  # type: ignore[import]
+            _m2_ct = _forge_mod("tenants").current_tenant  # type: ignore[import]
             _m2_tid = _m2_ct()
         except Exception:  # noqa: BLE001
             pass
