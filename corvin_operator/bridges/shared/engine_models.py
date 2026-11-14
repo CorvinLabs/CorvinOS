@@ -534,7 +534,9 @@ def get_tenant_engine_provider(tenant_id: str, engine_id: str) -> str | None:
     return val.strip() if isinstance(val, str) and val.strip() else None
 
 
-def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
+def resolve_claude_code_provider_env(
+    tenant_id: str, *, provider: "str | None" = None, model: "str | None" = None,
+) -> dict[str, str]:
     """ADR-0181 M3 — the ONE place that computes the ANTHROPIC_* redirect env
     for pointing the claude_code engine at a non-anthropic provider. Returns
     {} when claude_code should keep its default (native Anthropic) routing
@@ -558,7 +560,9 @@ def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
     built-in local translating proxy (anthropic_openai_bridge) is started on
     demand and used instead — no external proxy deployment required.
     """
-    prov = get_tenant_engine_provider(tenant_id, "claude_code")
+    # ``provider`` / ``model`` name ONE turn's Console-tier route (turn_route); without
+    # them the tenant-wide assignment applies exactly as before.
+    prov = provider or get_tenant_engine_provider(tenant_id, "claude_code")
     if not prov or prov == "anthropic":
         return {}
     ps = load_providers().get(prov)
@@ -601,7 +605,8 @@ def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
             from anthropic_openai_bridge import (  # type: ignore
                 ProxyTarget, chat_completions_url_for, ensure_proxy)
             model = (
-                get_tenant_engine_model(tenant_id, "claude_code", "os_model")
+                model
+                or get_tenant_engine_model(tenant_id, "claude_code", "os_model")
                 or ""
             )
             if not model:
@@ -651,7 +656,9 @@ def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
 _CLAUDE_CODE_REDIRECT_VARS = ("ANTHROPIC_BASE_URL", "CORVIN_CC_LOCAL_MODE", "CORVIN_CC_PROVIDER")
 
 
-def apply_claude_code_provider_env(env: "dict[str, str]", tenant_id: str) -> "str | None":
+def apply_claude_code_provider_env(
+    env: "dict[str, str]", tenant_id: str, *, task_input: "str | None" = None,
+) -> "str | None":
     """Make a ``claude`` spawn env agree with the egress host L35 validated (T-0230).
 
     The ONE function the bridge (``adapter._build_spawn_env``) and the console
@@ -667,6 +674,48 @@ def apply_claude_code_provider_env(env: "dict[str, str]", tenant_id: str) -> "st
     """
     for var in _CLAUDE_CODE_REDIRECT_VARS:
         env.pop(var, None)
+    # Console "Models" tier row naming OpenRouter / Ollama Cloud: with no tenant-wide
+    # provider assignment, the turn runs on the operator's saved choice instead of
+    # silently falling back to a Claude model (turn_route has the precedence rules).
+    if task_input is not None and not get_tenant_engine_provider(tenant_id, "claude_code"):
+        try:
+            try:
+                from console_selection import turn_route  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                from .console_selection import turn_route  # type: ignore  # noqa: PLC0415
+            tr = turn_route(task_input, tenant_id=tenant_id)
+        except Exception:  # noqa: BLE001
+            tr = None
+        ps_tr = load_providers().get(tr[0]) if tr else None
+        if tr and ps_tr is not None and ps_tr.model_source in ("ollama", "openrouter"):
+            try:
+                try:
+                    from spawn_gates import check_l35  # type: ignore  # noqa: PLC0415
+                except ImportError:
+                    from .spawn_gates import check_l35  # type: ignore  # noqa: PLC0415
+                refusal = check_l35(
+                    "claude_code", tenant_id, provider=tr[0], require_declaration=False)
+            except Exception:  # noqa: BLE001
+                refusal = "egress gate error"
+            if refusal:
+                return str(refusal)
+            try:
+                route_env = resolve_claude_code_provider_env(
+                    tenant_id, provider=tr[0], model=tr[1])
+            except Exception as exc:  # noqa: BLE001
+                route_env = {}
+                _log_route = type(exc).__name__
+            else:
+                _log_route = ""
+            if route_env:
+                env.update(route_env)
+                return None
+            return (
+                f"The Models page selects {tr[1]!r} on {tr[0]!r} for this turn, but its "
+                f"route could not be built{' (' + _log_route + ')' if _log_route else ''} "
+                "(missing API key under Settings → API Keys?); refusing instead of "
+                "silently using a Claude model."
+            )
     route: dict[str, str] = {}
     failure = ""
     try:

@@ -4545,7 +4545,8 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
                      tenant_id: str | None = None,
                      sender: str | None = None,
                      workload_hint: dict | None = None,
-                     route_problem_out: list | None = None) -> dict:
+                     route_problem_out: list | None = None,
+                     task_input: str | None = None) -> dict:
     """Build a fresh env dict for the claude-code spawn.
 
     ``route_problem_out``: when a list is passed, a refusal reason from
@@ -4730,7 +4731,7 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
         # (adversarial review, 2026-07-14: they used to, silently).
         try:
             from engine_models import apply_claude_code_provider_env  # type: ignore
-            _route_problem = apply_claude_code_provider_env(env, _tid)
+            _route_problem = apply_claude_code_provider_env(env, _tid, task_input=task_input)
             if _route_problem:
                 # L35 validated the assigned provider's host while this spawn would go to
                 # the default endpoint: the caller refuses the turn (T-0229).
@@ -5544,7 +5545,7 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
     _route_problems: list[str] = []
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
                            sender=sender, workload_hint=workload_hint,
-                           route_problem_out=_route_problems)
+                           route_problem_out=_route_problems, task_input=prompt)
     if _route_problems:  # T-0229: never spawn on the default endpoint L35 did not judge
         return f"[security] {_route_problems[0]}"
     env["VOICE_HOOK_RECURSION"] = "1"
@@ -8433,7 +8434,7 @@ def _call_claude_streaming_impl(
     _route_problems: list[str] = []
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
                            sender=sender, workload_hint=workload_hint,
-                           route_problem_out=_route_problems)
+                           route_problem_out=_route_problems, task_input=prompt)
     env["VOICE_HOOK_RECURSION"] = "1"
 
     # Provider mode: keep BASE_URL + credential for proxy auth (ADR-0181 M3).

@@ -4520,3 +4520,16 @@ chose exact-match-only so an ambiguous case stays visible, never silently
 merged) · don't write the seen-topics store into the global memory directory
 · don't drop a repeated match from `mc.matches` — tag and reframe, never
 suppress.
+
+## Console tier rows naming OpenRouter / Ollama Cloud
+
+A Models-page tier row (`SIMPLE`/`MEDIUM`/`COMPLEX`) whose provider is not Anthropic used to
+be dropped by `console_selection.saved_tier_model` and the classifier's pick refused by
+`resolve_registry_id`, so every turn fell back to a Claude model. Now
+`console_selection.turn_route()` returns the saved `(provider, model)` (classifier verdict if
+its module is loaded, else `MEDIUM`), and `engine_models.apply_claude_code_provider_env(...,
+task_input=)` redirects the spawn through the translating proxy to that provider, after an L35
+egress check (`spawn_gates.check_l35(..., require_declaration=False)`). Precedence: a
+`CORVIN_OS_MODEL_OVERRIDE`, an `os_model` pin or a tenant-wide provider assignment wins; a route
+that cannot be built (e.g. no API key) refuses the turn instead of silently using Claude.
+Both surfaces (console `chat_runtime`, bridge `adapter._build_spawn_env`) pass the turn text.

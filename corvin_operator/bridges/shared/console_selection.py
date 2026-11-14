@@ -124,3 +124,66 @@ def pinned_model(
 def helper_model(tenant_id: str | None = None) -> str | None:
     """Console choice for CorvinOS' own helper steps (``corvinOS`` row)."""
     return saved_tier_model(TIER_HELPER, tenant_id=tenant_id)
+
+
+def saved_tier_route(
+    task_type: str, *, tenant_id: str | None = None
+) -> tuple[str, str] | None:
+    """``(provider, model)`` the operator SAVED for a Console tier row when that
+    row names a NON-Anthropic provider (OpenRouter / Ollama Cloud), else ``None``.
+
+    The complement of :func:`saved_tier_model`: that one drops such a row because
+    the CLI cannot run the id natively; this one returns it so the spawn can be
+    redirected to the provider (``engine_models.apply_claude_code_provider_env``).
+    The id is returned verbatim (provider prefix kept as the provider's own
+    namespace, e.g. ``thinkingmachines/inkling-2-small:free`` on OpenRouter).
+    """
+    try:
+        tid = _tenant(tenant_id)
+        m = _config_module()
+        if task_type not in m.saved_task_types(tid):
+            return None
+        entry = (m.load_config(tid) or {}).get(task_type) or {}
+        provider = str(entry.get("provider") or "").strip().lower()
+        sel = str(entry.get("selected_model") or "").strip()
+        if not sel or provider in _NATIVE_PROVIDERS:
+            return None
+        return provider, sel
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def turn_route(
+    task_input: str | None, *, tenant_id: str | None = None, engine_id: str = "claude_code"
+) -> tuple[str, str] | None:
+    """The non-Anthropic ``(provider, model)`` an OS turn must run on, or ``None``.
+
+    Root cause this closes: a Console tier row naming OpenRouter/Ollama was read by
+    nobody that could act on it - :func:`saved_tier_model` dropped it, the
+    classifier's pick was refused by ``resolve_registry_id`` (unregistered id), and
+    the turn silently fell back to Sonnet. A pin (``os_model``) and the
+    ``CORVIN_OS_MODEL_OVERRIDE`` kill-switch still win, and a tenant-wide provider
+    assignment is handled by the caller before this is consulted.
+
+    Tier choice: the classifier verdict when its module is already loaded (never
+    imported here - 1 s on the hot path), else the default OS tier ``MEDIUM``.
+    """
+    try:
+        if os.environ.get("CORVIN_OS_MODEL_OVERRIDE", "").strip():
+            return None
+        if pinned_model("os_model", tenant_id=tenant_id, engine_id=engine_id):
+            return None
+        tid = _tenant(tenant_id)
+        task_type = TIER_HIGH
+        cls = sys.modules.get("core.skills.os_skills.model_selector")
+        selector = getattr(cls, "ModelSelector", None)
+        if selector is not None and isinstance(task_input, str) and task_input.strip():
+            try:
+                m = _config_module()
+                res = selector(overrides=m.classifier_overrides(tid)).classify(task_input, tid)
+                task_type = m.task_type_for_complexity(getattr(res, "complexity", "")) or TIER_HIGH
+            except Exception:  # noqa: BLE001 - classification failure -> default tier
+                task_type = TIER_HIGH
+        return saved_tier_route(task_type, tenant_id=tid)
+    except Exception:  # noqa: BLE001
+        return None

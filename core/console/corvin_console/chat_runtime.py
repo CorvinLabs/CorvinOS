@@ -8797,7 +8797,8 @@ async def _stream_turn_impl(
         except ImportError:  # stripped layout: no providers, nothing to agree with
             _apply_route = None  # type: ignore[assignment]
         if _apply_route is not None:
-            _route_problem = _apply_route(_spawn_env, str(sess.tenant_id))
+            _route_problem = _apply_route(
+                _spawn_env, str(sess.tenant_id), task_input=_task_text)
     if _route_problem is not None:
         await _os_audit_off_loop("os_turn.started", {"model": _os_model_used})
         tm.record_event(task_id, {

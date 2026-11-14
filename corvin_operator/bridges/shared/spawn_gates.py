@@ -922,8 +922,13 @@ def check_l35(
     chat_key: str = "",
     corvin_home: "Path | None" = None,
     provider: "str | None" = None,
+    require_declaration: bool = True,
 ) -> "str | None":
     """ADR-0043 / L35 pre-spawn network-egress gate.
+
+    ``require_declaration=False`` (Console Models-tier route, not a sensitive reroute):
+    with no egress policy a provider need not carry an ADR-2268 compliance declaration;
+    with a policy its host is still validated.
 
     ``provider`` (ADR-2268, T-0228) names the provider of ONE rerouted turn: the gate then
     judges THAT provider's host, and a provider whose host cannot be resolved is refused,
@@ -951,7 +956,7 @@ def check_l35(
         return _aw
     gate = _load_l35_gate(tenant, corvin_home)
     if gate is None:
-        if provider and not _provider_current_host(tenant, provider, corvin_home):
+        if provider and require_declaration and not _provider_current_host(tenant, provider, corvin_home):
             # A rerouted turn must reach a KNOWN host even when the tenant has no egress
             # policy (ADR-2268): with nothing to compare, an unresolvable host is a refusal.
             return _l35_provider_unresolved(engine_id, provider)
