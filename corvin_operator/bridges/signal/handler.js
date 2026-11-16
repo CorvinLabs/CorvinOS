@@ -158,7 +158,10 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, se
       ? `group:${dataMsg.groupInfo.groupId}`
       : sender;
 
-    const base = { from: sender, chat_id: chatKey, ts: dataMsg.timestamp || Date.now() };
+    // Personal knowledge base (ADR-2326 item 6): a 1:1 Signal chat is private only when the bridge runs on
+    // a dedicated number; on the operator's own number every chat holds two people.
+    const chatType = isGroup ? 'group' : (process.env.CORVIN_SIGNAL_DEDICATED_NUMBER === '1' ? 'private' : 'unknown');
+    const base = { from: sender, chat_id: chatKey, chat_type: chatType, ts: dataMsg.timestamp || Date.now() };
 
     // ── Read-only gate ────────────────────────────────────────────────────
     {

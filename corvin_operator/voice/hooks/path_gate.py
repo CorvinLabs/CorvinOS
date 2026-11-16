@@ -278,6 +278,21 @@ def _ref(p: str | Path) -> str:
     return str(_abs(p)) if _IS_WIN else str(p)
 
 
+def _is_personal_kb_runtime(parts: tuple[str, ...]) -> bool:
+    """The runtime store of the personal knowledge base: ``<home>/tenants/<tid>/personal_kb/**`` or its
+    device-key root ``<home>/secrets/personal_kb/**`` (ADR-2325 item 5). The SOURCE package
+    ``core/personal_kb`` and ``tests/personal_kb`` are not runtime stores. Writes only: this gate does
+    not see reads."""
+    for i, c in enumerate(parts):
+        if c != "personal_kb" or i < 1:
+            continue
+        if parts[i - 1] == "secrets":
+            return True
+        if i >= 2 and parts[i - 2] == "tenants":
+            return True
+    return False
+
+
 def _is_ledger_store_path(path: str | Path) -> bool:
     """A path inside a ledger-class store: the session ledger (and its pre-R5
     in-workdir name), the CEL anchor store, the completion queue, the console's
@@ -288,6 +303,7 @@ def _is_ledger_store_path(path: str | Path) -> bool:
         return True
     return (any(c in parts for c in ("session_ledger", ".corvin-ledger", "cel_anchors",
                                      "pending_notifications"))
+            or _is_personal_kb_runtime(parts)
             or ("web_chat" in parts and (str(path).endswith(".turns.jsonl") or "sessions" in parts)))
 
 
@@ -365,6 +381,10 @@ def is_protected_path(path: str | Path) -> bool:
     if "cel_anchors" in abs_p.parts:
         return True
     if "web_chat" in abs_p.parts and abs_p.name.endswith(".turns.jsonl"):
+        return True
+    # ADR-2325 item 5 — the encrypted personal knowledge base and its device keys. A worker write
+    # could plant a ciphertext, a revocation sentinel or an index binding. Writes only.
+    if _is_personal_kb_runtime(abs_p.parts):
         return True
 
     home = _corvin_home()
@@ -987,7 +1007,7 @@ _READ_ONLY_CMDS = ("cd", "pushd", "popd", "cat", "less", "more", "head", "tail",
                    "wc", "grep", "rg", "stat", "file", "jq", "echo", "pwd", "true")
 #: The ledger / anchor / queue stores, as PATH fragments: a bare word
 #: ("session_ledger" in a commit message) is not a hint (R7-5), a path is.
-_LEDGER_HINTS = ("session_ledger/", ".corvin-ledger/", "cel_anchors/",
+_LEDGER_HINTS = ("session_ledger/", ".corvin-ledger/", "cel_anchors/", "secrets/personal_kb/",
                  "pending_notifications/")
 _PROTECTED_HINTS = ("forge", "skill-forge", "audit.jsonl", "policy.json",
                     ".corvin", *_LEDGER_HINTS,

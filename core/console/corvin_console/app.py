@@ -252,6 +252,8 @@ from .routes import (
     forge_bundle_routes as forge_bundle_route,
     # CONCEPT-0097 Phase 1 — Federation Local Agent Registry
     federation_routes as federation_route,
+    # ADR-2325/2326/2327 — personal knowledge base (owner-bound, encrypted)
+    personal_kb as personal_kb_route,
 )
 from . import host_guard as _host_guard
 
@@ -551,6 +553,7 @@ router.include_router(multi_instance_route.router, tags=["console-multi-instance
 router.include_router(datahub_route.router, tags=["console-datahub"])
 # ADR-0411 Phase 5 — Automated Remediation (approval workflow + operator gates)
 router.include_router(remediation_routes.remediation_router, tags=["console-remediation"])
+router.include_router(personal_kb_route.router, tags=["console-personal-kb"])
 # Media System (30087270) was never mounted: its module was committed outside this
 # package (core/console/routes/media_routes.py, retired with that legacy tree by
 # ADR-2282), had no require_session / tenant scoping on upload/delete/send-to-bridge,

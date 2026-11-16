@@ -29,6 +29,8 @@ import { ScopeSelect } from "@/pages/projects/scope-select";
 import { boundName, boundRepoLabel, graphScopes, listedProjects, mergeGraphs, resolveScope, scopeLabel, scopeList, scopeParam, selectableProjects } from "@/pages/projects/scope";
 import { buildLinkIndex, viewFor } from "./link-resolver";
 import { neighbourhood, newestDecisionKey, searchNodes } from "./graph-model";
+import { SpaceSwitch, useSpace } from "@/components/space-switch";
+import { PersonalSpace } from "./personal/PersonalSpace";
 
 export interface KnowledgeEntity { id: string; label?: string; file?: string; type: string; title: string; status: string; tags: string[]; /** the project whose knowledge base holds the node (ADR-2316); null/absent = the bound KB */ scope?: string | null; /** the uid in its own knowledge base when the joined view had to qualify the node id */ uid?: string }
 export interface KnowledgeRelation { from_id: string; to_id: string; relation: string }
@@ -83,7 +85,30 @@ function statusColours(): Record<string, string> {
   };
 }
 
+/** The panel: the project knowledge graph, or the owner's personal space ("Only for me"). Each view is
+ *  its own component, so switching never changes the hook order of either. */
 export function CorvinKnowledgePage() {
+  const [space, setSpace] = useSpace();
+  const switcher = <SpaceSwitch space={space} onChange={setSpace} />;
+  if (space === "personal") {
+    return (
+      <div className="max-w-7xl mx-auto p-6 space-y-6" data-testid="corvin-knowledge-panel">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <NetworkIcon className="w-8 h-8 text-accent" />
+            <h1 className="text-3xl font-bold">Knowledge Graph</h1>
+          </div>
+          <p className="text-muted-foreground">Your own ideas, notes, tasks and settings, next to the project&apos;s knowledge.</p>
+        </div>
+        {switcher}
+        <PersonalSpace />
+      </div>
+    );
+  }
+  return <ProjectKnowledge spaceSwitch={switcher} />;
+}
+
+function ProjectKnowledge({ spaceSwitch }: { spaceSwitch: React.ReactNode }) {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
   const qc = useQueryClient();
@@ -231,6 +256,7 @@ export function CorvinKnowledgePage() {
         </div>
         <p className="text-muted-foreground">{MARKER_KNOWLEDGE}</p>
       </div>
+      {spaceSwitch}
 
       {/* the knowledge base comes first: every number below belongs to it */}
       <div className="max-w-md space-y-1">

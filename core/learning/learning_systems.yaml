@@ -78,8 +78,8 @@ systems:
     # 2026-11-05 LRN-3 (a host per tenant directory) is not built for that reason;
     # tests/learning/test_review_20261105_lrn_hosts_e2e.py pins the premise. L02 likewise.
     callers:
-      - core/gateway/corvin_gateway/app.py:547:_lh.start
-      - core/console/corvin_console/app.py:959:learning_host.start
+      - core/gateway/corvin_gateway/app.py:563:_lh.start
+      - core/console/corvin_console/app.py:966:learning_host.start
       - core/console/corvin_console/standalone.py:377:_lh.start
     readers:
       # the daemon state (weights, queue, cooldowns) on the console's learning dashboard
@@ -204,14 +204,14 @@ systems:
     state: A
     callers:
       - corvin_operator/bridges/shared/adapter.py:3470:collect_active_skills
-      - corvin_operator/bridges/shared/adapter.py:13044:grade_from_user_followup
-      - corvin_operator/bridges/shared/adapter.py:13707:auto_grade_from_output
+      - corvin_operator/bridges/shared/adapter.py:13230:grade_from_user_followup
+      - corvin_operator/bridges/shared/adapter.py:13938:auto_grade_from_output
       - corvin_operator/skill-forge/skill_forge/mcp_server.py:581:promote
-      - core/console/corvin_console/routes/chat.py:772:grade_followup
-      - core/console/corvin_console/chat_runtime.py:8820:record_turn_skills
+      - core/console/corvin_console/routes/chat.py:809:grade_followup
+      - core/console/corvin_console/chat_runtime.py:8939:record_turn_skills
     readers:
       # the injection gate: a skill with no grade or a mean score <= 0 is not injected
-      - corvin_operator/bridges/shared/skill_inject.py:742:spec.n_grades
+      - corvin_operator/bridges/shared/skill_inject.py:758:spec.n_grades
     tests:
       - corvin_operator/skill-forge/tests/test_grading.py
       - corvin_operator/bridges/shared/test_adapter_skill_inject.py
@@ -223,8 +223,8 @@ systems:
     name: CEL turn grades
     state: B
     callers:
-      - core/console/corvin_console/chat_runtime.py:8591:_cel_record_outcome
-      - core/console/corvin_console/chat_runtime.py:9381:_cel_record_outcome
+      - core/console/corvin_console/chat_runtime.py:8706:_cel_record_outcome
+      - core/console/corvin_console/chat_runtime.py:9502:_cel_record_outcome
     tests:
       - corvin_operator/context_engineering/tests/test_grades_adr0285.py
     intake: >-
@@ -252,9 +252,9 @@ systems:
     name: Model selector learner (descriptive only, shown on the Models page)
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:5540:shadow_classify_task
-      - corvin_operator/bridges/shared/adapter.py:7030:report_turn_outcome
-      - corvin_operator/bridges/shared/adapter.py:7069:report_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:5670:shadow_classify_task
+      - corvin_operator/bridges/shared/adapter.py:7166:report_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:7166:report_turn_outcome
       - core/console/corvin_core/task_manager.py:684:_update_model_selection_confidence
       # reader: GET /v1/console/v1/engine/config -> the Models page task cards
       - core/console/corvin_console/routes/engine_api.py:667:optimizer.get_stats
@@ -300,10 +300,10 @@ systems:
     name: User model distillation (L28, opt-in per chat)
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:13794:_user_model_distill_async
+      - corvin_operator/bridges/shared/adapter.py:14031:_user_model_distill_async
     readers:
       # the distilled model is loaded into the prompt of the opted-in chat
-      - corvin_operator/bridges/shared/adapter.py:3789:_user_model.load
+      - corvin_operator/bridges/shared/adapter.py:3796:_user_model.load
     tests:
       - corvin_operator/bridges/shared/test_user_model.py
       - corvin_operator/bridges/shared/test_adapter_recall.py
@@ -377,18 +377,18 @@ systems:
       # decision record, one per turn: a turn that stays native is recorded by the triage
       # (delegation_policy.resolve_delegation_route), a delegation-worthy one by
       # resolve_worker_engine, a turn neither reached by the unrouted fallback
-      - core/console/corvin_console/chat_runtime.py:4287:resolve_delegation_route
-      - core/console/corvin_console/chat_runtime.py:4589:_shared_target
-      - core/console/corvin_console/chat_runtime.py:4627:route_and_record
-      - corvin_operator/bridges/shared/adapter.py:10010:resolve_delegation_route
-      - corvin_operator/bridges/shared/adapter.py:9612:resolve_worker_engine
-      - corvin_operator/bridges/shared/adapter.py:9852:route_and_record
+      - core/console/corvin_console/chat_runtime.py:4375:resolve_delegation_route
+      - core/console/corvin_console/chat_runtime.py:4677:_shared_target
+      - core/console/corvin_console/chat_runtime.py:4715:route_and_record
+      - corvin_operator/bridges/shared/adapter.py:10146:resolve_delegation_route
+      - corvin_operator/bridges/shared/adapter.py:9748:resolve_worker_engine
+      - corvin_operator/bridges/shared/adapter.py:9988:route_and_record
       # outcome record, joined to the decision by turn_id
-      - core/console/corvin_console/chat_runtime.py:4727:record_turn_outcome
-      - corvin_operator/bridges/shared/adapter.py:9916:record_turn_outcome
+      - core/console/corvin_console/chat_runtime.py:4815:record_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:10052:record_turn_outcome
       # console engine guard: a cleared Phase 2 Skill route onto an unavailable engine
       # records its decision and a judged ok:false outcome (the bridge does the same)
-      - core/console/corvin_console/routes/chat.py:1013:record_unavailable_skill_route
+      - core/console/corvin_console/routes/chat.py:1050:record_unavailable_skill_route
       # operator reset of a tripped rollback judge (POST .../learning/routing/rollback/reset)
       - core/console/corvin_console/routes/learning.py:838:rollback_detector.reset_rollback
     tests:
@@ -427,7 +427,7 @@ systems:
     state: B
     callers:
       - core/console/corvin_console/routes/flow_guard.py:100:LearningIntegration
-      - core/console/corvin_console/app.py:272:flow_guard_route
+      - core/console/corvin_console/app.py:276:flow_guard_route
     tests:
       # the real POST /v1/console/flow/feedback and GET /flow/policy routes over HTTP
       - tests/learning/test_adr_2283_flow_guard_feedback_e2e.py
@@ -489,10 +489,10 @@ systems:
     name: KB learning (kb guidance run, guidance skills)
     state: A
     callers:
-      - core/console/corvin_console/kb_projection.py:648:_run(repo, "guidance", "run"
+      - core/console/corvin_console/kb_projection.py:1128:_run(repo, "guidance", "run"
     readers:
       # the pending guidance is read and minted as a user-scope SkillForge skill (injected by L06)
-      - core/console/corvin_console/kb_projection.py:587:_run(repo, "guidance", "pending"
+      - core/console/corvin_console/kb_projection.py:1067:_run(repo, "guidance", "pending"
     tests:
       - core/console/tests/test_kb_projection_e2e.py
 
@@ -500,11 +500,11 @@ systems:
     name: Compute search strategies (grid, random, bayes) and HAC attribution
     state: A
     callers:
-      - core/compute/corvin_compute/worker.py:431:load_strategy
-      - core/compute/corvin_compute/cli.py:254:HACEngine
+      - core/compute/corvin_compute/worker.py:526:load_strategy
+      - core/compute/corvin_compute/cli.py:344:HACEngine
     readers:
       # the search reads the strategy's next proposal from the history it learned
-      - core/compute/corvin_compute/driver.py:171:self.strategy.suggest_batch
+      - core/compute/corvin_compute/driver.py:260:self.strategy.suggest_batch
     tests:
       - core/compute/tests/test_strategies.py
       - core/compute/tests/test_bayesian.py
@@ -513,8 +513,8 @@ systems:
     name: Learning and maturity panels (report health, not learning)
     state: A
     callers:
-      - core/console/corvin_console/app.py:326:learning_analytics_route
-      - core/console/corvin_console/app.py:339:api_vibe_maturity_route
+      - core/console/corvin_console/app.py:330:learning_analytics_route
+      - core/console/corvin_console/app.py:343:api_vibe_maturity_route
     readers:
       - core/console/corvin_console/web-next/src/components/learning-loops-view.tsx:16:useLoops
       - core/console/corvin_console/web-next/src/pages/vibe-engineering/components/MaturityDashboard.tsx:34:useLiveMaturityData
@@ -526,7 +526,7 @@ systems:
     name: Video learning feedback API (ratings, per-variant statistics, advice)
     state: A
     callers:
-      - core/console/corvin_console/app.py:407:video_learning_api_route
+      - core/console/corvin_console/app.py:411:video_learning_api_route
       - core/console/corvin_console/routes/video_learning_api.py:218:get_model_stats
       - core/console/corvin_console/routes/video_learning_api.py:259:select_model
     readers:
@@ -544,7 +544,7 @@ systems:
     name: Autonomous Forge (skill canary autopilot, on by default)
     state: A
     callers:
-      - core/console/corvin_console/app.py:295:autonomous_forge_route
+      - core/console/corvin_console/app.py:299:autonomous_forge_route
       # the autopilot scheduler, started when the route module is imported (every 600 s, all tenants)
       - core/console/corvin_console/routes/autonomous_forge_routes.py:419:_auto.start_scheduler
     tests:
@@ -577,6 +577,39 @@ systems:
         /autonomous-forge/autopilot, audited); at most one fork per tick; 24 h cooldown
         per skill; promotion is a human decision
       rollback: canary rollback (POST /autonomous-forge/rollback or the gate verdict)
+
+  - id: L20
+    name: Personal knowledge base capture policy (per owner, bounded self-evolution)
+    state: A
+    callers:
+      # automatic capture after a private bridge turn, and the owner's review in the console
+      - core/personal_kb/bridge.py:86:capture.capture_turn
+      - core/console/corvin_console/routes/personal_kb.py:445:capture.review
+    readers:
+      # every capture decision reads the owner's current policy (floor, cap, TTL, types)
+      - core/personal_kb/capture.py:149:policy.current
+    tests:
+      - tests/personal_kb/test_learning.py
+      - corvin_operator/bridges/shared/test_personal_kb_adapter.py
+      - core/console/tests/test_personal_kb_e2e.py
+    # ADR-2327: per-owner, encrypted, never across owners. Level 1 only (allowlisted parameters with
+    # hard bounds); a change that loosens any parameter waits for the owner; the brake never loosens.
+    signal_contract:
+      - skill: personal_kb.capture
+        writer: the owner's review actions (accept, edit, forget) on automatic entries
+        signal: >-
+          the share of automatic entries the owner forgets or edits away versus accepts, over the
+          last 20 reviewed automatic entries
+        proxy_of: whether automatic capture stores what the owner wants kept
+        writes: confidence_floor
+        validity: unmeasured
+        consumer: core/personal_kb/capture.py:149:policy.current
+        target: none
+        guard: forget-or-edit share of automatic entries (brake above one half)
+        control: >-
+          allowlist with hard bounds; loosening needs the owner's confirmation; stale confirmations
+          refused; the brake freezes tuning and tightens componentwise; per owner only
+        rollback: policy.rollback (encrypted policy versions)
 
   - id: H03
     name: Plugin-declared learning loops (manifest discovery)

@@ -18,7 +18,7 @@ import sqlite3
 import time
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -146,14 +146,22 @@ def _project_of(item: dict[str, Any]) -> Any:
 @router.get("/items")
 def get_items(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    response: Response,
     include_deleted: bool = False,
     scope: str | None = Query(default=None, max_length=40,
-                              description="bound = the tenant's own board only; project:<id> = one project's KB"),
+                              description="bound = the tenant's own board only; project:<id> = one project's KB; "
+                                          "personal = the unlocked owner's personal tasks (never in tasks.db)"),
+    corvin_personal: Annotated[str | None, Cookie()] = None,
 ) -> dict:
     """ADR-2316: every item carries ``project`` (its project id, or null), so a client can show a
     qualified id (``<project>/T-0001``: KB ids are local). ``scope`` narrows the list; a project
     that is not registered for THIS tenant is 404 (never a hint that another tenant has it)."""
     want: Any = ...
+    if scope == "personal":
+        # ADR-2325 items 5-7: personal tasks come from the unlocked encrypted store, are never in the
+        # shared store, and appear only in this explicit scope.
+        response.headers["Cache-Control"] = "no-store"   # decrypted personal data: no browser or proxy cache
+        return _personal_items(rec, corvin_personal)
     if scope is not None:
         if scope == "bound":
             want = None
@@ -187,6 +195,25 @@ def get_items(
     # exist (even deleted ones) the import would skip them all.
     body["import_available"] = False   # the initiatives.json import is retired (ADR-2205)
     return body
+
+
+def _personal_items(rec: Any, token: str | None) -> dict:
+    from core.personal_kb import session as pkb_session, views as pkb_views
+
+    from . import personal_kb as pkb_routes
+
+    entry = pkb_session.get_console(token, tenant_id=rec.tenant_id, sid=rec.sid)
+    now = time.time()
+    if entry is None:
+        return {"items": [], "summary": service.summary([], now), "scope": "personal", "unlocked": False,
+                "import_available": False}
+    try:
+        items = pkb_views.task_items(pkb_routes._store_for(entry, token or ""))
+    except Exception:  # noqa: BLE001 - erased or unreadable: shown as locked, never a 500
+        return {"items": [], "summary": service.summary([], now), "scope": "personal", "unlocked": False,
+                "import_available": False}
+    return {"items": items, "summary": service.summary(items, now), "scope": "personal", "unlocked": True,
+            "import_available": False}
 
 
 def _carried_only(tenant_id: str, body: dict) -> None:

@@ -69,3 +69,4 @@ Layers are independent. A compromise in one layer does NOT compromise others:
 - [compliance-baseline.md](compliance-baseline.md) — EU AI Act + GDPR constraints
 - [CONTRIBUTING.md § License + CLA](../../CONTRIBUTING.md#license--cla) — Apache-2.0 + CLA §3 requirements
 - [ldd-mandatory.md](ldd-mandatory.md) — Loss-driven development mandate
+- [personal-kb.md](personal-kb.md) — Personal knowledge base ("Only for me"): per-owner encrypted store over L16 audit, L34 gate, L36 erasure and the session ledger

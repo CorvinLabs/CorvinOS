@@ -925,8 +925,13 @@ def _house_rules_classify_chunk_once(chunk: str, rules_block: str, auth_str: str
         model_args = []
     try:
         proc = _run_tree_safe(
-            [_resolve_helper_claude_bin(), "-p", "--max-turns", "1", "--tools", "",
-             *model_args, "--output-format", "json", prompt],
+            # --no-session-persistence: the chat text this classifier reads (a /personal command may carry a
+            # personal fact) is not written to a Claude CLI transcript that no erasure reaches.
+            [_resolve_helper_claude_bin(), "-p", "--max-turns", "1", "--tools", "", "--no-session-persistence",
+             *model_args, "--output-format", "json"],
+            # The chat text rides on stdin, never on the command line: argv is readable by other local users
+            # through /proc/<pid>/cmdline (the same rule the adapter's own spawn follows, R2-E2).
+            input=prompt,
             capture_output=True, text=True, timeout=_HOUSE_RULES_ADJ_TIMEOUT_S, encoding="utf-8", errors="replace",
         )
     except subprocess.TimeoutExpired as e:

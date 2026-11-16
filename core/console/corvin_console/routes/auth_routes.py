@@ -66,6 +66,11 @@ def logout(
 ) -> Response:
     if corvin_console_sid:
         session_auth.end_session(corvin_console_sid, tenant_id=rec.tenant_id)
+        try:  # ADR-2326 item 3: logout ends every personal-space unlock of this session
+            from core.personal_kb import session as _pkb_session
+            _pkb_session.drop_sid(rec.sid)
+        except Exception:  # noqa: BLE001
+            pass
         # Phase 2 REMEDIATION #3: Wire audit backend
         from ..session_manager import get_session_manager
         manager = get_session_manager()

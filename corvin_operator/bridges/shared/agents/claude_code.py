@@ -747,20 +747,28 @@ class ClaudeCodeEngine:
         system_prompt_file: str | None = None
         if system:
             prompt_dir = working_dir if working_dir is not None else Path(tempfile.gettempdir())
+            _partial: str | None = None
             try:
                 prompt_dir.mkdir(parents=True, exist_ok=True)
                 fd, tmp_path = tempfile.mkstemp(
                     suffix=".txt", prefix=".corvin-sysprompt-", dir=str(prompt_dir),
                 )
+                _partial = tmp_path
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(system)
                 system_prompt_file = tmp_path
                 self._system_prompt_tmp_path = tmp_path
+                _partial = None
             except OSError:
-                # Best-effort — an unwritable workdir/temp dir falls back to
-                # the historical inline argument rather than failing the
-                # whole spawn (matches this module's existing best-effort
-                # posture elsewhere, e.g. _emit/_audit-style guards).
+                # An unwritable workdir falls back to the inline argument, EXCEPT for a personal settings block:
+                # the command line is readable by other local users (/proc/<pid>/cmdline), so that spawn is refused.
+                if _partial:
+                    try:
+                        os.unlink(_partial)
+                    except OSError:
+                        pass
+                if "[Personal settings of this user" in system:
+                    raise RuntimeError("personal settings cannot be passed on the command line; turn not started")
                 system_prompt_file = None
 
         args = self._build_args(

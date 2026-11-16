@@ -437,7 +437,14 @@ def append_turn(
     count as live."""
     user_text = str(user_text or "")
     extra: dict[str, Any] = {}
-    if refused:
+    if refused == PERSONAL_COMMAND:
+        # A personal-knowledge-base command (ADR-2326 item 12): neither the command nor the reply
+        # ("Remembered: ...") is kept, and no hash either (a short command is guessable from it).
+        extra = {"user_chars": len(user_text)}
+        user_text = ""
+        observer_text = ""
+        assistant_text = ""
+    elif refused:
         # A refused message is recorded as a fact (hash + length), never as
         # text: the ledger sits where the worker can read it, and the gate's
         # whole point is that the text does not reach the model (review R4-5).
@@ -687,6 +694,12 @@ def _one_line(text: str, n: int) -> str:
 _OBSERVER_REASONS = frozenset({"observer_consent", "consent_check_unavailable"})
 
 
+#: The reason a personal-knowledge-base command is recorded under: both halves withheld.
+PERSONAL_COMMAND = "personal_command"
+#: Reasons that withhold the answer too, not only the user's words.
+_WHOLE_TURN_REASONS = frozenset({"data_flow", PERSONAL_COMMAND})
+
+
 def _apply_withhold(rec: dict[str, Any], why: Optional[str]) -> dict[str, Any]:
     if not why:
         return rec
@@ -704,7 +717,8 @@ def _withheld(rec: dict[str, Any]) -> str:
              # A turn stopped while its safety check was still deciding: never
              # cleared, so never re-supplied — but no gate refused it either.
              "pre_spawn_cancelled": "the turn was stopped before its safety check "
-                                    "finished"}.get(why, f"refused by the {why} gate")
+                                    "finished",
+             PERSONAL_COMMAND: "a personal-space command is never recorded"}.get(why, f"refused by the {why} gate")
     return f"(message withheld: {label} — not re-supplied)"
 
 
@@ -722,7 +736,7 @@ def _render_turn(rec: dict[str, Any], *, cap: bool = True) -> str:
     u, a = str(rec.get("user") or ""), str(rec.get("assistant") or "")
     if rec.get("refused"):
         u = _withheld(rec)
-        if rec.get("refused") == "data_flow":
+        if rec.get("refused") in _WHOLE_TURN_REASONS:
             # The policy judged the TURN, answer included (a secret in a code
             # answer is the common case) — neither half reaches this engine.
             a = "(withheld)"
@@ -916,7 +930,7 @@ def render_from_records(
     # Index: newest of the older turns that fit, same stepping.
     idx_lines = [f"- #{r.get('n')} {_when(r.get('ts'))} · U: "
                  f"{_withheld(r) if r.get('refused') else _one_line(str(r.get('user') or ''), _INDEX_SIDE)} · A: "
-                 f"{'(withheld)' if r.get('refused') == 'data_flow' else _one_line(str(r.get('assistant') or ''), _INDEX_SIDE)}\n"
+                 f"{'(withheld)' if r.get('refused') in _WHOLE_TURN_REASONS else _one_line(str(r.get('assistant') or ''), _INDEX_SIDE)}\n"
                  for r in older]
     icut, iused = len(older), 0
     while icut > 0 and iused + len(idx_lines[icut - 1]) <= index_budget:

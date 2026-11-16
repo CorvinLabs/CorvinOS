@@ -1327,6 +1327,37 @@ def create_item(tenant_id: str, *, kind: str, title: str, parent_id: Optional[st
         return service._fetch(conn, tenant_id, item["id"])
 
 
+
+ENTITY_KINDS = ("idea", "plan")
+
+
+def create_entity(tenant_id: str, kind: str, title: str, body: str = "", *, actor: str = "operator") -> dict[str, Any]:
+    """Create an idea or plan in the tenant's bound knowledge base through ``kb new`` (the KB's one
+    identity writer). Used by the personal knowledge base's explicit "promote" action (PLAN-0973 F6):
+    the caller passes an owner-approved summary only, never a personal id. ``--distinct-because`` is
+    always set so a near-duplicate refusal cannot write the title into the KB's audit log."""
+    if kind not in ENTITY_KINDS:
+        raise KbTransitionRefused(f"only {list(ENTITY_KINDS)} can be created here, not {kind!r}")
+    repo, engine = _write_target(tenant_id, None)
+    args = ["new", kind, f"--title={title}", "--distinct-because=promoted by its owner from a personal idea",
+            f"--actor={actor}"]
+    if body:
+        args.append(f"--body={body}")
+    details = {"kind": kind, "actor_kind": actor.split(":")[0]}
+    service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "requested"})  # audit-first
+    with _tenant_lock(tenant_id):
+        try:
+            rc, res = _run(repo, *args, actor=actor, engine=engine)
+        except Exception:
+            service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "error"})
+            raise
+    if rc != 0 or not res.get("uid"):
+        service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "refused"})
+        raise KbTransitionRefused("the knowledge base refused the entry")
+    service._chain(tenant_id, "task_item.kb_create", {**details, "outcome": "applied",
+                                                      "kb_id": str(res.get("id") or "")})
+    return {"id": res.get("id"), "uid": res.get("uid")}
+
 def stop(tenant_id: Optional[str] = None, *, join_s: float = 30.0) -> None:
     """Stop the projector thread and WAIT for its tick to end (tests; a host shutting down). It
     may be started again. Returning before the thread ended let a tick that was already running

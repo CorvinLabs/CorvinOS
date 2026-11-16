@@ -1,0 +1,8 @@
+{
+  "entries": 3000,
+  "calls": 20,
+  "seconds_before": 1.7732,
+  "seconds_after": 0.5618,
+  "speedup": 3.16,
+  "identical": true
+}

@@ -693,6 +693,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Pre-warm + loop-lag watchdog right before serving, so neither the boot nor the
     # warm-up is reported as a stall (same placement as standalone._lifespan).
     if _loop_health is not None:
+        # Personal knowledge base (ADR-2326 item 9): finish erasures a crash interrupted, off the event loop.
+        def _pkb_resume() -> None:
+            try:
+                from core.personal_kb import erasure as _pkb_erasure
+                _pkb_erasure.resume_all_tenants()
+            except Exception:  # noqa: BLE001 - also re-run by every store open and unlock
+                pass
+        import threading as _pkb_threading
+        _pkb_threading.Thread(target=_pkb_resume, name="personal-kb-resume", daemon=True).start()
         await _loop_health.install_serving(app.state)
 
     try:

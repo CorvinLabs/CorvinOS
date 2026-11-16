@@ -148,7 +148,8 @@ bot.on('message', async (msg) => {
     {
       const ro = readOnlyOk(userIdStr, text, String(chatId));
       if (ro.isReadOnly) {
-        const base = { from: userIdStr, chat_id: chatId, ts: Date.now() };
+        const base = { from: userIdStr, chat_id: chatId, chat_type: (msg.chat && msg.chat.type === 'private') ? 'private' : 'group',
+                    forwarded: !!(msg.forward_origin || msg.forward_from || msg.forward_from_chat || msg.forward_date), ts: Date.now() };
         // Layer-17: read-only senders may run /consent on/off/<ttl>/status
         // and /share <text> BEFORE the observer-buffer path. dispatch returns
         // non-null only for those two prefixes; everything else falls through.
@@ -320,7 +321,8 @@ bot.on('message', async (msg) => {
     }
 
     // Build inbox payload depending on media type.
-    const base = { from: userIdStr, chat_id: chatId, ts: Date.now() };
+    const base = { from: userIdStr, chat_id: chatId, chat_type: (msg.chat && msg.chat.type === 'private') ? 'private' : 'group',
+                    forwarded: !!(msg.forward_origin || msg.forward_from || msg.forward_from_chat || msg.forward_date), ts: Date.now() };
 
     if (msg.voice || msg.audio) {
       const fileId = (msg.voice || msg.audio).file_id;

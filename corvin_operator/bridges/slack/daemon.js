@@ -160,6 +160,24 @@ async function downloadSlackFile(url, dest) {
   fs.writeFileSync(dest, buf);
 }
 
+// Personal knowledge base (ADR-2327 item 8): the Slack client treats every message that starts with "/" as a
+// command and does not send it, so /personal arrives here as a slash command — when the operator declared
+// /personal in the Slack app configuration. Without that, users send it with a leading space (" /personal on"),
+// which the client sends as a normal message and the adapter strips.
+app.command('/personal', async ({ command, ack }) => {
+  try {
+    await ack();
+    const userId = String(command.user_id || '');
+    const chatId = String(command.channel_id || '');
+    if (!userId || !chatId || !authOk(userId, '/personal', chatId)) return;
+    writeInbox({ from: userId, chat_id: chatId,
+                 chat_type: command.channel_name === 'directmessage' ? 'private' : 'group',
+                 text: `/personal ${String(command.text || '')}`.trim().slice(0, 2000), ts: Date.now() });
+  } catch (e) {
+    log(`personal command error: ${e.message}`);
+  }
+});
+
 app.event('message', async ({ event, client }) => {
   try {
     // Skip bot/system messages and our own posts.
@@ -177,7 +195,7 @@ app.event('message', async ({ event, client }) => {
     {
       const ro = readOnlyOk(userId, text, String(chatId));
       if (ro.isReadOnly) {
-        const base = { from: String(userId), chat_id: chatId, ts: Date.now() };
+        const base = { from: String(userId), chat_id: chatId, chat_type: event.channel_type === 'im' ? 'private' : (event.channel_type ? 'group' : 'unknown'), ts: Date.now() };
         // Layer-17: read-only senders may run /consent on/off/<ttl>/status
         // and /share <text> BEFORE the observer-buffer path.
         const cc = inChatCmds.dispatchReadOnlyConsent({
@@ -349,7 +367,7 @@ app.event('message', async ({ event, client }) => {
       // Slack returns "already_reacted" if we duplicate; non-fatal.
     }
 
-    const base = { from: String(userId), chat_id: chatId, ts: Date.now() };
+    const base = { from: String(userId), chat_id: chatId, chat_type: event.channel_type === 'im' ? 'private' : (event.channel_type ? 'group' : 'unknown'), ts: Date.now() };
 
     // Handle file attachments. Slack delivers them via event.files (array).
     if (event.files && event.files.length > 0) {

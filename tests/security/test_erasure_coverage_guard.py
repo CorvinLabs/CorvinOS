@@ -522,6 +522,28 @@ def _gone(path: Path, subject: str) -> bool:
         return False
 
 
+def _plant_personal_kb(subject: str, other: str) -> tuple[Path, Path, str]:
+    """``personal_kb`` holds encrypted per-owner directories, not subject-named files (ADR-2326):
+    plant through the REAL writer. Two owners are created with ``create_owner`` and bound to the
+    two identities exactly like a confirmed pairing; the subject's whole owner directory must go,
+    the other owner's ``owner.json`` (which names its owner id) must stay."""
+    from core.personal_kb import locks as pkb_locks, owner as pkb_owner, paths as pkb_paths
+
+    made = []
+    for i, ident in enumerate((subject, other)):
+        c = pkb_owner.create_owner("_default", f"guard{i}", "Guard-Orchard-77-blue", consent=True,
+                                   unlock_mode="strict")
+        channel, uid = ident.split(":", 1)
+        with pkb_locks.exclusive(pkb_paths.tenant_lock_file("_default")):
+            pkb_owner._bind_index("_default", channel, uid, c.owner_id)
+        made.append(c.owner_id)
+    return (pkb_paths.owner_dir("_default", made[0]), pkb_paths.owner_json("_default", made[1]), made[1])
+
+
+#: Entries whose store has its own on-disk format; planted through the real writer.
+_ENTRY_PLANTERS = {"personal_kb": _plant_personal_kb}
+
+
 def _covered_entries() -> list[str]:
     from erasure_handlers import COVERED_DIRS
     return sorted(set().union(*COVERED_DIRS.values()))
@@ -539,14 +561,18 @@ class TestEveryCoveredEntryActuallyErases:
     def test_planted_subject_record_is_erased(self, home, entry):
         from erasure_handlers import real_handler_chain
 
-        subject_path, other_path = _plant(entry, SUBJECT, OTHER)
+        if entry in _ENTRY_PLANTERS:
+            subject_path, other_path, other_marker = _ENTRY_PLANTERS[entry](SUBJECT, OTHER)
+        else:
+            subject_path, other_path = _plant(entry, SUBJECT, OTHER)
+            other_marker = OTHER
         for handler in real_handler_chain(tenant_id="_default"):
             handler.purge(SUBJECT, "er-cover")
         assert _gone(subject_path, SUBJECT), (
             f"COVERED_DIRS claims {entry!r} but the real chain left the subject's "
             f"record at {subject_path} — either implement the purge or drop the claim"
         )
-        assert other_path.exists() and OTHER in other_path.read_text(encoding="utf-8"), (
+        assert other_path.exists() and other_marker in other_path.read_text(encoding="utf-8"), (
             f"erasing one subject destroyed another's data in {entry!r} — "
             "over-matching is its own GDPR Art. 5 breach"
         )
@@ -601,7 +627,13 @@ def test_every_covered_entry_survives_nothing_through_the_real_erase_route(home)
     from corvin_console import chat_router
     from entity_extract import EntityPlan  # type: ignore
 
-    planted = {e: _plant(e, SUBJECT, OTHER) for e in _covered_entries()}
+    planted, markers = {}, {}
+    for e in _covered_entries():
+        if e in _ENTRY_PLANTERS:
+            sp, op, mk = _ENTRY_PLANTERS[e](SUBJECT, OTHER)
+            planted[e], markers[e] = (sp, op), mk
+        else:
+            planted[e], markers[e] = _plant(e, SUBJECT, OTHER), OTHER
     plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": SUBJECT}, confidence=1.0)
     # /erase asks for a one-time code first; take the one the router would have shown the user.
     plan.slots["confirm"] = chat_router._issue_erase_code("_default", plan.slots["subject_id"])
@@ -615,7 +647,7 @@ def test_every_covered_entry_survives_nothing_through_the_real_erase_route(home)
         f"subject's data survived in {survivors}"
     )
     lost = sorted(e for e, (_sp, op) in planted.items()
-                  if not (op.exists() and OTHER in op.read_text(encoding="utf-8")))
+                  if not (op.exists() and markers[e] in op.read_text(encoding="utf-8")))
     assert not lost, f"another subject's data was destroyed in {lost}"
 
 

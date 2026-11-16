@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="520" viewBox="0 0 980 520" font-family="Inter, Arial, sans-serif" font-size="13">
+  <title>Personal knowledge base: surfaces, gates and the encrypted store</title>
+  <rect width="980" height="520" fill="#0e1320"/>
+  <style>
+    .box{fill:#161d2e;stroke:#3a4a6b;stroke-width:1.2}
+    .key{fill:#1d2638;stroke:#d6b171;stroke-width:1.4}
+    .t{fill:#e8ecf4}.s{fill:#9aa6bd;font-size:11.5px}.h{fill:#d6b171;font-weight:600}
+    .a{stroke:#9aa6bd;stroke-width:1.2;fill:none;marker-end:url(#m)}
+  </style>
+  <defs><marker id="m" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#9aa6bd"/></marker></defs>
+  <text x="24" y="34" class="h" font-size="16">Personal knowledge base ("Only for me")</text>
+
+  <rect x="24" y="60" width="260" height="120" rx="8" class="box"/>
+  <text x="36" y="84" class="t" font-weight="600">Console (owner unlocked)</text>
+  <text x="36" y="106" class="s">Knowledge Graph → Only for me</text>
+  <text x="36" y="124" class="s">Tasks → Only for me</text>
+  <text x="36" y="142" class="s">handle + passphrase → unlock-token cookie</text>
+  <text x="36" y="160" class="s">423 locked · 403 wrong passphrase</text>
+
+  <rect x="24" y="210" width="260" height="120" rx="8" class="box"/>
+  <text x="36" y="234" class="t" font-weight="600">Bridge, private chat only</text>
+  <text x="36" y="256" class="s">/personal (alias /me) commands</text>
+  <text x="36" y="274" class="s">settings block before the L28.2 slot</text>
+  <text x="36" y="292" class="s">capture after the answer (owner text)</text>
+  <text x="36" y="310" class="s">chat_type from the daemon; else denied</text>
+
+  <rect x="340" y="60" width="290" height="270" rx="8" class="box"/>
+  <text x="352" y="84" class="t" font-weight="600">core/personal_kb</text>
+  <text x="352" y="108" class="s">owner · session · limits (no lockout)</text>
+  <text x="352" y="128" class="s">capture → non-evolvable filters, AUTO_KEYS</text>
+  <text x="352" y="148" class="s">render → framed block, L34 gate</text>
+  <text x="352" y="168" class="s">policy · evolve → allowlist, brake, rollback</text>
+  <text x="352" y="188" class="s">decoder → seed · shape · choices · plan · done</text>
+  <text x="352" y="208" class="s">   gates · repair · critic (≤3) · loss</text>
+  <text x="352" y="228" class="s">views → graph and task payloads</text>
+  <text x="352" y="248" class="s">erasure → crypto-shredding, resume scan</text>
+  <text x="352" y="268" class="s">audit → 31 content-free events</text>
+  <text x="352" y="288" class="s">engine → one-shot call, tier_model, L34</text>
+
+  <rect x="686" y="60" width="270" height="150" rx="8" class="key"/>
+  <text x="698" y="84" class="t" font-weight="600">Encrypted store (per owner)</text>
+  <text x="698" y="106" class="s">tenants/&lt;tid&gt;/personal_kb/&lt;owner&gt;/</text>
+  <text x="698" y="124" class="s">AES-256-GCM objects, manifest, versions</text>
+  <text x="698" y="142" class="s">meta: consent, bindings, fingerprints</text>
+  <text x="698" y="160" class="s">secrets/personal_kb/: device keys</text>
+  <text x="698" y="178" class="s">never git, never kb.py, never tasks.db</text>
+
+  <rect x="686" y="240" width="270" height="90" rx="8" class="box"/>
+  <text x="698" y="264" class="t" font-weight="600">Audit chain (tenant)</text>
+  <text x="698" y="286" class="s">owner_hash, ids, counts, reason codes</text>
+  <text x="698" y="304" class="s">no text, no handle, no bridge uid</text>
+
+  <rect x="340" y="370" width="290" height="110" rx="8" class="box"/>
+  <text x="352" y="394" class="t" font-weight="600">Project knowledge base</text>
+  <text x="352" y="416" class="s">only by "Promote": kb.py new idea|plan</text>
+  <text x="352" y="434" class="s">owner-approved summary, no personal id</text>
+  <text x="352" y="452" class="s">shared board stays project-only</text>
+
+  <rect x="686" y="370" width="270" height="110" rx="8" class="box"/>
+  <text x="698" y="394" class="t" font-weight="600">Art. 17 orchestrator</text>
+  <text x="698" y="416" class="s">L-personal-kb: bound uid only</text>
+  <text x="698" y="434" class="s">entry points: erase_owner()</text>
+  <text x="698" y="452" class="s">sentinel → keys → directory</text>
+
+  <path d="M284 120 L340 120" class="a"/><path d="M284 270 L340 270" class="a"/>
+  <path d="M630 135 L686 135" class="a"/><path d="M630 285 L686 285" class="a"/>
+  <path d="M485 330 L485 370" class="a"/><path d="M821 330 L821 370" class="a"/>
+</svg>

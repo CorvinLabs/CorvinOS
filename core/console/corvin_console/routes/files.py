@@ -88,6 +88,8 @@ _NO_ACCESS: frozenset[str] = frozenset({
 _NO_ACCESS_FAMILIES: tuple[str, ...] = (
     "audit.jsonl", "audit.backup", "recall.db", "secrets.json", "secrets.enc",
     "connector_vault.json", "github-audit.jsonl",
+    # the per-turn system-prompt temp file of a chat carries the owner's decrypted personal settings
+    ".corvin-sysprompt",
 )
 
 # Components whose contents the console may READ (GDPR Art. 15 access) but must
@@ -107,6 +109,9 @@ _WRITE_PROTECTED: frozenset[str] = frozenset({
 # hiding it is safer than leaking a keypair (2026-07-30 review finding C5/F2).
 _NO_ACCESS_DIRS: frozenset[str] = frozenset({
     "gateway", "social", "orgs", "remote_trigger", "datasource_connections",
+    # Personal knowledge base (ADR-2326): encrypted per-owner stores. Another console session must never read
+    # or overwrite them (a rewritten _index.json binds a chat to a victim's space; a deleted owner.json destroys it).
+    "personal_kb", "secrets",
 })
 
 # Any key / certificate material is protected wherever it sits in the tree —

@@ -128,7 +128,12 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, co
                   || 'unknown';
     const chatKey = activity.conversation?.id || 'unknown';
     const text    = (activity.text || '').trim();
-    const base    = { from: String(email), chat_id: chatKey, ts: Date.now() };
+    // Personal knowledge base (ADR-2326 items 6-7): a 'personal' conversation is private; the stable
+    // AAD object id is the identity a personal space binds to (the UPN can change or fall back).
+    const convType = activity.conversation?.conversationType;
+    const base    = { from: String(email), chat_id: chatKey,
+                      chat_type: convType === 'personal' ? 'private' : (convType ? 'group' : 'unknown'),
+                      sender_stable_id: activity.from?.aadObjectId || '', ts: Date.now() };
 
     // ── Read-only gate ────────────────────────────────────────────────────
     {

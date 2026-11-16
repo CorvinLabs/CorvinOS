@@ -34,6 +34,8 @@ import {
 import { cn } from "@/lib/utils";
 import { listProjects } from "@/lib/api/projects";
 import { ScopeSelect } from "@/pages/projects/scope-select";
+import { SpaceSwitch, useSpace } from "@/components/space-switch";
+import { PersonalTasks } from "./personal-tasks";
 import { listedProjects, resolveScope, scopeLabel, scopeList, scopeParam } from "@/pages/projects/scope";
 import { RunningNow, SourceNotes, TaskTable, TypeChips } from "./activity-parts";
 import { CreateDialog } from "./create-dialog";
@@ -129,7 +131,27 @@ function toggle<T>(arr: T[], v: T): T[] {
   return arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
 }
 
+/** Tasks: the project board, or the owner's personal tasks ("Only for me"). Each view is its own
+ *  component, so switching never changes the hook order of either. */
 export default function TasksPage() {
+  const [space, setSpace] = useSpace();
+  const switcher = <SpaceSwitch space={space} onChange={setSpace} />;
+  if (space === "personal") {
+    return (
+      <div className="space-y-4 p-4 md:p-6" data-testid="tasks-page">
+        <div>
+          <h1 className="text-xl font-semibold">Tasks</h1>
+          <p className="text-sm text-muted-foreground">Your personal tasks. Only you can see them.</p>
+        </div>
+        {switcher}
+        <PersonalTasks />
+      </div>
+    );
+  }
+  return <ProjectTasks spaceSwitch={switcher} />;
+}
+
+function ProjectTasks({ spaceSwitch }: { spaceSwitch: React.ReactNode }) {
   const qc = useQueryClient();
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
@@ -334,6 +356,7 @@ export default function TasksPage() {
         </p>
       )}
 
+      {spaceSwitch}
       {/* the knowledge base comes first: every count and card below belongs to it */}
       <div className="max-w-md">
         <ScopeSelect value={scopeKey || "all"} projects={projectList} note={scopeNote} onChange={setScope} />

@@ -1,0 +1,43 @@
+{
+  "engine_models": {
+    "decoder": "tier_model('sonnet')"
+  },
+  "before": {
+    "note": "first live run, unbounded critic, one idea",
+    "ideas": 1,
+    "gate_ok": 1,
+    "objections": 12,
+    "loss": 0.75
+  },
+  "after": {
+    "note": "critic capped at 3 material objections",
+    "runs": [
+      {
+        "idea": "A small herb garden on the balcony this spring",
+        "gate_ok": true,
+        "failures": [],
+        "objections": 3,
+        "loss": 0.4286,
+        "seconds": 34.0
+      },
+      {
+        "idea": "Learn enough Spanish for a two-week trip in June",
+        "gate_ok": true,
+        "failures": [],
+        "objections": 3,
+        "loss": 0.4286,
+        "seconds": 35.0
+      },
+      {
+        "idea": "A shared shopping list for our flat",
+        "gate_ok": true,
+        "failures": [],
+        "objections": 3,
+        "loss": 0.4286,
+        "seconds": 31.3
+      }
+    ],
+    "mean_loss": 0.4286,
+    "gate_pass_rate": 1.0
+  }
+}

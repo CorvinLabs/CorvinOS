@@ -3777,6 +3777,12 @@ def _resolve_spawn_inputs(
     for _cl_block in _cl_last_blocks:
         sys_prompt = sys_prompt + "\n\n" + _cl_block
 
+    # Personal knowledge base (ADR-2327 item 6): the owner's settings, framed as data, placed
+    # BEFORE the L28.2 slot, never in the conflict-winning last position.
+    _pkb_blk = _PKB_BLOCKS.get((str(channel or ""), str(chat_key or "")))
+    if _pkb_blk:
+        sys_prompt = sys_prompt + "\n\n" + _pkb_blk
+
     # Layer 28.2 (ADR-0016) — adapter-inject of the distilled user-model.
     # Lands LAST in the system-prompt assembly so it is the most-recent
     # instruction the LLM sees (mirror of summarize.py::SELF_CHECK_BLOCK
@@ -3784,6 +3790,7 @@ def _resolve_spawn_inputs(
     # chat_profile.user_model_enabled (default false; GDPR Art. 6).
     # Best-effort: any failure leaves sys_prompt unchanged.
     if (_user_model is not None and isinstance(profile, dict)
+            and (str(channel or ""), str(chat_key or "")) not in _PKB_OWNED
             and bool(profile.get("user_model_enabled", False))):
         try:
             um = _user_model.load(
@@ -4141,10 +4148,11 @@ def _resolve_spawn_inputs(
                         # the worker's cwd that no withholding or erasure
                         # reaches (review R5-4). Its size is kept instead.
                         cel_text=_cel_text,
-                        final_prompt=(sys_prompt.replace(
-                            _ledger_block,
-                            f"\n\n[session ledger block: {len(_ledger_block)} chars, not persisted]\n")
-                            if _ledger_block else sys_prompt),
+                        final_prompt=_mask_pkb_block(
+                            (sys_prompt.replace(
+                                _ledger_block,
+                                f"\n\n[session ledger block: {len(_ledger_block)} chars, not persisted]\n")
+                             if _ledger_block else sys_prompt), _pkb_blk),
                         forged_tools=list(_cel_forged_tools),
                         forged_skills=[getattr(s, "skill_id", "?") for s in
                                        (getattr(_pa_b, "skills_to_bind", None) or [])])
@@ -4874,6 +4882,127 @@ def _ledger_withhold(engine_name: str, channel: str, chat_key: str):
     def _check(rec: dict):
         return data_flow(rec) or consent(rec)
     return _check
+
+
+# Personal knowledge base (ADR-2325/2326/2327). The facade lives in core/personal_kb/bridge.py;
+# the repo root is APPENDED to sys.path (never inserted first) so nothing here is shadowed.
+# A turn's framed block is computed once in process_one and read by _resolve_spawn_inputs
+# by (channel, chat_key) (one turn per chat at a time); the entry is dropped when the turn ends.
+_PKB_BLOCKS: dict[tuple[str, str], str] = {}
+_PKB_OWNER_HASH: dict[tuple[str, str], str] = {}   # chat -> audit owner hash of the rendered block
+#: Private chats whose sender has a personal space this turn: the legacy L28.2 block is not injected there.
+_PKB_OWNED: set[tuple[str, str]] = set()
+_PKB_IMPORT_FAILED = False
+
+
+# One explicit whitespace set for the personal-command match, mirrored in local-announce.js. Python's \\s and JS's \\s
+# disagree (U+0085, U+001C-U+001F, U+FEFF), so \\s is never used on this path.
+_PKB_WS_LIST: tuple[str, ...] = (
+    *[chr(c) for c in (0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x85, 0xA0, 0x1680)],
+    *[chr(c) for c in range(0x2000, 0x200B)], chr(0x2028), chr(0x2029), chr(0x202F), chr(0x205F), chr(0x3000),
+    chr(0xFEFF),
+)
+_PKB_WS_CHARS = "".join(_PKB_WS_LIST)
+_PKB_WS = "[" + "".join(f"\\u{ord(c):04x}" for c in _PKB_WS_LIST) + "]"
+_PKB_MENTION_LEAD = r"(?:<@[^>]+>|<at>[^<]*</at>|@[^" + _PKB_WS[1:-1] + r"<>@/]+)"
+_PKB_NONWS = "[^" + _PKB_WS[1:-1] + "]"
+_PKB_COMMAND_RE = re.compile(r"^/(?:personal|me)(?:@" + _PKB_NONWS + "+)?(?:" + _PKB_WS + r"|$)", re.I)
+
+
+def _pkb_norm_text(text) -> str:
+    """The text a personal command is matched on: leading mentions (Slack/Discord ``<@id>``, Teams ``<at>…</at>``,
+    ``@name``) and a bot suffix on the command (Telegram ``/personal@Bot``) are removed, so a group message cannot hide
+    a command from the check."""
+    t = re.sub(r"^" + _PKB_WS + r"*(?:" + _PKB_MENTION_LEAD + _PKB_WS + r"*)*", "", str(text or ""), flags=re.I)
+    t = t.strip(_PKB_WS_CHARS)
+    return re.sub(r"^/(personal|me)@" + _PKB_NONWS + "+", r"/\1", t, count=1, flags=re.I)
+
+
+def _pkb_bridge():
+    global _PKB_IMPORT_FAILED
+    if _PKB_IMPORT_FAILED:
+        return None
+    try:
+        _root = str(Path(__file__).resolve().parents[3])
+        if _root not in sys.path:
+            sys.path.append(_root)
+        from core.personal_kb import bridge as _b  # noqa: PLC0415
+        return _b
+    except Exception as e:  # noqa: BLE001 - the feature is off, the turn is not
+        _PKB_IMPORT_FAILED = True
+        log(f"personal knowledge base unavailable: {type(e).__name__}")
+        return None
+
+
+def _pkb_regate_for_provider(resolved: dict, provider, channel: str, chat_key, *,
+                             force_withhold: bool = False) -> None:
+    """A turn rerouted to a provider (ADR-2268): the personal block was gated for claude_code, so
+    judge it again for that provider and remove it from the system prompt when not allowed (fail-closed)."""
+    blk = _PKB_BLOCKS.get((str(channel or ""), str(chat_key or "")))
+    if not blk:
+        return
+    try:
+        if force_withhold:
+            # The block was cleared for the native engine only; a provider assigned to claude_code has no
+            # data-flow clearance for personal text unless a reroute declared one (then the gate below judges it).
+            raise LookupError("assigned provider is not cleared for personal text")
+        from spawn_gates import check_l34 as _sg_l34  # type: ignore  # noqa: PLC0415
+        ok = _sg_l34("claude_code", os.environ.get("CORVIN_TENANT_ID") or "_default",
+                     classification="CONFIDENTIAL", prompt=blk, provider=provider) is None
+    except Exception:  # noqa: BLE001
+        ok = False
+    if ok:
+        return
+    needle = "\n\n" + blk
+    if isinstance(resolved.get("system"), str):
+        resolved["system"] = resolved["system"].replace(needle, "")
+    spf = resolved.get("system_prompt_file")
+    if spf:
+        try:
+            _txt = Path(spf).read_text(encoding="utf-8")
+            Path(spf).write_text(_txt.replace(needle, ""), encoding="utf-8")
+        except OSError:
+            resolved["system_prompt_file"] = None
+    _ohash = _PKB_OWNER_HASH.get((str(channel or ""), str(chat_key or "")))
+    if _ohash:
+        try:
+            from core.personal_kb import bridge as _b  # noqa: PLC0415
+            _b.note_withheld(os.environ.get("CORVIN_TENANT_ID") or "_default", _ohash, str(channel or ""))
+        except Exception:  # noqa: BLE001
+            pass
+    log("personal knowledge base block withheld for the rerouted provider")
+
+
+def _mask_pkb_block(text: str, blk: str | None) -> str:
+    """The decrypted personal block never reaches a persisted copy of the prompt (the CEL inspector file is in
+    the chat's working folder and readable through the console's trace routes): its size is kept instead."""
+    if not blk or not text:
+        return text
+    return text.replace(blk, f"[personal knowledge block: {len(blk)} chars, not persisted]")
+
+
+def _is_pkb_envelope(inbox_file: Path) -> bool:
+    try:
+        _txt = str((json.loads(inbox_file.read_text(encoding="utf-8")) or {}).get("text") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        return False
+    return bool(_txt and _PKB_COMMAND_RE.match(_pkb_norm_text(_txt)))
+
+
+def _archive_inbox(inbox_file: Path) -> None:
+    """Move a handled inbox envelope to processed/ — except a /personal (or /me) command, which may carry a
+    personal fact and is deleted instead (ADR-2326 item 12). Raises like shutil.move on failure."""
+    if _is_pkb_envelope(inbox_file):
+        inbox_file.unlink(missing_ok=True)
+        return
+    shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+
+
+def _pkb_identity(msg: dict, sender: str, channel: str) -> str:
+    """The id a personal space binds to: Teams uses the stable AAD object id, others the sender id."""
+    if channel == "teams":
+        return str(msg.get("sender_stable_id") or "")
+    return str(sender or "")
 
 
 def _ledger_record_side_turn(channel: str, chat_key: str, user_text: str, reply_text: str, *,
@@ -5905,6 +6034,7 @@ def _call_claude_streaming_via_engine(
         if _route_problem is not None:
             _turn_refused("l34_route_unavailable")
             return _route_problem
+        _pkb_regate_for_provider(resolved, getattr(l34_route, "provider", None), channel, chat_key)
     elif route_problem:
         # A provider is assigned to claude_code (L35 judged ITS host) but the spawn env could not
         # be built for it: refuse like the console (T-0229) instead of going to the default
@@ -5912,6 +6042,11 @@ def _call_claude_streaming_via_engine(
         log(f"route gate: assigned provider route unavailable — {route_problem}")
         _turn_refused("l34_route_unavailable")
         return f"[security] {route_problem}"
+    if not l34_route.rerouted and (env.get("ANTHROPIC_BASE_URL") or env.get("CORVIN_CC_PROVIDER")):
+        # A provider assigned to claude_code or named by a Console Models tier row: the personal block was
+        # cleared for the native engine only, so it is judged again for that provider (unknown -> withheld).
+        _pkb_regate_for_provider(resolved, env.get("CORVIN_CC_PROVIDER") or None, channel, chat_key,
+                                 force_withhold=True)
 
     # ADR-2268: one claude session per endpoint. The CLI resumes whatever session sits under its
     # cwd, so a rerouted exchange in the chat workdir would be replayed to the default endpoint
@@ -11507,7 +11642,7 @@ def _move_inbox_with_attachments(inbox_file: Path, msg: dict | None) -> None:
     """
     PROCESSED.mkdir(exist_ok=True)
     try:
-        shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+        _archive_inbox(inbox_file)
     except OSError as e:
         log(f"_move_inbox_with_attachments: envelope move failed: {e}")
         try:
@@ -11955,9 +12090,25 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             log(f"observer drop {msg_id}: empty body")
             PROCESSED.mkdir(exist_ok=True)
             try:
-                shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                _archive_inbox(inbox_file)
             except Exception:
                 inbox_file.unlink(missing_ok=True)
+            return
+        if _PKB_COMMAND_RE.match(_pkb_norm_text(text)):
+            # A /personal command from a group observer: a link code is burned (it was sent where others read
+            # it) and the text never reaches the observer buffer or the model.
+            _pkb = _pkb_bridge()
+            if _pkb is not None:
+                try:
+                    _pkb.handle_command(os.environ.get("CORVIN_TENANT_ID") or "_default",
+                                        re.sub(r"^/personal", "/me", _pkb_norm_text(text), count=1, flags=re.I),
+                                        channel=str(channel or ""), uid=_pkb_identity(msg, sender, str(channel or "")),
+                                        display="", chat_type="group")
+                except Exception:  # noqa: BLE001
+                    pass
+            log(f"observer /personal dropped {msg_id}")
+            PROCESSED.mkdir(exist_ok=True)
+            inbox_file.unlink(missing_ok=True)
             return
         if not _inbox_sender_is_read_only(channel, sender):
             log(f"observer drift drop {msg_id} channel={channel} "
@@ -11969,7 +12120,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             )
             PROCESSED.mkdir(exist_ok=True)
             try:
-                shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                _archive_inbox(inbox_file)
             except Exception:
                 inbox_file.unlink(missing_ok=True)
             return
@@ -11997,7 +12148,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 )
                 PROCESSED.mkdir(exist_ok=True)
                 try:
-                    shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                    _archive_inbox(inbox_file)
                 except Exception:
                     inbox_file.unlink(missing_ok=True)
                 return
@@ -12019,7 +12170,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     pass
                 PROCESSED.mkdir(exist_ok=True)
                 try:
-                    shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                    _archive_inbox(inbox_file)
                 except Exception:
                     inbox_file.unlink(missing_ok=True)
                 return
@@ -12052,7 +12203,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         )
         PROCESSED.mkdir(exist_ok=True)
         try:
-            shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+            _archive_inbox(inbox_file)
         except Exception:
             inbox_file.unlink(missing_ok=True)
         return
@@ -12093,7 +12244,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             )
             PROCESSED.mkdir(exist_ok=True)
             try:
-                shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                _archive_inbox(inbox_file)
             except Exception:
                 inbox_file.unlink(missing_ok=True)
             return
@@ -12148,7 +12299,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     log(f"stale-drop notice failed for {msg_id}: {_e}")
                 PROCESSED.mkdir(exist_ok=True)
                 try:
-                    shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                    _archive_inbox(inbox_file)
                 except Exception:
                     inbox_file.unlink(missing_ok=True)
                 return
@@ -12187,7 +12338,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             )
             PROCESSED.mkdir(exist_ok=True)
             try:
-                shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                _archive_inbox(inbox_file)
             except Exception:
                 inbox_file.unlink(missing_ok=True)
             return
@@ -12202,7 +12353,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 pass
             PROCESSED.mkdir(exist_ok=True)
             try:
-                shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                _archive_inbox(inbox_file)
             except Exception:
                 inbox_file.unlink(missing_ok=True)
             return
@@ -12246,7 +12397,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     out_file,
                     json.dumps(warn_envelope, ensure_ascii=False, indent=2))
                 PROCESSED.mkdir(exist_ok=True)
-                shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                _archive_inbox(inbox_file)
                 _audit_event(
                     "bridge.reset_prewarned",
                     channel=channel, chat_key=str(chat_key), user=sender,
@@ -12335,7 +12486,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         out_file = OUTBOX / f"{msg_id}_00.json"
         _atomic_write_outbox(out_file, json.dumps(ack_envelope, ensure_ascii=False, indent=2))
         PROCESSED.mkdir(exist_ok=True)
-        shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+        _archive_inbox(inbox_file)
         return
 
     # /btw <text>: inject an extra user-message into the live claude
@@ -12370,7 +12521,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     json.dumps(_hr_ack, ensure_ascii=False, indent=2),
                 )
                 PROCESSED.mkdir(exist_ok=True)
-                shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                _archive_inbox(inbox_file)
                 return
         delivered = inject_btw(chat_key, btw_text) if btw_text else False
         # Robustness: /btw only injects LIVE on engines with mid_stream_inject
@@ -12431,7 +12582,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         out_file = OUTBOX / f"{msg_id}_00.json"
         _atomic_write_outbox(out_file, json.dumps(ack_envelope, ensure_ascii=False, indent=2))
         PROCESSED.mkdir(exist_ok=True)
-        shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+        _archive_inbox(inbox_file)
         return
 
     # /task <instruction> (alias /bg): run the instruction as a DETACHED, durable
@@ -12441,6 +12592,40 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # register() captures the origin now → bg_task_worker runs it through the
     # fully-gated engine path → mark_done → the main loop's completion_notify
     # delivery pushes the result to the outbox → daemon → messenger.
+    # Personal knowledge base commands (/personal, alias /me; ADR-2327 item 8). L44 runs on the
+    # text like /task; the ledger keeps only the length (reason personal_command), and the
+    # envelope is unlinked instead of archived to processed/ (it may hold a personal fact).
+    _pkb_raw = _pkb_norm_text(msg.get("text") or "")
+    if msg.get("chat_type") == "private" and str(channel or "") == "teams" and msg.get("sender_stable_id"):
+        _pkb_alias = _pkb_bridge()
+        if _pkb_alias is not None:   # the UPN next to the AAD id the space is bound to (Art. 17 by either name)
+            _pkb_alias.note_alias(os.environ.get("CORVIN_TENANT_ID") or "_default", channel="teams",
+                                  uid=str(msg.get("sender_stable_id")), alias=str(sender or ""))
+    if _pkb_raw and _PKB_COMMAND_RE.match(_pkb_raw) and not msg.get("_observer"):
+        _pkb_chat_key = chat_id or sender
+        _pkb = _pkb_bridge()
+        if _pkb is None:
+            _pkb_reply = "The personal space is not available on this install."
+        else:
+            _pkb_hr = _check_house_rules_or_fail(prompt=_pkb_raw, persona=None, channel=channel,
+                                                 chat_key=str(_pkb_chat_key))
+            if _pkb_hr is not None:
+                _pkb_reply = _pkb_hr
+            else:
+                _pkb_text = re.sub(r"^/personal", "/me", _pkb_raw, count=1, flags=re.I)
+                _pkb_reply = _pkb.handle_command(
+                    os.environ.get("CORVIN_TENANT_ID") or "_default", _pkb_text, channel=str(channel or ""),
+                    uid=_pkb_identity(msg, sender, str(channel or "")), display=str(msg.get("from_name") or ""),
+                    chat_type=str(msg.get("chat_type") or "unknown"), chat_key=str(_pkb_chat_key)).reply
+        _ledger_record_side_turn(channel, str(_pkb_chat_key), _pkb_raw, _pkb_reply, msg_id=str(msg_id or ""),
+                                 sender=str(sender or ""), refused="personal_command", gated=True)
+        _pkb_env = {"channel": channel, "to": sender, "text": _pkb_reply}
+        if chat_id is not None:
+            _pkb_env["chat_id"] = chat_id
+        _atomic_write_outbox(OUTBOX / f"{msg_id}_00.json", json.dumps(_pkb_env, ensure_ascii=False, indent=2))
+        inbox_file.unlink(missing_ok=True)
+        return
+
     _task_raw = (msg.get("text") or "").strip()
     _task_head = _task_raw.split(None, 1)[0].lower() if _task_raw else ""
     if _task_head in ("/task", "/bg"):
@@ -12645,7 +12830,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             json.dumps(ack_envelope, ensure_ascii=False, indent=2),
         )
         PROCESSED.mkdir(exist_ok=True)
-        shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+        _archive_inbox(inbox_file)
         return
 
     # Phase 4.1.5 — /sig <session_id> <SIGNAL_NAME> custom signal injection.
@@ -12753,7 +12938,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         out_file = OUTBOX / f"{msg_id}_00.json"
         _atomic_write_outbox(out_file, json.dumps(ack_envelope, ensure_ascii=False, indent=2))
         PROCESSED.mkdir(exist_ok=True)
-        shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+        _archive_inbox(inbox_file)
         return
 
     # /stop /cancel: SIGTERM the running claude subprocess(es) for this chat.
@@ -12793,7 +12978,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         out_file = OUTBOX / f"{msg_id}_00.json"
         _atomic_write_outbox(out_file, json.dumps(ack_envelope, ensure_ascii=False, indent=2))
         PROCESSED.mkdir(exist_ok=True)
-        shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+        _archive_inbox(inbox_file)
         return
 
     # Build the prompt depending on the message kind. Some kinds so need to
@@ -12926,7 +13111,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 json.dumps(ack_envelope, ensure_ascii=False, indent=2),
             )
             PROCESSED.mkdir(exist_ok=True)
-            shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+            _archive_inbox(inbox_file)
             return
 
     # Observer-transcript prepend (Layer 16, Phase 2 + Layer 17 re-validation).
@@ -13284,6 +13469,31 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         _TURN_OUTCOME.timed_out = False
         # The turn's author, for the CEL session (anchor goal attribution).
         _TURN_OUTCOME.sender = str(sender or "")
+        # Personal knowledge base: the owner's framed settings block for a PRIVATE chat of a bound
+        # identity (L34-gated inside); _resolve_spawn_inputs places it before the L28.2 slot.
+        _PKB_BLOCKS.pop((str(channel or ""), str(chat_key or "")), None)
+        _PKB_OWNER_HASH.pop((str(channel or ""), str(chat_key or "")), None)
+        _PKB_OWNED.discard((str(channel or ""), str(chat_key or "")))
+        if msg.get("chat_type") == "private":
+            _pkb = _pkb_bridge()
+            if _pkb is not None and _pkb.chat_is_owned(os.environ.get("CORVIN_TENANT_ID") or "_default",
+                                                        channel=str(channel or ""),
+                                                        uid=_pkb_identity(msg, sender, str(channel or ""))):
+                _PKB_OWNED.add((str(channel or ""), str(chat_key or "")))
+            if _pkb is not None:
+                _pkb_blk = _pkb.context_block(
+                    os.environ.get("CORVIN_TENANT_ID") or "_default", channel=str(channel or ""),
+                    uid=_pkb_identity(msg, sender, str(channel or "")), chat_type="private",
+                    task_text=str(_voice_task or prompt or "")[:2000])
+                if _pkb_blk:
+                    if len(_PKB_BLOCKS) > 64:
+                        _PKB_BLOCKS.pop(next(iter(_PKB_BLOCKS)))
+                    _PKB_BLOCKS[(str(channel or ""), str(chat_key or ""))] = _pkb_blk
+                    _ohash = _pkb.block_owner_hash(
+                        os.environ.get("CORVIN_TENANT_ID") or "_default", channel=str(channel or ""),
+                        uid=_pkb_identity(msg, sender, str(channel or "")))
+                    if _ohash:
+                        _PKB_OWNER_HASH[(str(channel or ""), str(chat_key or ""))] = _ohash
         answer, prompt = _maybe_delegate_worker(
             prompt, channel=channel, chat_key=chat_key,
             persona=str((profile or {}).get("persona")
@@ -13494,6 +13704,26 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             )
         except Exception as e:  # noqa: BLE001
             log(f"session ledger append failed (non-fatal): {e}")
+
+    # Personal knowledge base: the turn is over, its block goes; then automatic capture from the
+    # OWNER's own plain text only, on a worker thread (ADR-2327 items 1-2).
+    _PKB_BLOCKS.pop((str(channel or ""), str(chat_key or "")), None)
+    _PKB_OWNER_HASH.pop((str(channel or ""), str(chat_key or "")), None)
+    _PKB_OWNED.discard((str(channel or ""), str(chat_key or "")))
+    if (msg.get("chat_type") == "private" and not getattr(_TURN_OUTCOME, "refused", None)
+            and not any(msg.get(k) for k in ("audio_path", "image_path", "document_path", "video_path",
+                                              "attachments", "_observer"))):
+        _pkb = _pkb_bridge()
+        if _pkb is not None:
+            try:
+                threading.Thread(
+                    target=_pkb.after_turn, args=(os.environ.get("CORVIN_TENANT_ID") or "_default",),
+                    kwargs={"channel": str(channel or ""), "uid": _pkb_identity(msg, sender, str(channel or "")),
+                            "chat_type": "private", "user_text": str(msg.get("text") or ""),
+                            "forwarded": bool(msg.get("forwarded") or msg.get("is_forward"))},
+                    daemon=True).start()
+            except Exception as e:  # noqa: BLE001
+                log(f"personal capture scheduler failed (non-fatal): {e}")
 
     # ADR-0407 amendment — decision-point capture (OUTBOUND). If this final reply
     # offered the user a choice, persist it verbatim so a later "Option N" still
@@ -13774,8 +14004,14 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # optionally tune the cadence via user_model_distill_every_n_turns
     # (default 50). Subprocess judge cost is operator-Max-Abo-native;
     # zero Anthropic SDK calls.
+    _pkb_owned = False
+    if msg.get("chat_type") == "private":
+        _pkb = _pkb_bridge()
+        _pkb_owned = bool(_pkb is not None and _pkb.chat_is_owned(
+            os.environ.get("CORVIN_TENANT_ID") or "_default", channel=str(channel or ""),
+            uid=_pkb_identity(msg, sender, str(channel or ""))))
     if (_user_model is not None and _conversation_recall is not None
-            and isinstance(profile, dict)
+            and isinstance(profile, dict) and not _pkb_owned
             and bool(profile.get("user_model_enabled", False))):
         try:
             every_n = int(profile.get("user_model_distill_every_n_turns", 50))
@@ -14139,7 +14375,11 @@ def submit_inbox_item(inbox_file: Path, settings: dict) -> None:
             log(f"runner error for {msg_id} ({route}): {e}")
             tb = traceback.format_exc()
             try:
-                if inbox_file.exists():
+                if inbox_file.exists() and _is_pkb_envelope(inbox_file):
+                    # a /personal command may carry a personal fact: never kept as a poison copy (ADR-2326 item 12)
+                    inbox_file.unlink(missing_ok=True)
+                    log(f"dropped failed /personal envelope {msg_id}")
+                elif inbox_file.exists():
                     poison_dir = PROCESSED / "poison"
                     poison_dir.mkdir(parents=True, exist_ok=True)
                     target = poison_dir / inbox_file.name

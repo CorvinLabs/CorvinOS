@@ -1142,6 +1142,32 @@ class WorkflowCheckpointHandler:
         )
 
 
+@dataclass
+class PersonalKbHandler:
+    """L-personal-kb (ADR-2326 item 9): the per-owner encrypted personal knowledge base.
+
+    A thin bridge to ``core.personal_kb.erasure.PersonalKbHandler``, which resolves only a bound
+    ``channel:uid`` or a bare uid (never an owner id, a handle or a ``pkb:`` value) and erases by
+    crypto-shredding. A failed import is a FAILED result, never a silent skip.
+    """
+    layer_id: str = "L-personal-kb"
+    tenant_id: str = "_default"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        try:
+            repo = Path(__file__).resolve().parents[3]
+            if str(repo) not in sys.path:
+                sys.path.insert(0, str(repo))
+            from core.personal_kb.erasure import PersonalKbHandler as _Impl  # noqa: PLC0415
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(layer_id=self.layer_id, status=LayerStatus.FAILED, count=0,
+                                      reason=f"personal_kb import failed: {type(exc).__name__}",
+                                      code=ReasonCode.STORE_ERROR.value,
+                                      duration_ms=int((time.time() - t0) * 1000))
+        return _Impl(tenant_id=self.tenant_id).purge(subject_id, request_id)
+
+
 def _tenant_home(tenant_id: str = "_default") -> Path:
     return _corvin_home() / "tenants" / tenant_id
 
@@ -2987,6 +3013,7 @@ class UnattributableStoreHandler:
 #: on purpose, because guessing deletes other subjects' data.
 COVERED_DIRS: dict[str, frozenset[str]] = {
     "L28-recall":            frozenset({"global/memory"}),
+    "L-personal-kb":         frozenset({"personal_kb"}),
     "L28.2-user-model":      frozenset({"global/memory"}),
     "L33-artifacts":         frozenset({"sessions"}),
     "ACS-traces":            frozenset({"sessions"}),
@@ -3474,6 +3501,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         CELContextPriorityHandler(tenant_id=tenant_id),     # cel_context_priority/ (2026-11-05)
         ConsoleForgeHandler(tenant_id=tenant_id),           # global/forge_{intake,runs}/ (2026-11-05)
         SessionLedgerHandler(tenant_id=tenant_id),          # session_ledger/** (+ legacy .corvin-ledger/)
+        PersonalKbHandler(tenant_id=tenant_id),             # personal_kb/<owner> (ADR-2326, crypto-shredding)
         ACSGlobalIndexHandler(tenant_id=tenant_id),         # global/acs/runs/
         A2AFeedHandler(tenant_id=tenant_id),                # global/a2a_feed/
         ChatGroupHandler(tenant_id=tenant_id),              # global/chat_groups/

@@ -33,6 +33,33 @@ require('../shared/js/bridge_state').exitIfDisabled('discord');
 
 const { Client, GatewayIntentBits, IntentsBitField, Partials, AttachmentBuilder } = require('discord.js');
 
+// Personal knowledge base (ADR-2326 item 6): only a one-to-one DM is "private". A group DM or a
+// guild channel is "group"; anything this daemon cannot tell is "unknown" (fail-closed upstream).
+// Personal knowledge base (ADR-2327): a forwarded message is someone else's words, never learned as the
+// owner's own statement. Discord marks a forward with a message reference of type 1 (FORWARD) and snapshots.
+function isForwardedMessage(msg) {
+  try {
+    if (msg && msg.reference && msg.reference.type === 1) return true;
+    const snaps = msg && msg.messageSnapshots;
+    return !!(snaps && (snaps.size || snaps.length));
+  } catch { return false; }
+}
+
+function chatTypeOfChannel(channel) {
+  try {
+    if (!channel) return 'unknown';
+    const t = channel.type;
+    if (t === 1 || t === 'DM') return 'private';
+    return 'group';
+  } catch { return 'unknown'; }
+}
+function chatTypeOfInteraction(interaction) {
+  try {
+    if (interaction && interaction.guildId) return 'group';
+    return chatTypeOfChannel(interaction && interaction.channel);
+  } catch { return 'unknown'; }
+}
+
 // ── Shared bridge runtime (Phase 2 refactor) ────────────────────────────────
 const { makeLogger }            = require('../shared/js/logger');
 const { makeSettingsAccessor }  = require('../shared/js/settings');
@@ -335,7 +362,7 @@ client.on('interactionCreate', async (interaction) => {
     {
       const ro = readOnlyOk(userId, text, String(channelId));
       if (ro.isReadOnly) {
-        const base = { from: String(userId), chat_id: channelId, ts: Date.now() };
+        const base = { from: String(userId), chat_id: channelId, chat_type: chatTypeOfInteraction(interaction), ts: Date.now() };
         // Layer-17 read-only consent / /share dispatcher (slash-command path).
         const cc = inChatCmds.dispatchReadOnlyConsent({
           text, channel: CHANNEL, chatKey: String(channelId), uid: String(userId),
@@ -436,7 +463,7 @@ client.on('interactionCreate', async (interaction) => {
     try { await interaction.deferReply({ ephemeral: true }); } catch {}
 
     const cmdLower = text.trim().toLowerCase();
-    const base = { from: String(userId), chat_id: channelId, ts: Date.now() };
+    const base = { from: String(userId), chat_id: channelId, chat_type: chatTypeOfInteraction(interaction), ts: Date.now() };
 
     // /task — route to the SAME durable background backbone the typed
     // `/task <text>` command uses (adapter.py's /task handler → completion_notify
@@ -625,7 +652,8 @@ client.on('messageCreate', async (msg) => {
     {
       const ro = readOnlyOk(userId, text, String(msg.channel.id));
       if (ro.isReadOnly) {
-        const base = { from: String(userId), chat_id: msg.channel.id, ts: Date.now() };
+        const base = { from: String(userId), chat_id: msg.channel.id, chat_type: chatTypeOfChannel(msg.channel),
+                    forwarded: isForwardedMessage(msg), ts: Date.now() };
         // Layer-17 read-only consent / /share dispatcher (text-message path).
         const cc = inChatCmds.dispatchReadOnlyConsent({
           text, channel: CHANNEL, chatKey: String(msg.channel.id), uid: String(userId),
@@ -855,7 +883,8 @@ client.on('messageCreate', async (msg) => {
       pendingReactions.set(msg.channel.id, msg);
     } catch {}
 
-    const base = { from: String(userId), chat_id: msg.channel.id, ts: Date.now() };
+    const base = { from: String(userId), chat_id: msg.channel.id, chat_type: chatTypeOfChannel(msg.channel),
+                    forwarded: isForwardedMessage(msg), ts: Date.now() };
 
     // Handle attachments. Discord delivers them via msg.attachments (Map).
     if (msg.attachments.size > 0) {
