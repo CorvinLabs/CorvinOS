@@ -2305,6 +2305,44 @@ is installed AND enabled. Same pattern as `video-producer`. A static entry would
 | Reader (Markdown, ids → links, Links / Linked from lists) | `DocumentPane.tsx`, `link-resolver.ts`, shared `components/markdown.tsx` (`internalHref` prop) |
 | Selection | the URL: `?node=<uid or human id>` — Back/Forward is the reading history |
 | Route | `GET /v1/console/plugins/corvin-knowledge/doc/{key}` in `routes/plugins_corvin_knowledge_api.py` |
+| "New" tab (timeline of entries added or changed in the last 7/14/30 days; tiles new / changed / all double as the filter; a click opens the entry in the Graph tab) | `RecentFeed.tsx`, `recent-model.ts`; the tab and its controls are the URL: `?view=new&days=&kind=&type=` (Back from an opened entry returns to the same list) |
+| Route | `GET /v1/console/plugins/corvin-knowledge/recent?days=&limit=&project=&kind=&type=` in `routes/plugins_corvin_knowledge_api.py` (a project's graph is indexed under its lock first, like `/graph`) |
+
+**"New" feed.** The graph rows carry no timestamps, so the route reads the knowledge base's git history
+(`git log --name-status` over the Markdown files, run exactly like the project change view runs git —
+`core.projects.changes`: the repository's own configuration cannot start a program (no gpg for a signed
+commit, no filter or hook), replace refs and grafts are ignored, output capped at 4 MB, a timeout — in the
+repository that OWNS the folder, which for a plain-mode project is the project root above `docs/`) and joins
+each touched file to its entity. The date is the COMMIT time (the clock `--since` filters on), normalised to
+UTC and sorted as instants, so an author's time zone never reorders the list; a renamed file keeps its
+earlier history, so an entry added and renamed inside the window is still `new`. An entry is `new` when a commit inside the
+window added its file, `updated` when it existed before and was edited inside it; a file whose newest touch
+removed it is not listed; a Markdown file the graph does not list is ignored. Newest first, `total` and the
+two counts count within the active `type` and `type_counts` within the active `kind` (every type of the window
+present, zero included), `kind`/`type` narrow `items` and `matching` on the server — so what a click lists is what
+its number says, and `items` is capped by `limit` (default 80, at most 500; the tab's "Show more" raises it by 80 at a time). The newest entries come first, so a window with more than the limit shows its newest part only, and the footer says how many match; the last day's count is marked "+" when the list is cut. The URL's limit is kept a whole number between 80 and 500. **Read-only**:
+nothing is written, no interval polling (a fetch on open, on focus, on Refresh and when the period, a tile or a chip changes; the one exception is a lagging or busy graph, below; a project's graph is indexed under its lock when stale, exactly like `/graph`; only a FAILED index (or one that leaves the graph stale) is remembered, for 30 seconds and until the graph is current again, so a stuck index is not run per click; the graph lock is waited for at most 15). The graph can lag the history (a pull or a commit the index has not seen): the payload counts the entry files of the window — in the
+knowledge base's own source folders (`kb/_meta/sources.yaml`) that get an id, existing now — that the graph does not know
+(`unindexed`; `graph_stale` is true when it is above zero, or when the check was capped — `unindexed_capped`, the "at least" / "some newer files may not be" notice), so it is counted from the data, never from clocks (a pulled commit keeps the other
+host's commit time); an uncommitted edit, a README or an edit of a known entry is not lag. The count reads at most 400 frontmatter blocks and 32 KB of each, within 2 s; when it runs out `unindexed_capped` is set and the notice says "at least" (a file whose frontmatter is longer than the read is counted, the safe side). Git's C-quoted names (quotes, backslashes, control characters) are unquoted, and a source's folder is matched as text after normalisation (a source with `ref:` or a symlinked root is not counted: no notice rather than a false one). Only what `kb index` would list counts (the engine's own rules: a `.md` directly inside a
+source folder, not readme/index/_template, not a symlink and not resolving outside the repository, that gets an id — a frontmatter
+`id`/`uid`, or one from its name, a decision's older `0466-…`/`adr_0801_…` names included — and is not already a graph row). The bound knowledge base is re-indexed by
+the projector after a HEAD change — except while it is `held` (uncommitted files under `kb/tasks|epics|initiatives`) or red — and a project's
+graph by `/recent` itself when a source file is newer; a repository nothing re-indexes keeps its notice until someone runs `kb index`. The tab looks again every 8 seconds, at most four times, only after a successful answer, and a filter
+change gets its own four; a graph lock that stays busy answers `busy` (announced in the live region; a list already on screen stays, with
+a note); if a project's index fails but an older graph exists, the list is served from it with `index_error` and an amber note. The bound
+knowledge base's graph is read without a lock (the projector rewrites it in place), so a request during that rewrite can show a short list and
+a false "not in the graph yet" notice: it heals on the next look. Refresh and opening an entry refresh the page's graph too, so an entry just listed can be opened; a pull
+refreshes the list, the checkout is never changed, and the knowledge base is the tenant's bound one or a
+registered project's — never a path from the request (an unregistered `project` is 404). States: `ok`,
+`empty`, `missing` (never indexed), `no_commits` (the repository has no commit yet), `no_history` (no repository
+this feed reads owns the folder: a plain folder, a linked worktree or a submodule), `busy` (the graph is being rebuilt
+right now), `error`; `truncated`
+is set when the history was longer than the cap (the oldest changes of the window may be missing). The commit subject is shown
+only when it adds something the title does not. Several knowledge bases at once (the joined scope) are not
+merged here: the tab asks for one. Proof: `core/console/tests/test_knowledge_recent_e2e.py` (real console
+app, real `kb new` commits, real `git log`), `web-next/tests/unit/knowledge-recent{,-feed,-wiring}.test.ts(x)`. The personal
+space ("Only for me") has its own tabs; this feed reads the project knowledge base only.
 
 **Link rules.** `ADR-/CONCEPT-/PLAN-/IDEA-/REVIEW-/NOTE-nnnn`, `T-nnnn`, `E-nnn`, `I-nn`, `[[id]]` and
 relative `*.md` links become internal links only when they resolve to exactly one node of the loaded

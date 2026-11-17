@@ -31,6 +31,7 @@ import { buildLinkIndex, viewFor } from "./link-resolver";
 import { neighbourhood, newestDecisionKey, searchNodes } from "./graph-model";
 import { SpaceSwitch, useSpace } from "@/components/space-switch";
 import { PersonalSpace } from "./personal/PersonalSpace";
+import { KEY_RECENT, RecentFeed } from "./RecentFeed";
 
 export interface KnowledgeEntity { id: string; label?: string; file?: string; type: string; title: string; status: string; tags: string[]; /** the project whose knowledge base holds the node (ADR-2316); null/absent = the bound KB */ scope?: string | null; /** the uid in its own knowledge base when the joined view had to qualify the node id */ uid?: string }
 export interface KnowledgeRelation { from_id: string; to_id: string; relation: string }
@@ -198,6 +199,14 @@ function ProjectKnowledge({ spaceSwitch }: { spaceSwitch: React.ReactNode }) {
   // reader of a joined view back to the default knowledge base on the first click
   const select = useCallback((key: string) => setParams((p) => { const n = new URLSearchParams(p); n.set("node", key); return n; }), [setParams]);
   const canGoBack = location.key !== "default";
+  // the tab is the URL too (?view=new / ?view=settings; none = the graph), so the "New" list can be linked to
+  const view = params.get("view") === "new" ? "new" : params.get("view") === "settings" ? "settings" : "graph";
+  const setView = useCallback((v: string) => setParams((p) => { const n = new URLSearchParams(p); if (v === "graph") n.delete("view"); else n.set("view", v); return n; }, { replace: true }), [setParams]);
+  // opening an entry from the "New" list shows it in the graph (and leaves the other parameters, the knowledge base above all)
+  const openFromRecent = useCallback((key: string) => {
+    qc.invalidateQueries({ queryKey: [...KEY_GRAPH] });         // an entry just listed may be newer than the loaded graph
+    setParams((p) => { const n = new URLSearchParams(p); n.set("node", key); n.delete("view"); n.delete("days"); n.delete("kind"); n.delete("type"); return n; });
+  }, [setParams, qc]);
   // the document is requested by the entity's own uid: in the joined view a copy's node id is "<uid>@<project>" (REVIEW-0071 N6)
   const selectedEntity = selectedKey && known.has(selectedKey) ? entities.find((e) => e.id === selectedKey) ?? null : null;
 
@@ -218,6 +227,7 @@ function ProjectKnowledge({ spaceSwitch }: { spaceSwitch: React.ReactNode }) {
       setMsg(r.status === "success" ? `Sync ${r.message.toLowerCase()} — the graph was reloaded.`
         : r.status === "conflict" ? "Sync stopped on a merge conflict — resolve it in the checkout." : `Sync failed: ${r.errors.join("; ")}`);
       qc.invalidateQueries({ queryKey: [...KEY_GRAPH] });
+      qc.invalidateQueries({ queryKey: [...KEY_RECENT] });      // a pull brings new entries: the "New" list follows
     },
     onError: (e) => setMsg(e instanceof ApiError && e.status === 400 ? "Sync not started — the repository path does not exist. Set it under Settings." : "Sync not started."),
   });
@@ -293,11 +303,18 @@ function ProjectKnowledge({ spaceSwitch }: { spaceSwitch: React.ReactNode }) {
       ))}
       {msg && <p className="text-xs text-muted-foreground" data-testid="knowledge-msg">{msg}</p>}
 
-      <Tabs defaultValue="graph">
+      <Tabs value={view} onValueChange={setView}>
         <TabsList>
           <TabsTrigger value="graph">Graph</TabsTrigger>
+          <TabsTrigger value="new" data-testid="knowledge-tab-new">New</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="new" className="mt-6">
+          <RecentFeed key={scopeKey} project={scope.kind === "project" ? scope.id : null} scopeName={scopeName} joined={scope.kind === "all"}
+            ready={!scopePending && !config.isLoading} onRefresh={() => qc.invalidateQueries({ queryKey: [...KEY_GRAPH] })}
+            colours={colours} onOpen={openFromRecent} />
+        </TabsContent>
 
         <TabsContent value="graph" className="mt-6 space-y-4">
           <p className="text-xs text-muted-foreground" data-testid="knowledge-hint">{MARKER_EXPLORER}</p>

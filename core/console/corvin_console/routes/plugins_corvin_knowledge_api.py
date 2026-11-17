@@ -21,7 +21,10 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import subprocess
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -526,6 +529,437 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         timeout=_GIT_TIMEOUT_S,
         env=env, encoding="utf-8", errors="replace",
     )
+
+
+# ────────────────────────────────────────────────────────
+# WHAT'S NEW — read-only feed of recently added / changed entries
+# ────────────────────────────────────────────────────────
+# The graph rows carry no timestamps, but the knowledge base is a git repository: the first commit
+# that adds a file is when the entry appeared, every later commit is a change. This feed reads that
+# history (``git log --name-status`` over the Markdown files) and joins each touched file to its graph
+# entity. It runs git exactly as the project change view does (``core.projects.changes``): the
+# repository's own configuration cannot start a program (no gpg for a signed commit, no filter or
+# hook), replace refs and grafts are ignored, and the repository is the one that OWNS the folder (a
+# plain-mode project's ``docs/`` is part of the project root's repository). It writes nothing, takes no
+# path from the request, and is tenant-scoped like ``/graph``. The date of an entry is the COMMIT time
+# (the same clock ``--since`` filters on), normalised to UTC, so the order does not depend on the
+# author's time zone.
+
+_RECENT_SUBJECT_MAX = 140
+_RECENT_CTRL = {c: None for c in range(0, 32)}
+_RECENT_OUTPUT_CAP = 4_000_000          # bytes of ``git log`` read; older changes beyond it are left out (``truncated``)
+
+
+def _clean_subject(text: str) -> str:
+    return str(text or "").translate(_RECENT_CTRL).strip()[:_RECENT_SUBJECT_MAX]
+
+
+def _utc(iso: str) -> Optional[datetime]:
+    try:
+        d = datetime.fromisoformat(iso.strip())
+    except ValueError:
+        return None
+    return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+
+_GIT_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+
+
+def _unquote_git_path(s: str) -> str:
+    """git prints a name with a quote, a backslash, a tab, a newline or a control character C-quoted ("a\"b.md"), whatever
+    ``core.quotepath`` says; undo that so the name matches the graph's path."""
+    if len(s) < 2 or not (s.startswith('"') and s.endswith('"')):
+        return s
+    body, out, i = s[1:-1], bytearray(), 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\" or i + 1 >= len(body):
+            out += ch.encode("utf-8")
+            i += 1
+        elif body[i + 1] in _GIT_ESCAPES:
+            out.append(_GIT_ESCAPES[body[i + 1]])
+            i += 2
+        elif body[i + 1] in "01234567" and i + 3 < len(body) + 0 and body[i + 1:i + 4].isdigit():
+            out.append(int(body[i + 1:i + 4], 8) & 0xFF)
+            i += 4
+        else:
+            out += body[i:i + 2].encode("utf-8")
+            i += 2
+    return out.decode("utf-8", errors="replace")
+
+
+def _parse_git_recent(out: str) -> List[Dict[str, Any]]:
+    """Commits as git printed them (newest first), each with its ``(status, old_path, path)`` rows. A rename carries the
+    old path too, so an entry added and then renamed inside the window keeps its history."""
+    commits: List[Dict[str, Any]] = []
+    for block in out.split("\x00"):              # NUL: git refuses it in a commit message, so no subject can fake a boundary
+        block = block.strip("\n")
+        if not block:
+            continue
+        head, _, rest = block.partition("\n")
+        parts = head.split("\x1f", 2)            # hash, commit time, subject (which may itself contain \x1f)
+        if len(parts) < 3:
+            continue
+        when = _utc(parts[1])
+        if when is None:
+            continue
+        files: List[tuple[str, str, str]] = []
+        for line in rest.split("\n"):             # not splitlines(): U+0085/U+2028 are raw in a name (quotepath=false) and are not breaks
+            cols = line.split("\t")
+            if len(cols) >= 2 and cols[0]:
+                status = cols[0][0]
+                files.append((status, _unquote_git_path(cols[1]) if status in "RC" and len(cols) >= 3 else "", _unquote_git_path(cols[-1])))
+        commits.append({"when": when, "subject": _clean_subject(parts[2]), "files": files})
+    return commits
+
+
+def _entities_by_relpath(repo: Path, all_paths: Optional[set[str]] = None) -> Dict[str, Dict[str, Any]]:
+    """Graph rows keyed by their path relative to the knowledge base (last row wins, like ``load_graph_data``). *all_paths*, when
+    given, also receives the path of every row, including one without an id (the graph knows that file, so it is not "unindexed")."""
+    root = repo.resolve()
+    out: Dict[str, Dict[str, Any]] = {}
+    for row in _read_jsonl(repo / "kb" / "graph" / "entities.jsonl"):
+        raw = str(row.get("path") or "")
+        if not raw:
+            continue
+        pp = Path(raw)
+        try:
+            rel = pp.relative_to(root) if pp.is_absolute() else pp
+        except ValueError:
+            try:
+                rel = pp.resolve().relative_to(root)
+            except (ValueError, OSError):
+                continue
+        if all_paths is not None:
+            all_paths.add(os.path.normpath(rel.as_posix()))     # "sub/../x.md" is "x.md" to git and to the feed
+        if row.get("uid") or row.get("id"):
+            out[os.path.normpath(rel.as_posix())] = row
+    return out
+
+
+# The engine's id prefixes (kb_model.TYPES): a file gets an id from its frontmatter, or from its name "<PREFIX>-<n>-..." (a decision's
+# older "0466-..." / "adr_0801_..." name too).
+_ID_PREFIX = {"decision": "ADR", "concept": "CONCEPT", "idea": "IDEA", "plan": "PLAN", "review": "REVIEW", "note": "NOTE",
+              "initiative": "I", "epic": "E", "task": "T"}
+_NOT_ENTRIES = ("readme.md", "index.md", "_template.md")
+
+
+def _source_dirs(repo: Path) -> Dict[str, str]:
+    """The folders (relative to the knowledge base, with a trailing slash) its own ``sources.yaml`` keeps entities in, with their type."""
+    try:
+        from core.projects import safe_yaml  # noqa: PLC0415 - no aliases: a hostile file cannot balloon in memory
+        meta = safe_yaml.load((repo / "kb" / "_meta" / "sources.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 - an unreadable or unusual file: no folder is known, nothing is counted as missing
+        return {}
+    out: Dict[str, str] = {}
+    for s in (meta.get("sources") or []) if isinstance(meta, dict) else []:
+        if not (isinstance(s, dict) and isinstance(s.get("dirs"), dict)):
+            continue
+        if s.get("ref"):
+            continue                              # a pinned worktree (.kb-cache/...): its paths are not the working tree's; no count
+        for d, ty in s["dirs"].items():
+            # the engine reads ``root / dir``: "./", "sub" and "./decisions" are all spellings of a folder inside the repository
+            rel = os.path.normpath(os.path.join(str(s.get("root", ".")), str(d)))
+            if os.path.isabs(rel) or rel == ".." or rel.startswith(".." + os.sep) or rel == ".":
+                continue                          # outside the repository (or the repository itself): not read here
+            # the engine keeps only what lies inside the source's own root: a dirs key that climbs out of the root is not listed
+            root_rel = os.path.normpath(str(s.get("root", ".")))
+            if root_rel.startswith("..") or os.path.isabs(root_rel) or not (
+                    root_rel == "." or rel == root_rel or rel.startswith(root_rel.rstrip(os.sep) + os.sep)):
+                continue
+            out[Path(rel).as_posix().strip("/") + "/"] = str(ty)
+    return out
+
+
+def _name_gives_id(name: str, type_: str) -> bool:
+    """The engine's ``id_from_name``: "<PREFIX>-<n>..." — and for a decision the older "0466-..." / "adr_0801_..." names."""
+    pre = _ID_PREFIX.get(type_)
+    if pre and re.match(rf"^{re.escape(pre)}-\d+", name):
+        return True
+    return type_ == "decision" and bool(re.match(r"^(?:adr_)?\d{3,4}[-_]", name))
+
+
+def _frontmatter_gives_id(path: Path) -> bool:
+    """Does the file carry a frontmatter ``id``/``uid``, read the way the engine reads it (``kb_lib.parse``): BOM removed, strict UTF-8,
+    no mixed CRLF/LF, the block runs from a first ``---`` line to the next line that is ``---``. A file the engine cannot read
+    gets no frontmatter there. Frontmatter with YAML aliases (refused here, accepted by the engine) counts as having one: the safe side
+    for a notice that clears itself once the file is a graph row."""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(_FRONTMATTER_MAX_BYTES + 1)
+    except OSError:
+        return False
+    cut = len(raw) > _FRONTMATTER_MAX_BYTES     # the file goes on past what is read here
+    raw = raw[:_FRONTMATTER_MAX_BYTES]
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        if not cut or exc.start < len(raw) - 3:
+            return False                        # genuinely not UTF-8
+        text = raw[:exc.start].decode("utf-8", errors="replace")     # only the cut landed inside a character
+    if "\r\n" in text and "\n" in text.replace("\r\n", ""):
+        return False                            # mixed line endings: the engine reads no frontmatter
+    lines = text.replace("\r\n", "\n").split("\n")
+    if not lines or lines[0].strip() != "---":
+        return False
+    end = next((n for n in range(1, len(lines)) if lines[n].strip() == "---"), None)
+    if end is None:
+        return cut                              # a frontmatter longer than what is read here: unknown, counted (the safe side)
+    from core.projects import safe_yaml  # noqa: PLC0415 - no aliases: a hostile file cannot balloon in memory
+    try:
+        meta = safe_yaml.load("\n".join(lines[1:end])) or {}
+    except safe_yaml.AliasRefused:
+        return True
+    except Exception:  # noqa: BLE001 - invalid YAML: no frontmatter, as in the engine
+        return False
+    return isinstance(meta, dict) and bool(meta.get("id") or meta.get("uid"))
+
+
+_FRONTMATTER_READ_BUDGET = 400          # files whose name gives no id and that are read per request ...
+_FRONTMATTER_READ_SECONDS = 2.0         # ... and the time they may take altogether
+_FRONTMATTER_MAX_BYTES = 32 * 1024      # a frontmatter block is a few hundred bytes; pure-Python YAML on much more is slow
+
+
+def _unindexed_entries(repo: Path, commits: List[Dict[str, Any]], known: set[str]) -> tuple[set[str], bool]:
+    """Entry files the history touched that ``kb index`` WOULD list but the graph does not. The rules are the engine's
+    (``kb_model.discover``): a ``.md`` DIRECTLY inside a source folder, not readme/index/_template, not a symlink and not resolving
+    outside the repository, that gets an id. Anything else (a nested folder, an archive, a link, a file with no id) is never listed, so it
+    must never count as missing."""
+    dirs = _source_dirs(repo)
+    if not dirs:
+        return set(), False
+    try:
+        root = repo.resolve()
+    except OSError:
+        return set(), False
+    out: set[str] = set()
+    capped = False                              # the read budget or its time ran out: the count is a lower bound
+    deadline = time.monotonic() + _FRONTMATTER_READ_SECONDS
+    checked: set[str] = set()                   # a file touched by many commits is looked at once
+    budget = _FRONTMATTER_READ_BUDGET
+    for c in commits:
+        for status, _old, p in c["files"]:
+            if status == "D" or p in known or p in checked:
+                continue
+            folder = (p.rsplit("/", 1)[0] + "/") if "/" in p else None   # the file's own folder, as the engine lists it
+            if folder is None or folder not in dirs:
+                continue
+            name = p[len(folder):]
+            if "/" in name or not name.endswith(".md") or name.lower() in _NOT_ENTRIES:
+                continue
+            f = repo / p
+            try:
+                if not f.is_file() or f.is_symlink() or not f.resolve().is_relative_to(root):
+                    continue
+            except OSError:
+                continue
+            checked.add(p)
+            if _name_gives_id(name, dirs[folder]):
+                out.add(p)                      # the usual case: the name carries the id, no file is read
+            elif budget > 0 and time.monotonic() < deadline:
+                budget -= 1
+                if _frontmatter_gives_id(f):
+                    out.add(p)
+            else:
+                capped = True
+    return out, capped
+
+
+def _aggregate_recent(commits: List[Dict[str, Any]], by_path: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One item per entry. Walks newest to oldest; a rename row makes the OLD path an alias of the new one, so the older
+    commits that touched it count for the same entry."""
+    alias: Dict[str, str] = {}
+    dead: set[str] = set()                    # literal paths whose OLDER rows belong to a different file lifetime
+    seen: Dict[str, Dict[str, Any]] = {}
+    for commit in commits:
+        for status, old, rel in commit["files"]:
+            if rel in dead:
+                if status in "RC" and old:
+                    dead.add(old)                   # the file that moved here is a dead lifetime: so is its history at the old path
+                continue
+            final = alias.get(rel, rel)
+            if status in "RC" and old:
+                alias[old] = final
+                dead.discard(old)                   # older rows at the old path are this entry's history again
+            row = by_path.get(final)
+            if row is None:
+                continue
+            item = seen.get(final)
+            if item is not None and not item.get("deleted") and status == "D":
+                dead.add(rel)                       # a file was deleted at this path before the live entry took it over
+                continue
+            if item is None:
+                if status == "D":
+                    seen[final] = {"deleted": True}        # the newest touch removed it: not shown
+                    continue
+                seen[final] = item = {
+                    "id": row.get("uid") or row.get("id"), "label": row.get("id") or row.get("uid", ""),
+                    "type": row.get("type", "decision"), "title": row.get("title", ""),
+                    "status": row.get("status", "proposed"), "changed_at": commit["when"],
+                    "summary": commit["subject"], "commits": 0, "kind": "updated",
+                }
+            if item.get("deleted"):
+                continue
+            item["commits"] += 1
+            if status in "AC":
+                item["kind"] = "new"                        # added (or copied into existence) inside the window
+                item["first_seen_at"] = commit["when"]
+    items = [i for i in seen.values() if not i.get("deleted")]
+    items.sort(key=lambda i: i["changed_at"], reverse=True)   # real instants: offsets never reorder
+    for i in items:
+        i["changed_at"] = i["changed_at"].isoformat()
+        if "first_seen_at" in i:
+            i["first_seen_at"] = i["first_seen_at"].isoformat()
+    return items
+
+
+_RECENT_LOCK_WAIT_S = 15.0
+_ENSURE_TTL_S = 30.0
+_ensure_memo: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_ensure_memo_lock = threading.Lock()
+
+
+def _ensure_project_graph_once(tenant_id: str, repo: Path) -> Dict[str, Any]:
+    """``ensure_project_graph`` with ONE thing remembered: a FAILED index, for 30 seconds. Every tile, chip or period click is a new
+    request, and a graph whose index fails or times out must not run its 60-second index again for each one. A success that leaves
+    the graph current is never remembered (``ensure_project_graph`` starts with a bounded staleness check, so the list reads a
+    current graph, like /graph); a failure, or an index that left the graph stale anyway, is, and is dropped as soon as the graph is
+    current again (fixed, or built by the Graph tab).
+    The caller holds ``graph_lock(repo)``."""
+    key, now = f"{tenant_id}\0{repo}", time.monotonic()
+    with _ensure_memo_lock:
+        hit = _ensure_memo.get(key)
+        if hit is not None and now - hit[0] < _ENSURE_TTL_S and kb_projection.graph_stale(repo):
+            return hit[1]
+        _ensure_memo.pop(key, None)
+    res = kb_projection.ensure_project_graph(tenant_id, repo)
+    if res.get("state") == "error" or kb_projection.graph_stale(repo):
+        # a failure, or an index that left the graph "stale" anyway (a source file dated in the future, a missing sources.yaml):
+        # either way the next 30 seconds do not run it again
+        with _ensure_memo_lock:
+            _ensure_memo[key] = (time.monotonic(), res)
+    return res
+
+
+_RECENT_PREFIX_OK = re.compile(r"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$")
+
+
+def _true_case(owner: Path, prefix: str) -> str:
+    """*prefix* spelled as the folders are on disk (a macOS ``Docs`` that the project calls ``docs``). An exact match wins, so a
+    case-sensitive file system with both ``docs`` and ``Docs`` keeps them apart; otherwise a single case-insensitive match."""
+    cur, out = owner, []
+    for part in prefix.split("/"):
+        try:
+            names = [n for n in os.listdir(cur)]
+        except OSError:
+            return prefix
+        pick = part if part in names else next(iter([n for n in names if n.lower() == part.lower()]), part)
+        out.append(pick)
+        cur = cur / pick
+    return "/".join(out)
+
+
+def recent_payload(tenant_id: str, project: Optional[str], days: int, limit: int, kind: Optional[str] = None,
+                   etype: Optional[str] = None) -> Dict[str, Any]:
+    """Entries added or changed in the last ``days`` days, newest first. ``kind``/``etype`` narrow ``items`` and ``matching``.
+    The tiles count within the active type (``new_count``/``updated_count``/``total``) and the type chips within the active kind
+    (``type_counts``, every type of the window present, zero included), so what a click lists is what its number says.
+    State: ``ok`` · ``empty`` (nothing changed in the window) · ``missing`` (the bound knowledge base was never indexed) ·
+    ``no_commits`` (the repository has no commit yet) · ``no_history`` (no repository this feed reads owns the folder) ·
+    ``busy`` (the graph is being rebuilt right now: look again shortly) · ``error`` (+ ``error``). Blocking (file reads + one git subprocess): call it off the event loop."""
+    from core.projects import changes  # noqa: PLC0415 - the project change view's hardened git setup
+
+    config = _scoped_config(tenant_id, project)
+    repo = Path(config["repo_path"]).expanduser()
+    base = {"project": project, "window_days": days, "items": [], "total": 0, "new_count": 0, "updated_count": 0,
+            "matching": 0, "type_counts": {}, "truncated": False, "graph_stale": False, "unindexed": 0, "unindexed_capped": False, "index_error": None,
+            "generated_at": datetime.now(timezone.utc).isoformat()}
+    index_error: Optional[str] = None
+    known_paths: set[str] = set()
+    try:
+        if project is not None and project != "corvin":
+            # a project's graph is built on demand and rewritten in place by ``kb index``: the same lock and the same
+            # staleness check as /graph, so the list never reads a half-written or outdated graph
+            lock = kb_projection.graph_lock(repo)
+            if not lock.acquire(timeout=_RECENT_LOCK_WAIT_S):
+                return {**base, "state": "busy"}
+            try:
+                res = _ensure_project_graph_once(tenant_id, repo)
+                has_graph = (repo / "kb" / "graph" / "entities.jsonl").is_file()
+                if res["state"] == "error":
+                    if not has_graph:
+                        return {**base, "state": "error", "error": str(res.get("error") or "the graph could not be built")}
+                    index_error = str(res.get("error") or "the graph could not be re-indexed")   # an older graph still serves the list
+                by_path = _entities_by_relpath(repo, known_paths) if has_graph else None
+            finally:
+                lock.release()
+        else:
+            by_path = _entities_by_relpath(repo, known_paths) if (repo / "kb" / "graph" / "entities.jsonl").is_file() else None
+    except GraphTooLarge as exc:
+        return {**base, "state": "error", "error": str(exc)}
+    if by_path is None:
+        return {**base, "state": "missing"}
+    base["index_error"] = index_error
+    owner = changes._owning_repo(repo)            # noqa: SLF001 - the repository that owns this folder, never an enclosing one
+    if owner is None:
+        return {**base, "state": "no_history"}
+    try:
+        prefix = repo.resolve().relative_to(owner.resolve()).as_posix()
+    except ValueError:
+        return {**base, "state": "no_history"}
+    prefix = "" if prefix == "." else _true_case(owner, prefix)
+    if prefix and not _RECENT_PREFIX_OK.match(prefix):
+        return {**base, "state": "no_history"}     # a folder name git would read as a pattern: not read here
+    try:
+        if not changes._has_head(owner):          # noqa: SLF001 - a repository that was just initialised
+            return {**base, "state": "no_commits"}
+        # only Markdown reaches the output (and its 4 MB cap): images and generated files under docs/ never do
+        spec = f":(glob){prefix}/**/*.md" if prefix else "*.md"
+        out = changes._git_capped(                # noqa: SLF001
+            owner, "log", f"--since={int(days)}.days.ago", "--no-merges", "-M", "--name-status",
+            "--format=%x00%H%x1f%cI%x1f%s", "--", spec, cap=_RECENT_OUTPUT_CAP, timeout=_GIT_TIMEOUT_S)
+    except (changes.ChangesError, subprocess.SubprocessError, OSError) as exc:
+        return {**base, "state": "error", "error": f"git could not be read: {type(exc).__name__}"}
+    truncated = len(out.encode("utf-8", "ignore")) >= _RECENT_OUTPUT_CAP
+    commits = _parse_git_recent(out)
+    if prefix:                                    # the knowledge base is a folder inside the owning repository: paths relative to it
+        keep = len(prefix) + 1
+        head = prefix + "/"
+        for c in commits:
+            c["files"] = [(s, o[keep:] if o.startswith(head) else "", p[keep:])
+                          for s, o, p in c["files"] if p.startswith(head) and p.endswith(".md")]
+    # The graph lags the history when the history names entry files the graph does not know (a pull, a commit nobody indexed yet): those
+    # entries are absent below, so say so. Counted from the data, not from clocks (a pulled commit keeps the other host's commit
+    # time; a commit made after an index that already saw the edit changes nothing). Only files in the knowledge base's own source
+    # folders that look like entries and exist now count: a README or an edit of an entry the graph knows does not.
+    missing, capped = _unindexed_entries(repo, commits, known_paths)
+    base["graph_stale"], base["unindexed"], base["unindexed_capped"] = bool(missing) or capped, len(missing), capped
+    items = _aggregate_recent(commits, by_path)
+    by_type = [i for i in items if not etype or i["type"] == etype]       # what the kind tiles count within
+    by_kind = [i for i in items if not kind or i["kind"] == kind]         # what the type chips count within
+    type_counts: Dict[str, int] = {i["type"]: 0 for i in items}
+    for i in by_kind:
+        type_counts[i["type"]] += 1
+    new_count = sum(1 for i in by_type if i["kind"] == "new")
+    narrowed = [i for i in by_type if not kind or i["kind"] == kind]
+    return {**base, "state": "ok" if items else "empty", "items": narrowed[:limit], "total": len(by_type),
+            "new_count": new_count, "updated_count": len(by_type) - new_count, "matching": len(narrowed),
+            "type_counts": type_counts, "truncated": truncated}
+
+
+@router.get("/recent")
+async def get_recent(session: Any = Depends(require_session),
+                     project: Optional[str] = Query(default=None, max_length=28),
+                     days: int = Query(default=14, ge=1, le=90),
+                     limit: int = Query(default=80, ge=1, le=500),
+                     kind: Optional[str] = Query(default=None, pattern="^(new|updated)$"),
+                     etype: Optional[str] = Query(default=None, alias="type", max_length=24, pattern="^[a-z_]+$")) -> Dict[str, Any]:
+    """Read-only. Same scoping as ``/graph``: the knowledge base is the tenant's bound one or a registered project's;
+    the path never comes from the request."""
+    tenant_id = getattr(session, "tenant_id", "_default")
+    return await asyncio.to_thread(recent_payload, tenant_id, project, days, limit, kind, etype)
 
 
 @contextlib.contextmanager
