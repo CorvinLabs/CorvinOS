@@ -1074,6 +1074,32 @@ def _write_json_safe(path: Path, data: dict, mode: int = 0o600) -> None:
     os.replace(tmp, path)
 
 
+def _publish_run_index(
+    tenant_id: str, run_id: str, workflow_id: str, status: str,
+    started_at: float, run_dir: Path, *, bridge: str, **extra: Any,
+) -> None:
+    """Mirror a thin manifest into the tenant-global run index.
+
+    The console's Agentic Compute list (``acs_engine_adapter.list_acs_runs``)
+    scans ``<tenant>/global/acs/runs/<run_id>/manifest.json`` and follows its
+    ``run_dir`` pointer. ``ACSRuntime`` itself writes only into the SESSION-scoped
+    ``run_dir``, and the callers that build the runtime directly (bridge adapter,
+    console chat) never reached ``run_acs_workflow``'s index write — so a bridge
+    run was invisible for good, and a console-chat run until it had finished.
+    Publishing here covers every surface, and at run START, so a live run shows.
+    Best-effort: an index failure never costs the run.
+    """
+    try:
+        idx = _corvin_home() / "tenants" / tenant_id / "global" / "acs" / "runs" / run_id
+        _write_json_safe(idx / "manifest.json", {
+            "run_id": run_id, "workflow_id": workflow_id, "status": status,
+            "engine": "acs", "started_at": started_at, "run_dir": str(run_dir),
+            "source": f"{bridge}-delegation", **extra,
+        })
+    except Exception:  # noqa: BLE001
+        log.warning("acs: global run-index write failed for %s", run_id, exc_info=True)
+
+
 def _truncate(text: str, cap: int) -> str:
     if len(text) <= cap:
         return text
@@ -4109,6 +4135,13 @@ class ACSRuntime:
             },
         )
 
+        _run_started_wall = time.time()
+        if not dry_run:
+            _publish_run_index(
+                self._tenant_id, rid, workflow_id, "running", _run_started_wall,
+                run_dir, bridge=self._bridge, max_wall_time=budget.max_wall_time,
+            )
+
         _write_audit(self._tenant_id, "acs.run_start", {
             "run_id": rid, "workflow_id": workflow_id,
             "max_loops": budget.max_loops, "max_depth": budget.max_depth,
@@ -4188,6 +4221,11 @@ class ACSRuntime:
             # manager span (status=error) before the cancellation propagates so it
             # is never orphaned.
             _end_mgr_span("error")
+            if not dry_run:
+                _publish_run_index(
+                    self._tenant_id, rid, workflow_id, "cancelled", _run_started_wall,
+                    run_dir, bridge=self._bridge, completed_at=time.time(),
+                )
             raise
         except Exception as exc:  # noqa: BLE001
             log.exception("acs: unexpected error in manager loop")
@@ -4230,6 +4268,14 @@ class ACSRuntime:
                 "error": result.error,
             },
         )
+        if not dry_run:
+            _publish_run_index(
+                self._tenant_id, rid, workflow_id, result.status, _run_started_wall,
+                run_dir, bridge=self._bridge, completed_at=time.time(),
+                duration_s=round(result.elapsed_s, 3), iterations=result.iterations,
+                workers_spawned=result.workers_spawned,
+                budget_breach=result.budget_breach,
+            )
 
         _end_mgr_span("ok" if result.status == "success" else "error")
         return result

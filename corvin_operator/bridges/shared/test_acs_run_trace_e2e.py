@@ -271,3 +271,41 @@ def test_a_critique_score_outside_zero_to_one_is_no_signal_not_a_perfect_score(s
              _gc.GateResult("gate_3_llm_critique", True, 0.5, "", {"critique": {"score": score}})]
     loss = _gc._compute_workflow_loss(gates, {"confidence": 0.9}, "x" * 50, None, _gc.LossProfile(), 1, None)
     assert loss.L_quality == pytest.approx(expected)
+
+
+def test_a_bridge_run_is_listed_by_the_console_while_it_runs_and_after(tmp_path):
+    """Agentic Compute lists ``global/acs/runs/*``; a bridge run used to be written only into its
+    session dir, so a Discord run was never listed (and a console-chat run only once finished).
+    The reader is the console's own ``list_acs_runs``; the observation happens INSIDE the run."""
+    try:
+        from . import acs_engine_adapter as _ad
+    except ImportError:
+        import acs_engine_adapter as _ad  # type: ignore[no-redef]
+
+    manager_answers = iter([json.dumps(DELEGATE), json.dumps(COMPLETE)])
+    seen_while_running: list[list[dict]] = []
+
+    def fake_worker(*a, **k):
+        seen_while_running.append(_ad.list_acs_runs(tenant_id="_default"))
+        return WORKER_TEXT, 30, None
+
+    with patch.object(_rt, "_call_manager_sync", side_effect=lambda *a, **k: (next(manager_answers), 50)), \
+         patch.object(_rt, "_call_worker_sync", side_effect=fake_worker), \
+         patch.object(_gc, "_run_critique_sync", return_value=None), \
+         patch.object(_rt, "_assert_engine_licensed", return_value=None), \
+         patch.object(_rt, "_write_audit", side_effect=lambda *a, **k: None), \
+         patch.object(_rt, "_corvin_home", return_value=tmp_path), \
+         patch.object(_ad, "_corvin_home", return_value=tmp_path):
+        runtime = _rt.ACSRuntime(tenant_id="_default", bridge="discord", chat="1540")
+        result = asyncio.run(runtime.run(_spec(), run_id="acs-discord-live"))
+        after = _ad.list_acs_runs(tenant_id="_default")
+        detail = _ad.get_acs_run("acs-discord-live", tenant_id="_default")
+
+    live = [r for r in seen_while_running[0] if r["run_id"] == "acs-discord-live"]
+    assert live and live[0]["status"] == "running"
+    assert live[0]["source"] == "discord-delegation"
+    final = [r for r in after if r["run_id"] == "acs-discord-live"]
+    assert final and final[0]["status"] == result.status == "success"
+    assert final[0]["run_dir"] == str(result.run_dir)
+    # the detail view follows the pointer into the session-scoped data
+    assert detail is not None and detail["result"]["status"] == "success"
