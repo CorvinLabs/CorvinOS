@@ -167,6 +167,16 @@ most 5 revisions per idea; 12 decoder calls per owner per day. One step per idea
 changed meanwhile (an edit in another tab, the other process) is discarded with its drafts instead of overwriting it. Measurements: `tests/personal_kb/decoder_eval/`
 (`results.json` replay corpus, `live_results.json` real engine, `bench_results.json` find-first cache).
 
+**Decoder v2 (design, NOT shipped).** ADR-2329 (proposed) and CONCEPT-0135 describe a self-consistent, learning decoder; nothing
+in `core/` implements it yet. Measured gaps of the shipped decoder, pinned by a tripwire test
+(`tests/personal_kb/test_decoder_v2_eval.py::test_the_shipped_decoder_still_has_the_gaps_the_design_is_built_on`): the plan's
+`depends_on` is not stored, one cancelled task keeps an idea open forever, a forgotten task stays listed as a child, forgetting an
+idea leaves its derived children behind, and there is no sweep. The executable specification and every number are in
+`tests/personal_kb/decoder_v2/` (`python -m tests.personal_kb.decoder_v2.run_eval`; `critic_probe_twins.py` and
+`real_kb_crosscheck.py` are manual tools). When one of the gaps above is fixed, that test fails: update this paragraph and
+ADR-2329 in the same commit. The general method is the skill `code.decoder_unfold_in_checked_layers`; the protocol with
+the withdrawn claims is NOTE-0024.
+
 ## Erasure (`erasure.py`)
 
 - Owner: Settings → Erase my space (the default space needs no passphrase; a passphrase space asks for it), or
@@ -209,7 +219,7 @@ It does not see reads (its hook matcher omits Read, Grep and Glob); it is an acc
 
 | Suite | What |
 |---|---|
-| `tests/personal_kb/` | crypto, model, owner, store, two-process writes, rekey, capture, policy, brake, render, decoder, bridge, pairing, erasure, path gate, daemon contracts, decoder LDD/LLD measurements |
+| `tests/personal_kb/` | crypto, model, owner, store, two-process writes, rekey, capture, policy, brake, render, decoder, bridge, pairing, erasure, path gate, daemon contracts, decoder LDD/LLD measurements, the decoder v2 design evaluation (`test_decoder_v2_eval.py`) |
 | `core/console/tests/test_personal_kb_e2e.py` | the routes over the real console app with real sessions and CSRF |
 | `corvin_operator/bridges/shared/test_personal_kb_adapter.py` | `/personal`, the prompt block, the ledger, and capture through `process_one` |
 | `tests/security/test_erasure_coverage_guard.py` | the store in `COVERED_DIRS`, planted through the real writer |

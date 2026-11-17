@@ -1,0 +1,33 @@
+{
+ "dangling_links": {
+  "both": 67,
+  "kb_check": 67,
+  "mine": 68,
+  "only_mine": [
+   [
+    "ADR-0861",
+    "depends_on",
+    "ADR-001"
+   ]
+  ]
+ },
+ "duplicate_ids": {
+  "both": 10,
+  "kb_check": 10,
+  "mine": 10
+ },
+ "entities": 1928,
+ "near_duplicates_ideas_and_concepts": {
+  "both": 4,
+  "capped": false,
+  "kb_check": 5,
+  "mine": 4,
+  "only_kb_check": [
+   [
+    "CONCEPT-0022",
+    "CONCEPT-0023"
+   ]
+  ]
+ },
+ "relations": 7255
+}

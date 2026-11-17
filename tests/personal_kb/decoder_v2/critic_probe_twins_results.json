@@ -1,0 +1,1597 @@
+{
+ "model": "claude-sonnet-5-5",
+ "critic": "core/personal_kb/decoder.py adversarial prompt, one real call per run",
+ "judge": "blind Opus judge, shuffled runs, no variant label",
+ "note": "synthetic plans only; 8 twin pairs x 2 repetitions x (sound, flawed); the critic answered in German",
+ "pairs": [
+  {
+   "title": "Balcony herb garden",
+   "ctx": {
+    "goal": "Grow basil, mint and chives on the balcony",
+    "boundaries": [
+     "Total spend under 60 euros",
+     "Pots must fit the rail"
+    ],
+    "success": "Three herbs alive after two weeks"
+   },
+   "sound": {
+    "tasks": [
+     {
+      "title": "Measure the rail and note the sun hours",
+      "dod": "Sizes and hours written down",
+      "depends_on": []
+     },
+     {
+      "title": "Choose basil, mint and chives and price pots, soil and seedlings; total under 60 euros",
+      "dod": "Shopping list with a total below 60 euros",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Buy the listed items",
+      "dod": "Items at home, receipts total under 60 euros",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Plant the three herbs in rail-fit pots",
+      "dod": "Three herbs planted",
+      "depends_on": [
+       2
+      ]
+     },
+     {
+      "title": "Water daily and check after two weeks",
+      "dod": "All three alive on day 14",
+      "depends_on": [
+       3
+      ]
+     }
+    ]
+   },
+   "flawed": {
+    "tasks": [
+     {
+      "title": "Measure the rail and note the sun hours",
+      "dod": "Sizes and hours written down",
+      "depends_on": []
+     },
+     {
+      "title": "Choose basil, mint and chives and buy a 250 euro greenhouse shelf with pots, soil and seedlings",
+      "dod": "Items at home",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Plant the three herbs in rail-fit pots",
+      "dod": "Three herbs planted",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Water daily and check after two weeks",
+      "dod": "All three alive on day 14",
+      "depends_on": [
+       2
+      ]
+     }
+    ]
+   },
+   "flaw": "Cost conflict: the plan buys a 250 euro greenhouse shelf although the boundary says total spend under 60 euros."
+  },
+  {
+   "title": "Spanish for the trip",
+   "ctx": {
+    "goal": "Order food and ask directions in Spanish",
+    "boundaries": [
+     "At most 4 hours of study a week"
+    ],
+    "success": "A mock restaurant order and a mock directions question without notes by the trip date"
+   },
+   "sound": {
+    "tasks": [
+     {
+      "title": "Pick one course and book a weekly one-hour tutor slot",
+      "dod": "Course chosen, 4 slots booked",
+      "depends_on": []
+     },
+     {
+      "title": "Learn 100 restaurant and direction phrases",
+      "dod": "100 phrases recalled at 80 percent in a quiz",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Do two practice talks with the tutor",
+      "dod": "Two talks done",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Do a mock restaurant order out loud",
+      "dod": "Order completed without notes",
+      "depends_on": [
+       2
+      ]
+     },
+     {
+      "title": "Do a mock directions question out loud",
+      "dod": "Question asked and answer understood without notes",
+      "depends_on": [
+       2
+      ]
+     }
+    ]
+   },
+   "flawed": {
+    "tasks": [
+     {
+      "title": "Pick one course and book a weekly one-hour tutor slot",
+      "dod": "Course chosen, 4 slots booked",
+      "depends_on": []
+     },
+     {
+      "title": "Learn 100 restaurant and direction phrases",
+      "dod": "100 phrases recalled at 80 percent in a quiz",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Do two practice talks with the tutor",
+      "dod": "Two talks done",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Do a mock restaurant order out loud",
+      "dod": "Order completed without notes",
+      "depends_on": [
+       2
+      ]
+     }
+    ]
+   },
+   "flaw": "Missing coverage: the goal and the success criterion include asking directions, but no task practises or tests asking directions."
+  },
+  {
+   "title": "Family photo backup",
+   "ctx": {
+    "goal": "Two verified copies of all family photos, one stored off-site",
+    "boundaries": [
+     "Budget 120 euros",
+     "No cloud services"
+    ],
+    "success": "Both copies verified; one copy is at a relative's home"
+   },
+   "sound": {
+    "tasks": [
+     {
+      "title": "Count the photos and total size",
+      "dod": "Number and GB written down",
+      "depends_on": []
+     },
+     {
+      "title": "Buy two external drives large enough, total under 120 euros",
+      "dod": "Two drives received, receipt under 120 euros",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Copy the library to both drives and verify checksums",
+      "dod": "Checksum report with zero errors for both",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Hand one drive to a relative and note where it is",
+      "dod": "Drive delivered, location noted",
+      "depends_on": [
+       2
+      ]
+     }
+    ]
+   },
+   "flawed": {
+    "tasks": [
+     {
+      "title": "Count the photos and total size",
+      "dod": "Number and GB written down",
+      "depends_on": []
+     },
+     {
+      "title": "Buy one external drive large enough, under 120 euros",
+      "dod": "Drive received",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Copy the library to the drive and verify checksums",
+      "dod": "Checksum report with zero errors",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Hand the drive to a relative and note where it is",
+      "dod": "Drive delivered",
+      "depends_on": [
+       2
+      ]
+     }
+    ]
+   },
+   "flaw": "Missing copy: the goal needs two verified copies but the plan buys one drive and makes one copy."
+  },
+  {
+   "title": "Monthly reading club",
+   "ctx": {
+    "goal": "A reading club that meets once a month",
+    "boundaries": [
+     "At most 8 people",
+     "Meetings at home"
+    ],
+    "success": "Three meetings held in three months"
+   },
+   "sound": {
+    "tasks": [
+     {
+      "title": "Ask five friends and get at least three yes",
+      "dod": "Three or more confirmed",
+      "depends_on": []
+     },
+     {
+      "title": "Pick the first book by vote",
+      "dod": "Book chosen",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Fix the date and place of meeting one",
+      "dod": "Date in calendars, home address agreed",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Hold meetings one, two and three, one per month",
+      "dod": "Three meetings held with at least three people each",
+      "depends_on": [
+       2
+      ]
+     }
+    ]
+   },
+   "flawed": {
+    "tasks": [
+     {
+      "title": "Ask five friends and get at least three yes",
+      "dod": "Three or more confirmed",
+      "depends_on": []
+     },
+     {
+      "title": "Pick the first book by vote",
+      "dod": "Book chosen",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Fix the date and place of meeting one",
+      "dod": "Date in calendars, home address agreed",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Hold the first meeting",
+      "dod": "First meeting held with at least three people",
+      "depends_on": [
+       2
+      ]
+     }
+    ]
+   },
+   "flaw": "Missing coverage: the success criterion needs three meetings in three months, but the plan stops after the first meeting."
+  },
+  {
+   "title": "Shared flat shopping list",
+   "ctx": {
+    "goal": "One shopping list both flatmates use",
+    "boundaries": [
+     "Free app only",
+     "No new accounts"
+    ],
+    "success": "Both add and tick items for two weeks"
+   },
+   "sound": {
+    "tasks": [
+     {
+      "title": "Pick a list app both phones already have",
+      "dod": "App named, both confirm it is installed",
+      "depends_on": []
+     },
+     {
+      "title": "Create the list with five shared categories",
+      "dod": "List with five categories exists",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Both add at least three items",
+      "dod": "Six or more items from two people",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Both tick items off for two weeks",
+      "dod": "Tick history from both on day 14",
+      "depends_on": [
+       2
+      ]
+     }
+    ]
+   },
+   "flawed": {
+    "tasks": [
+     {
+      "title": "Pick a list app both phones already have",
+      "dod": "App named, both confirm it is installed",
+      "depends_on": []
+     },
+     {
+      "title": "Create the list with five shared categories",
+      "dod": "List with five categories exists",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Make the list work well",
+      "dod": "It works well",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Both tick items off for two weeks",
+      "dod": "Tick history from both on day 14",
+      "depends_on": [
+       2
+      ]
+     }
+    ]
+   },
+   "flaw": "Vague definition of done: the task 'Make the list work well' has the definition of done 'It works well', which cannot be checked."
+  },
+  {
+   "title": "Marathon training",
+   "ctx": {
+    "goal": "Finish a marathon on 12 October",
+    "boundaries": [
+     "Four runs a week at most",
+     "No run longer than 32 km before the race"
+    ],
+    "success": "Race finished on 12 October"
+   },
+   "sound": {
+    "tasks": [
+     {
+      "title": "Run a 10 km test and set the pace plan",
+      "dod": "Test done, pace plan written",
+      "depends_on": []
+     },
+     {
+      "title": "Build the weekly base to 40 km over six weeks",
+      "dod": "Six weeks logged at 40 km",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Long runs rising to 32 km over ten weeks",
+      "dod": "A 32 km run logged by 28 September",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Taper for two weeks",
+      "dod": "Two taper weeks logged",
+      "depends_on": [
+       2
+      ]
+     },
+     {
+      "title": "Run the marathon on 12 October",
+      "dod": "Finish recorded",
+      "depends_on": [
+       3
+      ]
+     }
+    ]
+   },
+   "flawed": {
+    "tasks": [
+     {
+      "title": "Run a 10 km test and set the pace plan",
+      "dod": "Test done, pace plan written",
+      "depends_on": []
+     },
+     {
+      "title": "Build the weekly base to 40 km over six weeks",
+      "dod": "Six weeks logged at 40 km",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Long runs rising to 38 km over ten weeks",
+      "dod": "A 38 km run logged by 28 September",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Taper for two weeks",
+      "dod": "Two taper weeks logged",
+      "depends_on": [
+       2
+      ]
+     },
+     {
+      "title": "Run the marathon on 12 October",
+      "dod": "Finish recorded",
+      "depends_on": [
+       3
+      ]
+     }
+    ]
+   },
+   "flaw": "Boundary violation: the plan has a 38 km long run although the boundary allows at most 32 km before the race."
+  },
+  {
+   "title": "Sourdough starter",
+   "ctx": {
+    "goal": "A starter that raises bread on day ten",
+    "boundaries": [
+     "Flour and water only"
+    ],
+    "success": "A loaf risen to double its volume on day ten"
+   },
+   "sound": {
+    "tasks": [
+     {
+      "title": "Mix flour and water in a jar",
+      "dod": "Jar started on day one",
+      "depends_on": []
+     },
+     {
+      "title": "Feed the starter every day for nine days",
+      "dod": "Nine feedings logged",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Bake a loaf on day ten",
+      "dod": "Loaf risen to double volume",
+      "depends_on": [
+       1
+      ]
+     }
+    ]
+   },
+   "flawed": {
+    "tasks": [
+     {
+      "title": "Feed the starter every day for nine days",
+      "dod": "Nine feedings logged",
+      "depends_on": []
+     },
+     {
+      "title": "Mix flour and water in a jar",
+      "dod": "Jar started on day one",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Bake a loaf on day ten",
+      "dod": "Loaf risen to double volume",
+      "depends_on": [
+       1
+      ]
+     }
+    ]
+   },
+   "flaw": "Wrong order: the task that feeds the starter for nine days depends on nothing and comes before the task that creates the starter."
+  },
+  {
+   "title": "Garage cleanup",
+   "ctx": {
+    "goal": "A garage where the car fits and tools have a place",
+    "boundaries": [
+     "Two weekends",
+     "Nothing thrown away without a check"
+    ],
+    "success": "The car parks inside and tools are on the shelf"
+   },
+   "sound": {
+    "tasks": [
+     {
+      "title": "Sort everything into keep, give away and throw away",
+      "dod": "Three piles, throw-away pile checked",
+      "depends_on": []
+     },
+     {
+      "title": "Take away the give-away and throw-away piles",
+      "dod": "Piles gone from the garage",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Install shelves for the tools",
+      "dod": "Tools on the shelves",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Park the car inside",
+      "dod": "Car parked inside",
+      "depends_on": [
+       2
+      ]
+     }
+    ]
+   },
+   "flawed": {
+    "tasks": [
+     {
+      "title": "Sort everything into keep, give away and throw away",
+      "dod": "Three piles",
+      "depends_on": []
+     },
+     {
+      "title": "Take away the give-away and throw-away piles",
+      "dod": "Piles gone from the garage",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Throw away the throw-away pile today without checking",
+      "dod": "Pile gone",
+      "depends_on": [
+       0
+      ]
+     },
+     {
+      "title": "Install shelves for the tools",
+      "dod": "Tools on the shelves",
+      "depends_on": [
+       1
+      ]
+     },
+     {
+      "title": "Park the car inside",
+      "dod": "Car parked inside",
+      "depends_on": [
+       3
+      ]
+     }
+    ]
+   },
+   "flaw": "Boundary violation: a task throws things away without checking although the boundary says nothing is thrown away without a check."
+  }
+ ],
+ "runs": [
+  {
+   "case": 1,
+   "kind": "sound",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Die Aufgaben decken die Erfolgskriterien nur unzureichend ab. 100 Vokabeln und zwei Übungsgespräche bereiten nicht auf freies Sprechen ohne Notizen vor. Es gibt keine eigenständige Hör- und Sprechpraxis, etwa Dialoge einüben oder Rollenspiele. Die Mock-Aufgaben sind zudem unbewertet: 'Order completed without notes' hat kein Kriterium dafür, was als bestanden gilt, und es gibt keinen Prüfer. Wer beurteilt, ob die Frage gestellt und die Antwort verstanden wurde?"
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Das Reisedatum fehlt im Plan. Ohne Datum lässt sich nicht prüfen, ob 4 gebuchte Wochen-Slots (also etwa 4 Wochen) reichen oder ob es mehr Zeit gibt. 'By the trip date' ist damit nicht überprüfbar. Auch die Grenze von maximal 4 Stunden pro Woche wird nicht eingeplant: Es gibt keine Zeitbudgets pro Aufgabe, und es ist unklar, ob 100 Phrasen plus Tutor-Stunden plus Mocks in diesen Rahmen passen."
+    },
+    {
+     "index": 3,
+     "category": "risk",
+     "text": "Die Abhängigkeitskette ist zu starr und riskant. Das Lernen aller 100 Phrasen (mit 80-Prozent-Quiz) blockiert alle Sprechübungen, obwohl die Tutor-Gespräche schon früher helfen würden. Fällt das Quiz durch, gibt es keinen Rückfallpfad. Außerdem ist die Kursauswahl und Tutor-Buchung eine Einzelstelle: Die Aufgabe 'Course chosen, 4 slots booked' sagt nichts über Verfügbarkeit oder Kosten und blockiert alles Weitere."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "nitpick",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 3,
+   "kind": "sound",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Die Aufgaben 2 und 3 (Buch wählen, Termin und Ort für Treffen eins festlegen) decken nur das erste Treffen ab. Für Treffen zwei und drei gibt es weder Terminplanung noch Buchwahl. Alles steckt in Task 4 („Treffen eins, zwei und drei abhalten“), das dadurch ein Sammelposten mit drei Monaten Laufzeit ist. Genau dort scheitern Clubs typischerweise (Termine verfallen, Folgebuch fehlt). Das Erfolgskriterium „drei Treffen in drei Monaten“ hängt also an einer Aufgabe ohne Zwischenschritte."
+    },
+    {
+     "index": 2,
+     "category": "contradiction",
+     "text": "Die Rahmenbedingung „Treffen zu Hause“ ist nur teilweise abgesichert: Task 3 klärt die Adresse für Treffen eins, aber nicht, wer bei Treffen zwei und drei gastgibt oder ob die Wohnung dafür taugt. Außerdem ist die DoD von Task 4 („mindestens drei Personen je Treffen“) mit der Kernzahl aus Task 1 („mindestens drei Zusagen“) knapp bemessen: Sagt bei einem Treffen eine Person ab, ist die DoD schon verfehlt, und die Gastgeberin oder der Gastgeber zählt unklar mit oder nicht."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "Das Erfolgskriterium „in drei Monaten“ hat keinen Startpunkt und kein Enddatum, und keine Aufgabe legt eines fest. Ob die Zeit ab Einladung, ab erstem Treffen oder ab heute (2026-11-17) läuft, ist offen. Auch dass „Buch gewählt“ als DoD nicht prüft, ob es bis zum Termin gelesen werden kann, ändert das Ergebnis: Ein knapper Abstand zwischen Buchwahl und Treffen verzögert Treffen eins und damit die gesamte Dreimonatsfrist."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "nitpick",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 6,
+   "kind": "sound",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Das Starter-Ziel (Brot am Tag zehn) hat keine überprüfbare Reifekriterien-Prüfung vor dem Backen. Es fehlt ein Task, der die Triebkraft testet (z. B. Starter verdoppelt sich nach der Fütterung innerhalb weniger Stunden, Blasen, Schwimmtest). Ohne diese Prüfung kann ein noch nicht aktiver Starter einen Fehlschlag am Tag zehn verursachen, und die Ursache bleibt unklar. Die DoD „Nine feedings logged“ belegt nur Aktivität, nicht Funktionsfähigkeit."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Der Task „Bake a loaf“ ignoriert die Grenze „Flour and water only“: Ein Brot braucht mindestens Salz, und die Mengen- und Mehlangaben (Roggen/Weizen, Verhältnis, Wassertemperatur) fehlen. Es ist unklar, ob Salz im Brot erlaubt ist. Außerdem fehlen Teigzubereitung, Gehzeit und Backen als Schritte. Der Task bündelt so viel, dass „Loaf risen to double volume“ nicht zuverlässig erreichbar oder prüfbar ist."
+    },
+    {
+     "index": 3,
+     "category": "risk",
+     "text": "Der Zeitplan ist starr und hat keinen Puffer. Nach neun Fütterungen (Tag 1 bis 9) ist Tag zehn fix. Ein Starter braucht je nach Temperatur oft 7 bis 14 Tage. Es gibt keinen Fallback (verlängern, Temperatur anpassen, Verwerfen und Entnahme), falls der Starter an Tag neun nicht aktiv ist. Zudem gibt es keine Rahmenbedingungen wie Standort, Temperatur oder Mehlsorte. Das Erfolgskriterium kann so an Faktoren scheitern, die der Plan nicht steuert."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 0,
+   "kind": "flawed",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "contradiction",
+     "text": "Task 2 bündelt den Kauf eines 250-Euro-Gewächshausregals mit dem übrigen Einkauf. Das verletzt die Grenze 'Gesamtausgaben unter 60 Euro' direkt. Ein Regal ist außerdem für ein Balkongeländer unnötig und passt womöglich nicht an die Reling. Die Aufgabe müsste auf Töpfe, Erde und Setzlinge innerhalb eines Budgets von unter 60 Euro begrenzt werden."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Die Definition of Done von Task 2 ('Items at home') ist nicht prüfbar. Sie enthält weder das Budget (Belege unter 60 Euro) noch die Passung der Töpfe am Geländer (Maße aus Task 1). So kann die Aufgabe als erledigt gelten, obwohl beide Grenzen verletzt sind."
+    },
+    {
+     "index": 3,
+     "category": "risk",
+     "text": "Minze wuchert stark und verdrängt Basilikum und Schnittlauch, wenn sie sich einen Topf teilen. Der Plan enthält keine Vorgabe, getrennte Töpfe zu nehmen. Dass 'alle drei am Tag 14 leben', ist daher gefährdet. Außerdem fehlt die Abhängigkeit von den Sonnenstunden aus Task 1: Es gibt keinen Schritt, der prüft, ob die Kräuter an dem gemessenen Standort überhaupt gedeihen, etwa Basilikum mit seinem Lichtbedarf."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "real_defect",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 7,
+   "kind": "sound",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Die Aufgabenkette enthält keinen Schritt, der die Erfolgsbedingung \"Auto passt hinein\" absichert: Es wird nicht geprüft oder eingeplant, ob nach dem Aussortieren und dem Regalbau überhaupt genug Platz für das Auto bleibt (Maße von Auto, Türöffnung, Regalposition). Die Regale sind erst nach dem Aussortieren geplant, und die \"keep\"-Menge könnte trotzdem zu groß sein. Es gibt keinen Plan für diesen Fall, etwa Regale an die Wand oder an die Decke zu bauen oder die \"keep\"-Menge zu verkleinern. Das Ergebnis ist ein Plan, der formal abgehakt werden kann und das Ziel trotzdem verfehlt."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Die Grenze \"Zwei Wochenenden\" wird durch nichts untermauert. Es gibt keine Zeitschätzung und keine Zuordnung der Aufgaben zu den Wochenenden. Beim Entsorgen fehlt jede Logistik, etwa Sperrmüll-Termin, Wertstoffhof-Öffnungszeiten, Transportmittel oder Abholung der Spenden. Der Schritt \"Piles gone\" hängt von Dingen ab, die der Eigentümer nicht kontrolliert. Auch Material und Werkzeug für die Regale (Beschaffung, Montage an der Wand, Tragfähigkeit) sind nicht eingeplant. Der Plan kann an der Zeitgrenze scheitern, ohne dass es vorher auffällt."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "Die Definition of Done für \"Install shelves for the tools\" (\"Tools on the shelves\") vermischt zwei Aufgaben: Regale bauen und Werkzeug einräumen. Sie sagt nichts darüber, dass die Regale stabil und sicher montiert sind. Die Aufgabe \"Park the car inside\" ist ebenfalls kein Arbeitsschritt, sondern nur der Erfolgstest, und sie dupliziert das Erfolgskriterium. Außerdem wird nicht geklärt, wohin die \"keep\"-Gegenstände, die keine Werkzeuge sind, während der Arbeit und danach kommen. Dafür gibt es keine Aufgabe."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "nitpick",
+     "real_defect",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 2,
+   "kind": "flawed",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Das Ziel verlangt zwei verifizierte Kopien, der Plan erzeugt aber nur eine: Die Festplatte ist die einzige neue Kopie, die zweite ist implizit das Original-Archiv. Dieses ist nicht Teil des Plans und wird nicht verifiziert, und es ist unklar, ob es 'alle' Fotos enthält (verstreut auf Handys, Laptops, Karten). Damit ist 'zwei Kopien' ohne eine Aufgabe 'Quellen einsammeln/zusammenführen' und ohne eine Definition, welche Kopie die zweite ist, nicht belegt. Fällt die Platte aus oder geht sie verloren, gibt es dann nur eine Kopie."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Die Off-site-Kopie wird nie nach der Übergabe verifiziert. Aufgabe 3 prüft die Prüfsummen vor dem Transport, Aufgabe 4 hat nur 'Drive delivered' als Erledigungskriterium. Das Erfolgskriterium verlangt aber 'both copies verified; one at a relative's home'. Ohne erneute Prüfung beim Verwandten (oder Lesetest) bleibt Transportschaden unentdeckt. Außerdem fehlt die Zustimmung/Absprache mit dem Verwandten vor dem Kauf sowie ein Plan für Wiederholung/Aktualisierung bei neuen Fotos."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "'Drive large enough, under 120 euros' ist mit dem Ergebnis von Aufgabe 1 nicht belastbar verknüpft: Es fehlt eine Kapazitätsreserve (Wachstum, Dateisystem-Overhead) und eine Prüfung, ob 120 € für die Größe überhaupt reichen. Ist die Bibliothek größer als erschwingliche Platten, scheitert Aufgabe 2 ohne Fallback. Zudem ist 'Drive received' kein Nachweis, dass die Platte funktioniert (kein Test auf Defekte/Fake-Kapazität)."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 4,
+   "kind": "flawed",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "vague",
+     "text": "Task 3 „Make the list work well“ hat die Definition of Done „It works well“. Das ist nicht prüfbar und bestimmt nicht, wann Task 4 starten darf. Es fehlt ein konkretes Kriterium, etwa: Beide Mitbewohner haben je einen Artikel hinzugefügt und einen abgehakt, und die Änderung erscheint innerhalb weniger Sekunden auf dem anderen Handy. Ohne so ein Kriterium ist der Task wertlos und der Plan hat in der Mitte eine Lücke."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Es fehlt ein Task, der prüft, ob die gewählte App wirklich Gemeinsames Bearbeiten und eine Abhaken-Historie ohne neues Konto und ohne Bezahlfunktion bietet. Task 1 prüft nur, ob die App installiert ist. Viele vorinstallierte Listen-Apps (Notizen, Erinnerungen) teilen Listen nur mit einem Cloud-Konto des jeweiligen Anbieters oder zeigen keine Historie, wer was abgehakt hat. Dann verletzt der Plan die Grenzen „No new accounts“ und „Free only“ oder kann die DoD von Task 4 nicht belegen."
+    },
+    {
+     "index": 3,
+     "category": "risk",
+     "text": "Task 4 verlangt „Tick history from both on day 14“. Viele Apps speichern nicht, wer einen Eintrag abgehakt hat, oder löschen abgehakte Einträge automatisch. Dann lässt sich die Erfolgsbedingung „beide fügen hinzu und haken ab“ am Ende nicht nachweisen. Zudem fehlt ein Zwischencheck, etwa nach Tag 3 oder Tag 7, der ein Scheitern früh sichtbar macht. Sonst zeigt sich ein Fehlschlag erst nach zwei Wochen."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "real_defect",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 6,
+   "kind": "flawed",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "contradiction",
+     "text": "Die Abhängigkeiten sind verkehrt herum: Task 0 (neun Tage füttern) hat keine Abhängigkeit, obwohl der Starter erst durch Task 1 (Mehl und Wasser im Glas ansetzen) existiert. Füttern kann nicht vor dem Ansetzen beginnen. Task 1 hängt außerdem von Task 0 ab, was einen Zirkelbezug bzw. eine unmögliche Reihenfolge ergibt, sodass der Plan so nicht ausführbar ist."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Die Definition of Done für den Erfolg ist nicht belastbar: Es fehlt ein Kriterium dafür, dass der Starter an Tag zehn aktiv ist (z. B. Verdopplung innerhalb eines definierten Zeitfensters nach der Fütterung). Zudem fehlen Messmethode und Ausgangsbasis für 'doppeltes Volumen' des Laibs (Teigvolumen vor und nach der Gare). Außerdem fehlen Mengen, Mehlart, Wasserqualität und Fütterungsverhältnis, sodass der Erfolg nicht reproduzierbar prüfbar ist."
+    },
+    {
+     "index": 3,
+     "category": "risk",
+     "text": "Der Zeitplan hat keinen Puffer: Ein Starter braucht oft sieben bis vierzehn Tage, abhängig von Temperatur und Mehl. Ein starrer Backtermin an Tag zehn kann scheitern, ohne dass der Plan eine Prüfung (Starter-Aktivitätstest vor dem Backen), eine Temperaturvorgabe oder einen Fallback (Verschieben des Backtags) vorsieht. Die Grenze 'nur Mehl und Wasser' schließt zudem Hilfsmittel wie Hefe aus, was das Risiko erhöht."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "real_defect",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 5,
+   "kind": "sound",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Der Plan hat keine Pufferzeit und keine Rückfallregel. Die Aufbauphasen sind streng sequenziell (6 Wochen Basis, dann 10 Wochen Long Runs, dann 2 Wochen Taper). Eine Verletzung oder Krankheit verschiebt alles nach hinten, und der Termin am 12. Oktober ist fix. Die Zeiträume werden außerdem nirgends gegen das Rennen zurückgerechnet. Zusammen ergeben sie mindestens 18 Wochen plus Test, und der Startzeitpunkt wird nicht genannt. Kein Task enthält Kriterien für Anpassung oder Abbruch."
+    },
+    {
+     "index": 2,
+     "category": "contradiction",
+     "text": "Die Reihenfolge widerspricht der Zeitplanung: Task 3 (Long Runs, 10 Wochen) hängt von Task 2 (Basis, 6 Wochen) ab, aber die Frist 'bis 28. September' liegt nur 2 Wochen vor dem Rennen. Das passt nicht zu einem 2-wöchigen Taper, der danach folgen soll. Ohne Pufferwoche zwischen dem 28. September und dem Taper-Beginn ist der Plan nicht belastbar. Dass der Plan 16 Wochen Aufbau vor dem 28. September braucht, bedeutet außerdem, dass spätestens Anfang Juni gestartet werden müsste. Dieses Startdatum fehlt."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "Die Definitions of Done sind teils nicht prüfbar oder nicht aussagekräftig. 'Six weeks logged at 40 km' lässt offen, ob 40 km pro Woche gemeint sind und ob jede Woche zählt. Die Grenze 'maximal vier Läufe pro Woche' wird in keinem Task geprüft. Beim Taper fehlt jede Volumenvorgabe, sodass 'Two taper weeks logged' auch bei unverändertem Training erfüllt wäre. Der Erfolgsbegriff 'Race finished' enthält weder Zielzeit noch Mindestleistung."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "nitpick",
+     "wrong",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 2,
+   "kind": "sound",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Die Aufgabenliste prüft nicht, ob die Quelle (die Fotobibliothek) vollständig ist. Die Fotos liegen vermutlich verstreut, etwa auf Handys, Laptops und alten Datenträgern. Schritt 1 zählt nur, was gefunden wurde, und Schritt 3 kopiert nur diese Bibliothek. Die Checksummen belegen deshalb nur, dass die Kopien mit der Bibliothek übereinstimmen, nicht dass es \"all family photos\" sind. Es fehlt ein Schritt, der die Fotos zusammenträgt, und eine Erfolgsangabe zur Vollständigkeit."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Die Kopie beim Verwandten wird nach der Übergabe nie wieder geprüft. Eine externe Festplatte, die unbeaufsichtigt liegt, kann ausfallen oder verloren gehen. Dann wäre das Ziel \"zwei verifizierte Kopien\" faktisch nicht mehr erfüllt. Außerdem wird die Kopie beim Transport möglicherweise beschädigt, aber die Verifikation fand schon vorher statt. Es fehlt eine erneute Checksummenprüfung am Zielort oder ein Rhythmus für spätere Prüfungen und Aktualisierungen."
+    },
+    {
+     "index": 3,
+     "category": "gap",
+     "text": "Das Budget und die Größe sind nicht sauber verknüpft. Schritt 2 hängt nur von der Anzahl und Größe aus Schritt 1 ab. Es gibt keinen Puffer für Wachstum der Bibliothek, und die Erfolgsangabe nennt kein Dateisystem, keine Verschlüsselung und keine Wahl zwischen HDD und SSD. Die Fotos enthalten private Daten, und eine unverschlüsselte Platte im fremden Haushalt ist ein Datenschutzrisiko. Eine Verschlüsselung wirkt sich aber auf Lesbarkeit und Wiederherstellung aus und gehört in die Planung, bevor das Kopieren beginnt."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 4,
+   "kind": "flawed",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "vague",
+     "text": "Task 3 „Make the list work well“ hat die Definition of Done „It works well“. Das ist weder messbar noch prüfbar, und es ist unklar, was die Aufgabe konkret umfasst. Sie liegt als Blocker zwischen Listenerstellung und dem Zwei-Wochen-Test, sodass sich nie entscheiden lässt, wann die Phase beginnen darf. Sie sollte durch konkrete Schritte ersetzt werden, etwa: beide Mitbewohner:innen haben die Liste geteilt/angenommen, jede:r hat von seinem/ihrem Handy einen Artikel hinzugefügt und abgehakt, und Änderungen erscheinen beim anderen Gerät."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Der Plan prüft nicht die Randbedingungen „Free app only“ und „No new accounts“. Task 1 verlangt nur, dass die App installiert ist. Ob sie kostenlos ist, ob Teilen/Synchronisieren ohne Premium funktioniert und ob dafür kein neues Konto nötig ist (z. B. die Notizen-App oder Erinnerungen-App, die auf bereits vorhandenen Konten laufen), wird nicht verifiziert. Das kann dazu führen, dass die Wahl getroffen wird und erst beim Teilen scheitert. Die DoD von Task 1 sollte ausdrücklich Kostenfreiheit, Teilen mit zwei Geräten und kein neues Konto nachweisen."
+    },
+    {
+     "index": 3,
+     "category": "gap",
+     "text": "Das Erfolgskriterium lautet „Both add and tick items for two weeks“, doch Task 4 und seine DoD prüfen nur das Abhaken („Tick history from both on day 14“). Das Hinzufügen fehlt, und eine „Tick history“ gibt es in vielen Listen-Apps gar nicht. Zudem ist offen, was passiert, wenn eine Person nur selten beiträgt, oder was als Erfolg gilt, falls an einem Tag nichts eingekauft wird. Die DoD sollte an die Erfolgsdefinition angepasst und mit einer prüfbaren Quelle versehen werden, z. B. mindestens N Einträge pro Person in den 14 Tagen."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "real_defect",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 2,
+   "kind": "sound",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Es gibt keine Aufgabe zum Zusammentragen der Fotos. Aufgabe 0 zählt nur die Bibliothek, aber das Ziel lautet \"all family photos\". Fotos liegen verstreut auf Handys, in alten Rechnern, auf SD-Karten und in Messenger-Anhängen. Ohne eine Sammel- und Dedupe-Aufgabe mit definiertem Quellen-Inventar sichern beide Kopien womöglich nur einen Teil der Fotos. Die Erfolgsprüfung \"verified\" bezieht sich dann nur auf das, was kopiert wurde, nicht auf die Vollständigkeit."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Die Auslagerung der Kopie bei Verwandten ist als Einmalübergabe ohne Zusatzmaßnahmen geplant. Die Daten auf der ausgelagerten Platte sind unverschlüsselt, und der Plan sieht keine erneute Verifikation nach der Übergabe vor. Der Zustand der Platte nach Transport und Lagerung bleibt ungeprüft (die Prüfung findet nur vor der Übergabe statt). Es gibt auch keine Regel für Aktualisierungen, sobald neue Fotos hinzukommen. Das \"Success\"-Kriterium kann erfüllt sein, während die Off-Site-Kopie schon veraltet oder beschädigt ist."
+    },
+    {
+     "index": 3,
+     "category": "gap",
+     "text": "Das Budget hängt an einer Größe, die erst in Aufgabe 0 bekannt wird. Es gibt keinen Entscheidungspunkt für den Fall, dass die Bibliothek zwei Platten unter 120 € nicht abdecken kann. Dann bleibt unklar, ob man komprimiert, aussortiert oder das Budget erhöht. Außerdem fehlt ein Dateisystem-Entscheid (z. B. exFAT, ext4 oder NTFS), der für Lesbarkeit bei den Verwandten relevant ist. Die Aufgabe \"Buy two drives\" hat dafür keine Abbruch- oder Alternativbedingung."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 1,
+   "kind": "flawed",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Der Plan deckt das Erfolgskriterium nicht ab: Das Ziel verlangt eine Wegbeschreibungs-Frage ohne Notizen, aber es gibt nur eine Übung für die Restaurantbestellung (Task 4). Eine Mock-Frage nach dem Weg fehlt komplett. Die Erfolgsprüfung wäre damit zur Hälfte unerfüllt, obwohl alle Tasks als erledigt gelten."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Es gibt keinen Bezug zum Reisedatum und keine Zeitplanung. Weder das Datum noch die Dauer sind genannt. Task 1 bucht fix 4 Slots, aber nicht, ob 4 Wochen reichen. Außerdem ist unklar, ob 100 Phrasen plus Tutor-Termine in das Limit von 4 Stunden pro Woche passen, da nur 1 Stunde Tutor eingeplant ist und das Selbststudium nicht budgetiert wird. Der Plan kann das Ziel zeitlich verfehlen, ohne es zu merken."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "Die Definitionen of Done der Tasks 3 und 4 sind nicht prüfbar. 'Two talks done' und 'Order completed without notes' haben keinen Qualitätsmaßstab und keinen Prüfer. Der Tutor beurteilt nichts, und 'completed' kann auch ein stockendes oder falsches Gespräch sein. Das wäre ein Selbstbetrug beim Erfolgskriterium. Außerdem prüft das 80-Prozent-Quiz in Task 2 nur das Erkennen von Phrasen und nicht das freie Sprechen."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 4,
+   "kind": "sound",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Es fehlt eine Aufgabe, die die Gewohnheit tatsächlich verankert (z. B. Einkaufsroutine abstimmen, wer wann die Liste nutzt oder Erinnerung). Der Erfolg \"zwei Wochen beide hinzufügen und abhaken\" hängt komplett von Verhalten ab, aber der Plan hat nur Einrichtung und passives Warten. Ohne eine Maßnahme dazu scheitert er wahrscheinlich nach wenigen Tagen unbemerkt."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Die Aufgabe \"Pick a list app both phones already have\" setzt voraus, dass es eine vorinstallierte, kostenlose App mit gemeinsamen Listen gibt, die ohne neues Konto funktioniert. Das ist unsicher: Geteilte Listen brauchen meist ein Konto (Google, Apple-ID) und beide Handys können unterschiedliche Systeme haben (iOS/Android). Es gibt keinen Fallback und kein Kriterium, das prüft, ob das Teilen ohne neue Accounts und ohne Bezahlfunktion klappt. Die Randbedingungen können daher bereits in Schritt 1 verletzt werden oder der Plan stockt."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "Der DoD der letzten Aufgabe (\"Tick history from both on day 14\") ist so nicht prüfbar: Viele Apps speichern keine Abhak-Historie mit Urheber. Zudem passt \"Tick history on day 14\" nicht zum Erfolgskriterium \"two weeks of both adding and ticking\", denn es belegt nur einen Zeitpunkt, nicht die durchgehende Nutzung. Die Fünf-Kategorien-Vorgabe in Aufgabe 2 ist außerdem durch nichts im Ziel oder Erfolg begründet und kann die Nutzung unnötig erschweren."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "nitpick",
+     "real_defect",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 3,
+   "kind": "sound",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Die Aufgabe 4 bündelt drei Treffen über drei Monate in einem einzigen Task. Es gibt keine Aufgabe für die Planung der Treffen zwei und drei, für das Auswählen der Folgebücher oder für das Nachfassen bei Absagen. Da sich der Erfolg erst durch alle drei Treffen zeigt, bleibt der Plan ohne Zwischenstände. Ein Abbruch nach Treffen eins wird nicht erkannt."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Das Ziel „mindestens drei Zusagen“ ist zugleich die Untergrenze für die Definition of Done der Treffen („mindestens drei Personen“). Schon eine einzige Absage oder Verhinderung lässt ein Treffen unter die Schwelle fallen. Es gibt weder einen Puffer (z. B. mehr Einladungen) noch eine Regel für den Fall, dass jemand abspringt. Mit drei Personen ist der Club zudem kaum tragfähig, besonders da die Grenze nach oben bei acht liegt."
+    },
+    {
+     "index": 3,
+     "category": "gap",
+     "text": "Die Rahmenbedingung „Treffen bei jemandem zu Hause“ wird nur für Treffen eins geklärt („Heimadresse vereinbart“). Wer bei den Treffen zwei und drei gastgibt, ist nicht geregelt (Rotation, feste Gastgeberin oder fester Gastgeber). Außerdem fehlt die Absprache zu Lesezeit und Rhythmus: Die Abstimmung über das Buch erfolgt erst nach den Zusagen, die Lesefrist bis zum ersten Termin ist aber nicht eingeplant."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "nitpick",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 3,
+   "kind": "flawed",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Das Erfolgskriterium lautet „drei Treffen in drei Monaten“, der Plan endet aber nach dem ersten Treffen. Es gibt keine Aufgabe für Treffen 2 und 3 (Buch wählen, Termin fixieren, Ort festlegen). Selbst wenn alle Aufgaben erledigt sind, ist das Ziel nicht erreicht. Der Plan bildet also nur ein Drittel des Erfolgs ab und täuscht Fortschritt vor."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Die Grenze „höchstens 8 Personen“ und die Treffen zu Hause werden in keiner Aufgabe geprüft. Fünf Freunde anzufragen, passt in die Grenze. Es fehlt aber ein Schritt, der festlegt, was passiert, wenn mehr zusagen oder jemand weitere Leute mitbringt. Ebenso fehlt die Klärung, wer die Treffen reihum ausrichtet, falls der eigene Wohnraum nicht für jedes Treffen reicht. Der Rhythmus „einmal im Monat“ hängt aber genau daran."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "Die Aufgabe „Fünf Freunde fragen, mindestens drei Zusagen“ hat keine Frist und keinen Plan für den Fall, dass weniger als drei zusagen. Das Erfolgskriterium „drei Treffen in drei Monaten“ hat einen engen Zeitrahmen, und der Plan nennt weder Starttermine noch Fristen für die Aufgaben. Verzögert sich die Zusagenphase, ist die Dreimonatsgrenze nicht mehr zu halten, ohne dass der Plan das erkennbar macht."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 7,
+   "kind": "sound",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Die Aufgabe „Regale installieren“ hängt nur vom Abtransport ab. Es fehlt ein Schritt, der Material und Werkzeug für die Regale beschafft und den Platzbedarf plant. Die Regale lassen sich ohne Einkauf und Maße nicht montieren. Ob der Wagen danach noch hineinpasst, ist ungeprüft."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Der Schritt „Behalten“ ist nach dem Sortieren nicht verplant. Die Behalten-Pile (Werkzeug, Kisten, Gartengeräte usw.) bekommt keinen Platz und keine Aufgabe. Wenn nicht alles aufs Regal passt, ist das Ziel „Werkzeug hat einen Platz“ nicht erreicht. Die Definition of Done „Tools on the shelves“ deckt den übrigen Behalten-Kram nicht ab."
+    },
+    {
+     "index": 3,
+     "category": "risk",
+     "text": "Die Zeitgrenze von zwei Wochenenden wird nicht eingeplant. Der Abtransport (Sperrmüll, Wertstoffhof, Abholer für Verschenktes) hat oft Öffnungszeiten und Wartezeiten, sodass er das erste Wochenende sprengen kann. Zudem ist die Prüfung des Wegwerf-Stapels („checked“) nicht definiert: Es ist unklar, wer prüft und nach welchem Kriterium. Die Randbedingung „nichts ohne Prüfung wegwerfen“ ist damit nicht belastbar."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "nitpick",
+     "nitpick",
+     "real_defect"
+    ]
+   }
+  },
+  {
+   "case": 0,
+   "kind": "flawed",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "contradiction",
+     "text": "Aufgabe 2 sieht den Kauf eines Gewächshausregals für 250 Euro vor. Das widerspricht der Grenze \"Gesamtausgaben unter 60 Euro\" um mehr als das Vierfache. Zusätzlich muss das Regal an die Geländerbreite passen, was nach den Messungen in Aufgabe 1 nicht gesichert ist. Der Plan würde das Budget sprengen oder an der Grenze scheitern."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Aufgabe 2 bündelt Auswahl, Budgetplanung und Einkauf von Regal, Töpfen, Erde und Setzlingen in einem Schritt. Die Erledigungsbedingung \"Items at home\" prüft weder die Budgetgrenze (unter 60 Euro) noch die Passform der Töpfe am Geländer. Ein Verstoß gegen beide Grenzen würde als \"erledigt\" durchgehen. Es fehlt eine Kostenprüfung vor dem Kauf, etwa eine Einkaufsliste mit Preissumme."
+    },
+    {
+     "index": 3,
+     "category": "risk",
+     "text": "Minze wächst stark wuchernd und verdrängt andere Kräuter. Basilikum braucht viel Sonne und Wärme, Schnittlauch kommt mit weniger aus. Der Plan sieht weder getrennte Töpfe noch eine Prüfung vor, ob die in Aufgabe 1 gemessenen Sonnenstunden für alle drei Kräuter reichen. Das gefährdet das Erfolgskriterium \"drei Kräuter nach zwei Wochen am Leben\", zumal Basilikum bei Kälte oder Zugluft am Geländer leicht eingeht."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "real_defect",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 1,
+   "kind": "sound",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Es gibt keine Aufgabe, die Aussprache und freies Hören/Sprechen übt, bevor die Mock-Tests kommen. Das Lernen von 100 Phrasen per Quiz belegt nur Wiedererkennen, nicht aktives Sprechen oder Hörverstehen. Der Erfolg verlangt aber, dass mündliche Antworten ohne Notizen verstanden werden. Mit zwei Tutor-Gesprächen als einziger Sprechpraxis ist es unwahrscheinlich, dass die Mock-Aufgaben gelingen."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Der Plan enthält kein Reisedatum, keinen Zeitplan und keine Fristen. Die 4 gebuchten Slots, das Lernen der Phrasen und die Tests haben keine Termine. Bei einer festen Deadline lässt sich nicht prüfen, ob der Plan in die Zeit passt. Die Abhängigkeitskette ist streng sequenziell (Kurs, Phrasen, Gespräche, Tests). Wenn die Phrasen-Aufgabe länger dauert, rutscht alles nach hinten, und es gibt keinen Puffer."
+    },
+    {
+     "index": 3,
+     "category": "contradiction",
+     "text": "Die Definition of Done der Aufgabe 1 ('4 Slots gebucht') ist willkürlich festgelegt und passt nicht zur Grenze von höchstens 4 Stunden pro Woche. Vier Wochen-Slots à 1 Stunde decken nur 4 Stunden Tutor-Zeit insgesamt ab, nicht pro Woche. Die Zeit für Selbststudium (100 Phrasen) ist nicht eingeplant. Ob die Gesamtbelastung unter der Grenze bleibt, ist nicht nachgewiesen. Außerdem bleibt offen, ob 4 Wochen bis zur Reise überhaupt reichen."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "nitpick",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 0,
+   "kind": "sound",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Die Wachstumsbedingungen werden nicht abgesichert. Minze ist invasiv und braucht ein eigenes Gefäß, sonst überwuchert sie die anderen Kräuter. Basilikum braucht viel Sonne und Wärme. Heute ist der 17. November, und Basilikum auf einem Balkon im Spätherbst oder Winter ist sehr riskant. Kein Task prüft, ob die gemessenen Sonnenstunden und die Jahreszeit für alle drei Kräuter reichen. Das Erfolgskriterium „drei Kräuter leben nach zwei Wochen“ kann daher am Wetter scheitern, nicht am Plan."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Die Beschränkung „Töpfe müssen auf die Reling passen“ ist nur im Schritt „Preise recherchieren“ und im Schritt „Pflanzen“ indirekt abgedeckt. Die Definition of Done der Einkaufsliste prüft nur die Summe unter 60 Euro, nicht die Passung der Töpfe zu den gemessenen Maßen. Wer dem Plan folgt, kann also Töpfe kaufen, die nicht passen, und merkt es erst nach dem Kauf. Der Kauf ist dann nicht mehr rückgängig zu machen, ohne das Budget zu sprengen."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "Die letzte Aufgabe „Gießen und nach zwei Wochen prüfen“ vermischt eine tägliche Tätigkeit mit einer Prüfung. Die Definition of Done „alle drei am Tag 14 am Leben“ setzt voraus, dass die Pflanzung als Starttermin festgehalten wurde. Das tut die Aufgabe „Pflanzen“ nicht, denn ihre Definition of Done lautet nur „drei Kräuter gepflanzt“, ohne Datum. Ohne Pflanzdatum ist Tag 14 nicht eindeutig bestimmbar."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 1,
+   "kind": "flawed",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Die Erfolgsmessung deckt nur die Hälfte des Ziels ab: Es gibt keine Aufgabe und keine Definition of Done für die mock Wegbeschreibungsfrage ohne Notizen, obwohl sie ausdrücklich zum Erfolgskriterium gehört. Der letzte Schritt prüft nur die Restaurantbestellung. Der Plan kann also vollständig abgehakt sein und das Erfolgskriterium trotzdem verfehlen."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Es gibt keinen Zeitbezug zum Reisedatum und keine Prüfung der Zeitgrenze. Das Reisedatum fehlt in allen Aufgaben. Die Vorgabe von höchstens 4 Stunden Lernzeit pro Woche wird nicht gegen die Aufgaben gerechnet: Ein Tutor-Slot pro Woche (1 Stunde), 100 Phrasen lernen und zwei Übungsgespräche brauchen eine unbekannte Gesamtdauer. Die '4 Slots' in der ersten DoD sind willkürlich und nicht aus der Zeit bis zur Reise abgeleitet. Der Plan kann daher zu spät fertig werden oder das Wochenbudget sprengen, ohne dass es auffällt."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "Die Definitionen of Done der Gesprächsaufgaben sind nicht prüfbar oder passen nicht zum Erfolgskriterium. 'Two talks done' enthält weder ein Thema noch einen Maßstab. Bei der Mock-Bestellung fehlt, wer sie bewertet und was als bestanden gilt (Selbsteinschätzung oder Tutor). Die 80-Prozent-Quote bei 100 Phrasen ist außerdem kein Nachweis dafür, dass man sie in einem freien Dialog ohne Notizen anwenden kann."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 3,
+   "kind": "flawed",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Die Grenze \"höchstens 8 Personen\" und das Erfolgskriterium \"drei Treffen in drei Monaten\" werden nicht abgesichert. Es gibt keine Aufgabe, die Treffen 2 und 3 plant: weder Buchwahl noch Termin und Ort. Der Plan endet beim ersten Treffen, deckt also nur ein Drittel des Erfolgsziels ab. Fehlt eine Folgeaufgabe oder ein wiederkehrender Rhythmus, etwa ein fester Wochentag oder eine Terminserie, scheitert der Club nach dem Start unbemerkt."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Die Teilnehmerzahl ist zu knapp bemessen. Das Ziel ist nur \"mindestens drei Zusagen\" aus fünf Angefragten, und das erste Treffen gilt schon mit drei Personen als erfüllt. Eine einzige Absage oder Krankmeldung bei einem späteren Treffen bricht den Club dann auf zwei Personen ein. Ein Puffer fehlt: mehr Einladungen, ein Mindestquorum oder ein Plan für Ersatz. Die Obergrenze von 8 wird ebenfalls nicht geprüft."
+    },
+    {
+     "index": 3,
+     "category": "gap",
+     "text": "Es gibt keine Lesezeit zwischen Buchwahl und Treffen. Die Buchwahl hängt direkt an der Terminfindung, aber keine Aufgabe oder Definition of Done stellt sicher, dass das Datum genug Zeit zum Lesen lässt. Ebenso fehlt eine Frist oder Abstimmungsregel (Wer stimmt ab, was gilt bei Gleichstand?). Das Buch kann so gewählt sein, aber das erste Treffen findet mit Teilnehmern statt, die es nicht gelesen haben, oder die Abstimmung zieht sich hin."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 0,
+   "kind": "sound",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Die Pflege-Aufgabe fasst Gießen über 14 Tage und die Abschlusskontrolle in einer Aufgabe zusammen. Sie hat keinen Zeitpunkt für den Start und keine Vertretung bei Abwesenheit. Außerdem wird nicht geprüft, ob die Pflanzen vor Tag 14 geschädigt werden, etwa durch Minze, die andere Kräuter verdrängt, wenn sie sich einen Topf teilt, oder durch Staunässe. Das Erfolgskriterium \"alle drei am Leben\" hängt von Pflege ab, die als einzelner Schritt ohne Zwischenkontrollen und ohne Maßnahmen bei Problemen geplant ist."
+    },
+    {
+     "index": 2,
+     "category": "risk",
+     "text": "Die Ergebnisse der Messung (Schienenmaße, Sonnenstunden) fließen nur über die Abhängigkeit in die Auswahl ein. Die Definition of Done der Einkaufsliste verlangt nur eine Summe unter 60 Euro, aber nicht, dass Töpfe zur Schiene passen und die Kräuter zur Sonnenlage. Ob die Töpfe passen, wird erst in Aufgabe 4 beim Pflanzen festgestellt, nach dem Kauf. Dann ist ein Umtausch oder Neukauf möglich, der das Budget sprengen kann."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "Die Definition of Done von Aufgabe 4 (\"Three herbs planted\") prüft die Randbedingung \"Pots must fit the rail\" nicht, obwohl der Titel sie nennt. Auch fehlt, ob Setzlinge oder Samen gekauft werden. Das beeinflusst die Erfolgsaussicht nach zwei Wochen stark, denn Samen von Basilikum oder Schnittlauch keimen eventuell nicht innerhalb dieser Zeit."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "nitpick",
+     "nitpick",
+     "wrong"
+    ]
+   }
+  },
+  {
+   "case": 7,
+   "kind": "flawed",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "contradiction",
+     "text": "Aufgabe 3 („Throw away the throw-away pile today without checking“) widerspricht direkt der Grenze „Nothing thrown away without a check“. Sie macht außerdem die Sicherung aus dem Plan zunichte: Es gibt nirgends einen Prüfschritt, in dem der Wegwerf-Stapel kontrolliert wird. Wird sie so ausgeführt, können unwiederbringlich Dinge verloren gehen, die der Eigentümer behalten wollte."
+    },
+    {
+     "index": 2,
+     "category": "duplicate",
+     "text": "Aufgabe 2 („Take away the give-away and throw-away piles“) und Aufgabe 3 („Throw away the throw-away pile“) erledigen für den Wegwerf-Stapel dasselbe. Aufgabe 3 hat zudem eine reine Abhängigkeit von Aufgabe 0, hängt aber in keiner Kette. Der Plan ist dadurch uneindeutig, und die Definition of Done „Pile gone“ lässt sich doppelt erfüllen, ohne dass die Prüfung stattgefunden hat."
+    },
+    {
+     "index": 3,
+     "category": "gap",
+     "text": "Zwischen „Piles gone“ und „Install shelves“ fehlen Schritte. Es gibt weder Ausmessen und Beschaffen der Regale und des Materials noch einen Schritt, der die Werkzeuge einsortiert. Die DoD „Three piles“ in Aufgabe 0 prüft außerdem nicht, ob wirklich alles sortiert ist. Beim Zeitrahmen von zwei Wochenenden ist die Regalbeschaffung der wahrscheinlichste Engpass, und er ist im Plan unsichtbar."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 5,
+   "kind": "sound",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Dem Plan fehlen Startdatum und Zeitbudget. Das Rennen am 12. Oktober ist heute (17.11.2026) für dieses Jahr schon vorbei, gemeint ist also wohl 2027. Die Kette aus Test, 6 Wochen Basis, 10 Wochen Long Runs und 2 Wochen Taper braucht rückwärts gerechnet mindestens 18 Wochen. Der 32-km-Lauf bis 28. September setzt den Start der Long-Run-Phase auf etwa den 20. Juli und den der Basisphase auf etwa den 8. Juni. Ohne feste Daten und Puffer für Verletzung oder Krankheit kann der Plan stillschweigend scheitern, und kein Task erkennt das."
+    },
+    {
+     "index": 2,
+     "category": "contradiction",
+     "text": "Die Basisphase mit 40 km pro Woche endet laut Abhängigkeit, bevor die Long Runs beginnen. Bei maximal vier Läufen pro Woche würde ein 32-km-Lauf aber 80 % des Wochenumfangs ausmachen. Das ist unrealistisch und verletzungsträchtig. Das Wochenvolumen müsste in der Long-Run-Phase weiter steigen, ist dort aber nirgends geplant. Die strikte Sequenz bildet die Realität nicht ab, denn Basis und Long Runs laufen parallel. Ein Wochenziel für diese Phase fehlt."
+    },
+    {
+     "index": 3,
+     "category": "gap",
+     "text": "Es gibt keinen Check, ob die Annahmen zur Ausgangsfitness stimmen. Der 10-km-Test hat nur das Kriterium „Test done“, also keine Mindestzeit und keinen Entscheidungspunkt. Wenn der Test zeigt, dass 6 Wochen bis 40 km zu aggressiv sind, ändert sich am Plan nichts. Die Definition of Done der Phasen („Six weeks logged“) misst nur Aktivität, nicht Bereitschaft für das Rennen, und kein Task fängt Ausfälle oder Rückschritte ab."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "nitpick",
+     "real_defect",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 7,
+   "kind": "flawed",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "contradiction",
+     "text": "Task 3 („Throw away the throw-away pile today without checking“) widerspricht direkt der Grenze „Nothing thrown away without a check“. Zudem dupliziert sie Task 1 (Wegschaffen des Wegwerf-Stapels) und kollidiert mit Task 2, der denselben Stapel entsorgt. Die Aufgabe muss gestrichen werden, sonst wird eine harte Vorgabe verletzt und eventuell Wertvolles unwiederbringlich entsorgt."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Es fehlt ein Prüfschritt vor dem Entsorgen: Kein Task prüft den Wegwerf-Stapel (z. B. Durchsicht, Rückfrage bei Mitbewohnern/Familie bei fremdem Besitz). Task 2 hängt nur von Task 0 ab, daher kann der Stapel ohne Check entsorgt werden. Die Definition of Done von Task 0 („Three piles“) enthält keine Prüfung, und Task 2 braucht ein Kriterium wie „Stapel gegengeprüft und freigegeben“."
+    },
+    {
+     "index": 3,
+     "category": "gap",
+     "text": "Die Planung ignoriert Abhängigkeiten und Aufwand für das Ziel „Auto passt hinein“ und „Werkzeug im Regal“: Der Keep-Stapel wird nie einsortiert oder untergebracht (außer Werkzeug), Regalmaterial/-kauf und Aufbau stehen in einem einzigen Task ohne Maß, und es gibt keinen Zeitplan für die zwei Wochenenden. Task 4 („Park the car inside“) hängt nur an den Regalen, nicht daran, dass der Platz tatsächlich frei und der Keep-Stapel verstaut ist. Das Erfolgskriterium kann so formal erfüllt sein, obwohl die Garage nicht benutzbar ist."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "real_defect",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 6,
+   "kind": "flawed",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "contradiction",
+     "text": "Die Abhängigkeiten sind verkehrt herum: Die Aufgabe „Feed the starter every day for nine days“ (Index 0) hat keine Abhängigkeiten, obwohl der Starter erst durch Aufgabe 1 („Mix flour and water in a jar“) angelegt wird. Aufgabe 1 hängt dagegen von 0 ab. Ein Starter, der gefüttert werden soll, bevor er existiert, ist nicht ausführbar. Die Reihenfolge muss lauten: erst anrühren, dann füttern, dann backen. Als Zyklus ist das nicht gebrochen, aber der Plan ist in dieser Form nicht umsetzbar."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Das Backen am Tag zehn hängt nur von Aufgabe 1 (Anrühren) ab, nicht von den Fütterungen. Der Plan würde also formal ein Backen erlauben, ohne dass der Starter je gefüttert wurde. Außerdem fehlt jeder Nachweis, dass der Starter aktiv ist, etwa Blasenbildung oder Volumenverdopplung nach dem Füttern. Ohne diesen Nachweis ist das Erfolgskriterium reines Glück."
+    },
+    {
+     "index": 3,
+     "category": "gap",
+     "text": "Das Erfolgskriterium „Laib auf doppeltes Volumen aufgegangen“ benötigt Zutaten und Schritte, die im Plan fehlen: Teig herstellen, kneten, gehen lassen und backen. Die Grenze „nur Mehl und Wasser“ lässt Salz weg, was für Brot unüblich ist und sich nicht mit dem Ziel „Brot“ vereinbaren lässt, ohne die Grenze zu klären. Zudem sind „neun Fütterungen“ bei Start an Tag eins und Backen an Tag zehn zeitlich nicht eindeutig (Tag 1 bis 9 oder 2 bis 10?), sodass die Definition of Done mehrdeutig bleibt."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "wrong",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 5,
+   "kind": "flawed",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "contradiction",
+     "text": "Die Aufgabe „Long runs rising to 38 km“ verletzt direkt die Grenze „Kein Lauf länger als 32 km vor dem Rennen“. Das DoD („38-km-Lauf bis 28. September geloggt“) ist mit der Rahmenbedingung unvereinbar. Der Plan kann so nicht ausgeführt werden, ohne die Grenze zu brechen."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Es gibt keinen Zeitplan, der zum Rennen passt. Sechs Wochen Basisaufbau, zehn Wochen lange Läufe und zwei Wochen Tapering sind streng sequenziell (depends_on) und summieren sich auf 18 Wochen plus Test. Es steht nirgends, wann der Start liegen muss, und die Wochenfenster sind nicht an Daten gebunden. Heute ist der 17.11.2026, das Rennen am 12. Oktober liegt je nach Jahr fast ein Jahr entfernt oder bereits in der Vergangenheit. Außerdem ist die Abhängigkeit „Lange Läufe erst nach sechs Wochen Basis“ unnötig, denn die Long-Run-Phase müsste parallel zum Aufbau laufen. Sonst passen zehn Wochen Long-Run-Steigerung nicht vor den 28. September."
+    },
+    {
+     "index": 3,
+     "category": "gap",
+     "text": "Die Rahmenbedingung „maximal vier Läufe pro Woche“ wird in keiner Aufgabe geprüft. Außerdem fehlen Verletzungs- und Ausfallpuffer sowie Regeln für verpasste Wochen. Die DoDs („Six weeks logged at 40 km“) verlangen perfekte Durchführung ohne Fallback, daher kann ein Ausfall den Plan blockieren, ohne dass er erkannt oder gesteuert wird."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 6,
+   "kind": "sound",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Das Ziel „Starter, der am Tag zehn Brot aufgehen lässt“ wird nicht durch einen Starter-Reifetest abgesichert. Es gibt keine Aufgabe und keine Definition of Done, die prüft, ob der Starter vor dem Backen aktiv ist (z. B. Verdopplung innerhalb von 4–8 Stunden nach der Fütterung, Blasen, Geruch). Der Plan geht davon aus, dass neun Fütterungen automatisch einen backfähigen Starter ergeben. Das ist oft falsch, denn viele Starter brauchen 10–14 Tage oder erholen sich nach einer anfänglichen Gärphase nur langsam. Fällt der Brotversuch an Tag zehn durch, weiß der Eigentümer nicht, ob der Starter oder das Rezept schuld ist."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Die Aufgaben „Fütterung“ und „Backen“ enthalten keine Handlungsvorgaben, die zum Erfolg nötig sind: Fütterungsverhältnis, Verwerfen eines Teils des Starters, Temperatur, Mehlsorte (Vollkorn oder Roggen helfen am Anfang) und Wasserqualität. „Nine feedings logged“ belegt nur, dass gefüttert wurde, nicht, dass der Prozess lief. Außerdem fehlt das Brotrezept samt Zutaten. Die Grenze „Flour and water only“ gilt für den Starter, schließt aber Salz im Brot nicht ausdrücklich ein oder aus. Das ist unklar, und ein Brot ohne Salz ist kaum üblich."
+    },
+    {
+     "index": 3,
+     "category": "contradiction",
+     "text": "Die Aufgabenzählung passt nicht zum Zeitplan. Tag eins ist Anmischen, danach folgen „neun Tage Fütterung“ und Backen an Tag zehn. Das ergibt entweder nur acht Fütterungstage zwischen Tag zwei und Tag neun oder eine Fütterung am Backtag selbst. Es ist unklar, ob die neunte Fütterung vor dem Backen stattfindet. Zudem ist „Loaf risen to double volume“ als Erfolgskriterium mehrdeutig: Gemeint sein kann der Teig bei der Gare oder das fertig gebackene Brot, und eine Verdopplung ist kein Maß für einen gelungenen Laib. Ohne klare Messung (Zeitpunkt, Gefäß, Markierung) ist die DoD nicht prüfbar."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 2,
+   "kind": "flawed",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Das Ziel verlangt zwei verifizierte Kopien, der Plan erzeugt aber nur eine: Die Festplatte geht an die Verwandten. Die zweite Kopie (das Original zählt nicht als verifizierte Kopie) fehlt ebenso wie ein zweites Medium. Mit einer Platte unter 120 € ist das Erfolgskriterium nicht erreichbar. Der Plan braucht entweder zwei Laufwerke, die ins Budget passen müssen, oder eine klar benannte lokale Kopie auf bestehendem Speicher."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Die Off-site-Kopie wird nach der Übergabe nicht mehr verifiziert. Zwischen Prüfung und Übergabe kann Transportschaden oder ein Defekt auftreten. Die Aufgabe 'Drive delivered' belegt nur die Zustellung, nicht die Lesbarkeit. Es fehlt ein Schritt, der die Prüfsummen am Zielort oder nach der Rückkehr erneut prüft, sowie die Kontrolle, dass die Platte nach der Übergabe nicht dauerhaft ungeprüft bleibt."
+    },
+    {
+     "index": 3,
+     "category": "risk",
+     "text": "Die Definition of Done von Aufgabe 2 ('Drive received') ist nur ein Lieferstatus und sagt nichts darüber, ob der Preis und die Kapazität stimmen. Aufgabe 1 liefert nur eine Zahl, aber keine Regel, wie viel Reserve für Wachstum nötig ist. Bei zwei Laufwerken lässt sich das Budget von 120 € außerdem nur halten, wenn die Kapazität vorher festgelegt wird. Ohne Vollständigkeitsprüfung, ob wirklich alle Fotos erfasst sind (auch auf Handys, in alten Rechnern und auf SD-Karten), bleibt 'all family photos' ungeprüft."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 5,
+   "kind": "flawed",
+   "rep": 1,
+   "objections": [
+    {
+     "index": 1,
+     "category": "contradiction",
+     "text": "Aufgabe 3 plant Long Runs bis 38 km, aber die Rahmenbedingung verbietet jeden Lauf über 32 km vor dem Rennen. Das DoD (\"38-km-Lauf bis 28. September\") kann nur durch Verletzung der Grenze erfüllt werden. Der Plan widerspricht damit seinen eigenen Vorgaben."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Es gibt keine Prüfung der Zeitleiste und keine Daten für die meisten Aufgaben. Sechs Wochen Basisaufbau, zehn Wochen Long Runs und zwei Wochen Taper ergeben bei sequenzieller Abhängigkeit mindestens 18 Wochen plus Test. Heute ist der 17.11.2026, das Rennen am 12. Oktober liegt also entweder fast ein Jahr entfernt (2027) oder ist schon vorbei. Das Jahr ist nirgends genannt. Der 28. September im DoD passt außerdem nicht zu zehn Wochen Long Runs, die erst nach sechs Wochen Basisaufbau beginnen, und lässt die zwei Taper-Wochen nur knapp zu. Ohne Startdatum und Fristen pro Aufgabe lässt sich der Plan nicht überwachen."
+    },
+    {
+     "index": 3,
+     "category": "risk",
+     "text": "Die Vorgabe \"höchstens vier Läufe pro Woche\" wird in keiner Aufgabe berücksichtigt. Die Wochenstruktur (Anzahl Läufe, Verteilung der 40 km) fehlt. Die strikt sequenziellen Abhängigkeiten verhindern außerdem, dass Basisaufbau und Long Runs parallel laufen. Das ist unrealistisch und macht den Plan fragil, weil jede Verletzung oder Pause alles nach hinten schiebt. Es gibt weder Puffer noch Fallback für Ausfälle."
+    }
+   ],
+   "judge": {
+    "defect_present": true,
+    "addresses_defect": 1,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  },
+  {
+   "case": 4,
+   "kind": "sound",
+   "rep": 0,
+   "objections": [
+    {
+     "index": 1,
+     "category": "gap",
+     "text": "Es gibt keinen Schritt, der prüft, ob die gewählte App die Grenzen erfüllt: kostenlos, keine neuen Konten und echte gemeinsame Bearbeitung. Viele vorinstallierte Listen-Apps (z. B. Notizen, Erinnerungen) synchronisieren nur über ein gemeinsames Konto oder nur innerhalb eines Ökosystems (iOS und Android gemischt). Die Definition of Done von Aufgabe 0 ('App benannt, beide bestätigen Installation') belegt nur die Installation, nicht Teilen, Gratis-Nutzung oder Kontofreiheit. Das Vorhaben kann daran scheitern, dass die Liste nicht wirklich geteilt werden kann."
+    },
+    {
+     "index": 2,
+     "category": "gap",
+     "text": "Aufgabe 1 legt die Liste an, aber kein Schritt sorgt dafür, dass die zweite Person sie tatsächlich teilt oder beitritt und sie bei sich sieht. Die Definition of Done ('Liste mit fünf Kategorien existiert') ist auch erfüllt, wenn nur eine Person sie sieht. Aufgabe 2 setzt das Teilen stillschweigend voraus."
+    },
+    {
+     "index": 3,
+     "category": "vague",
+     "text": "Das Erfolgskriterium 'beide fügen Artikel hinzu und haken sie ab, zwei Wochen lang' wird im Plan nur als einmaliger Abhak-Nachweis an Tag 14 geprüft. Es fehlt eine Zwischenkontrolle und ein Umgang mit dem Fall, dass die Nutzung einschläft. Auch 'fünf geteilte Kategorien' ist nirgends aus Ziel, Grenzen oder Erfolg begründet und kann unnötige Komplexität sein oder von der App gar nicht unterstützt werden."
+    }
+   ],
+   "judge": {
+    "defect_present": false,
+    "addresses_defect": null,
+    "ratings": [
+     "real_defect",
+     "nitpick",
+     "nitpick"
+    ]
+   }
+  }
+ ]
+}

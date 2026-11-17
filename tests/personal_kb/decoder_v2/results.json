@@ -1,0 +1,571 @@
+{
+ "consistency": {
+  "clean_violations": 0,
+  "entities_at_perf": [
+   2396,
+   2300,
+   1200,
+   2300,
+   2300,
+   2298
+  ],
+  "filtered_path_recall_on_1560_natural_titles": 1.0,
+  "hostile_identical_pair_found_at_2300_ideas": true,
+  "legit_violations": {},
+  "loss": 0.0,
+  "newest_pair_found_among_2298_long_titles": true,
+  "per_class": {
+   "child_forgotten": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "cursor_ahead": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "dangling_link": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "decoder_state_lost": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "duplicate_ideas": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "extra_number_duplicate": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "hostile_identical_pair": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "ledger_ghost": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "mixed_script_duplicate": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "number_mismatch_duplicate": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "one_word_same_body": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "orphan_child": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "plan_forgotten": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "pointer_duplicates": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "stray_draft": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "stuck_realization": {
+    "recall": 1.0,
+    "unexpected": 0
+   },
+   "unicode_duplicate": {
+    "recall": 1.0,
+    "unexpected": 0
+   }
+  },
+  "recall_mean": 1.0,
+  "sweep_cpu_ms_worst_of_6_corpora_informational": 348.7,
+  "unexpected_on_faults": 0,
+  "unsafe_heal_share": 0.0
+ },
+ "critic_probe": {
+  "absent_defect_claimed_on_sound": 0,
+  "available": true,
+  "defect_present_in_flawed_by_judge": 16,
+  "defect_present_in_sound_by_judge": 0,
+  "flawed_runs": 16,
+  "model": "claude-sonnet-5-5",
+  "objections_per_run": [
+   3
+  ],
+  "ratings_by_rank": {
+   "1": {
+    "nitpick": 10,
+    "real_defect": 22,
+    "wrong": 0
+   },
+   "2": {
+    "nitpick": 21,
+    "real_defect": 9,
+    "wrong": 2
+   },
+   "3": {
+    "nitpick": 30,
+    "real_defect": 1,
+    "wrong": 1
+   }
+  },
+  "seeded_defect_addressed": 16,
+  "seeded_defect_ranked_first": 16,
+  "sound_runs": 16
+ },
+ "label": "final",
+ "learning_dense_signals": {
+  "cap": {
+   "large_plans_10to14": {
+    "estimator_v2": {
+     "abs_error_to_size": 1.684,
+     "excess": 0.0,
+     "shortfall": 0.0
+    },
+    "ratchet_v1": {
+     "abs_error_to_size": 5.0,
+     "excess": 0.0,
+     "shortfall": 5.0
+    },
+    "static_7": {
+     "abs_error_to_size": 5.0,
+     "excess": 0.0,
+     "shortfall": 5.0
+    }
+   },
+   "mid_plans_6to9": {
+    "estimator_v2": {
+     "abs_error_to_size": 2.12,
+     "excess": 0.0,
+     "shortfall": 0.0
+    },
+    "ratchet_v1": {
+     "abs_error_to_size": 1.0,
+     "excess": 0.0,
+     "shortfall": 0.809
+    },
+    "static_7": {
+     "abs_error_to_size": 1.0,
+     "excess": 0.0,
+     "shortfall": 0.75
+    }
+   },
+   "small_plans_3to6": {
+    "estimator_v2": {
+     "abs_error_to_size": 1.969,
+     "excess": 0.001,
+     "shortfall": 0.0
+    },
+    "ratchet_v1": {
+     "abs_error_to_size": 0.639,
+     "excess": 0.0,
+     "shortfall": 0.08
+    },
+    "static_7": {
+     "abs_error_to_size": 2.5,
+     "excess": 0.75,
+     "shortfall": 0.0
+    }
+   }
+  },
+  "critic": {
+   "first_loud_rest_quiet": {
+    "loud_noise": 0.312,
+    "loud_useful": 0.688,
+    "quiet_useful": 0.312
+   },
+   "show_three_loud_v1": {
+    "loud_noise": 2.0,
+    "loud_useful": 1.0,
+    "quiet_useful": 0.0
+   }
+  }
+ },
+ "learning_measured_controller": {
+  "do_nothing": {
+   "loss": {
+    "equal(regret,cost,harm)": 0.1608,
+    "regret_only": 0.3659,
+    "regret_x3": 0.2428
+   },
+   "per_scenario": {
+    "big_tighten_needed": {
+     "changes_per_owner": 0.0,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.5714,
+     "wrong_change_rate": 0.0
+    },
+    "drift": {
+     "changes_per_owner": 0.0,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.5652,
+     "wrong_change_rate": 0.0
+    },
+    "flat_loosen_ok": {
+     "changes_per_owner": 0.0,
+     "cost_excess": 0.1333,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 0.0
+    },
+    "monotone_all_help": {
+     "changes_per_owner": 0.0,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.5909,
+     "wrong_change_rate": 0.0
+    },
+    "rounds_useless": {
+     "changes_per_owner": 0.0,
+     "cost_excess": 0.2143,
+     "harm": 0.0,
+     "regret": 0.5,
+     "wrong_change_rate": 0.0
+    },
+    "start_is_optimal": {
+     "changes_per_owner": 0.0,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 0.0
+    },
+    "stationary_flat": {
+     "changes_per_owner": 0.0,
+     "cost_excess": 0.7,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 0.0
+    },
+    "tighten_harms": {
+     "changes_per_owner": 0.0,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.5652,
+     "wrong_change_rate": 0.0
+    },
+    "tighten_helps": {
+     "changes_per_owner": 0.0,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.5,
+     "wrong_change_rate": 0.0
+    }
+   }
+  },
+  "guarded_ratchet": {
+   "loss": {
+    "equal(regret,cost,harm)": 0.2552,
+    "regret_only": 0.2353,
+    "regret_x3": 0.2472
+   },
+   "per_scenario": {
+    "big_tighten_needed": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.0028,
+     "wrong_change_rate": 0.0
+    },
+    "drift": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.1595,
+     "harm": 0.0227,
+     "regret": 0.609,
+     "wrong_change_rate": 0.3083
+    },
+    "flat_loosen_ok": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.9255,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 1.0
+    },
+    "monotone_all_help": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 0.0
+    },
+    "rounds_useless": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.9976,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 0.6667
+    },
+    "start_is_optimal": {
+     "changes_per_owner": 2.75,
+     "cost_excess": 0.6156,
+     "harm": 0.6231,
+     "regret": 0.891,
+     "wrong_change_rate": 1.0
+    },
+    "stationary_flat": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 1.0,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 1.0
+    },
+    "tighten_harms": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.1483,
+     "harm": 0.0722,
+     "regret": 0.6148,
+     "wrong_change_rate": 0.3333
+    },
+    "tighten_helps": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.2078,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 0.3333
+    }
+   }
+  },
+  "measured_v2": {
+   "loss": {
+    "equal(regret,cost,harm)": 0.1545,
+    "regret_only": 0.2902,
+    "regret_x3": 0.2088
+   },
+   "per_scenario": {
+    "big_tighten_needed": {
+     "changes_per_owner": 1.35,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.2956,
+     "wrong_change_rate": 0.0
+    },
+    "drift": {
+     "changes_per_owner": 0.825,
+     "cost_excess": 0.0044,
+     "harm": 0.049,
+     "regret": 0.6229,
+     "wrong_change_rate": 0.0909
+    },
+    "flat_loosen_ok": {
+     "changes_per_owner": 0.25,
+     "cost_excess": 0.2191,
+     "harm": 0.0237,
+     "regret": 0.0245,
+     "wrong_change_rate": 1.0
+    },
+    "monotone_all_help": {
+     "changes_per_owner": 1.1,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.3822,
+     "wrong_change_rate": 0.0
+    },
+    "rounds_useless": {
+     "changes_per_owner": 0.5,
+     "cost_excess": 0.3412,
+     "harm": 0.0,
+     "regret": 0.3554,
+     "wrong_change_rate": 0.35
+    },
+    "start_is_optimal": {
+     "changes_per_owner": 0.1,
+     "cost_excess": 0.0098,
+     "harm": 0.0883,
+     "regret": 0.0733,
+     "wrong_change_rate": 1.0
+    },
+    "stationary_flat": {
+     "changes_per_owner": 0.275,
+     "cost_excess": 0.7857,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 0.9091
+    },
+    "tighten_harms": {
+     "changes_per_owner": 0.325,
+     "cost_excess": 0.0026,
+     "harm": 0.0351,
+     "regret": 0.5455,
+     "wrong_change_rate": 0.1538
+    },
+    "tighten_helps": {
+     "changes_per_owner": 0.775,
+     "cost_excess": 0.0016,
+     "harm": 0.0,
+     "regret": 0.3122,
+     "wrong_change_rate": 0.0323
+    }
+   }
+  },
+  "oracle_best_fixed_setting": {
+   "big_tighten_needed": {
+    "best_fixed": [
+     2,
+     3
+    ],
+    "q": 1.0,
+    "q_at_start": 0.6
+   },
+   "drift": {
+    "best_fixed": [
+     2,
+     3
+    ],
+    "q": 0.68,
+    "q_at_start": 0.62
+   },
+   "flat_loosen_ok": {
+    "best_fixed": [
+     0,
+     1
+    ],
+    "q": 0.7,
+    "q_at_start": 0.7
+   },
+   "monotone_all_help": {
+    "best_fixed": [
+     2,
+     3
+    ],
+    "q": 0.89,
+    "q_at_start": 0.63
+   },
+   "rounds_useless": {
+    "best_fixed": [
+     2,
+     0
+    ],
+    "q": 0.66,
+    "q_at_start": 0.63
+   },
+   "start_is_optimal": {
+    "best_fixed": [
+     1,
+     1
+    ],
+    "q": 0.82,
+    "q_at_start": 0.82
+   },
+   "stationary_flat": {
+    "best_fixed": [
+     0,
+     0
+    ],
+    "q": 0.7,
+    "q_at_start": 0.7
+   },
+   "tighten_harms": {
+    "best_fixed": [
+     0,
+     3
+    ],
+    "q": 0.74,
+    "q_at_start": 0.61
+   },
+   "tighten_helps": {
+    "best_fixed": [
+     2,
+     2
+    ],
+    "q": 0.76,
+    "q_at_start": 0.63
+   }
+  },
+  "ratchet_v1": {
+   "loss": {
+    "equal(regret,cost,harm)": 0.2705,
+    "regret_only": 0.2467,
+    "regret_x3": 0.261
+   },
+   "per_scenario": {
+    "big_tighten_needed": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.0026,
+     "wrong_change_rate": 0.0
+    },
+    "drift": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.16,
+     "harm": 0.0217,
+     "regret": 0.6087,
+     "wrong_change_rate": 0.3333
+    },
+    "flat_loosen_ok": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.9333,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 1.0
+    },
+    "monotone_all_help": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.0,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 0.0
+    },
+    "rounds_useless": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 1.0,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 0.6667
+    },
+    "start_is_optimal": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.7059,
+     "harm": 0.8364,
+     "regret": 1.0,
+     "wrong_change_rate": 1.0
+    },
+    "stationary_flat": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 1.0,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 1.0
+    },
+    "tighten_harms": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.16,
+     "harm": 0.0578,
+     "regret": 0.6087,
+     "wrong_change_rate": 0.3333
+    },
+    "tighten_helps": {
+     "changes_per_owner": 3.0,
+     "cost_excess": 0.2083,
+     "harm": 0.0,
+     "regret": 0.0,
+     "wrong_change_rate": 0.3333
+    }
+   }
+  }
+ },
+ "shipped_decoder_v1_observed": {
+  "children_before_forgetting_the_idea": 4,
+  "closed_after_one_cancelled_rest_done": false,
+  "context_copy_of_stage_data_kept_on_the_idea": [
+   "choices",
+   "plan",
+   "shape"
+  ],
+  "forgotten_task_still_listed_as_child": true,
+  "idea_status_after_that": "exploring",
+  "orphans_after_forgetting_the_idea": 4,
+  "plan_tasks": 2,
+  "public_consistency_functions": [],
+  "stage_after_forgetting_a_task": "plan",
+  "tasks_with_a_blocks_link": 0
+ }
+}
