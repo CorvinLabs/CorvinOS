@@ -228,13 +228,16 @@ def _dispatch(tenant_id: str, sub: str, arg: str, *, channel: str, uid: str, dis
         e = _find(store, arg)
         if e is None:
             return "No such entry."
+        from . import consistency  # noqa: PLC0415
         fp = f"{e.get('key')} {e['title']}" if e.get("key") else e["title"]
+        drafts = consistency.drafts_of(store, e)
         store.forget(e["uid"], fingerprint=fp)
         capture.note_owner_action(store, e, "forget")
-        from . import consistency  # noqa: PLC0415
         with contextlib.suppress(Exception):   # prune the decoder's pointers to what was forgotten (ADR-2329)
             consistency.run_sweep(store)
-        return f"Forgot {e.get('display_id') or 'the entry'}."
+        gone = sum(1 for d in drafts if store.get(d) is None)
+        extra = f" and {gone} untouched draft{'s' if gone != 1 else ''} made for it" if gone else ""
+        return f"Forgot {e.get('display_id') or 'the entry'}{extra}."
     if sub == "auto":
         on = arg.lower() == "on"
         if arg.lower() not in ("on", "off"):

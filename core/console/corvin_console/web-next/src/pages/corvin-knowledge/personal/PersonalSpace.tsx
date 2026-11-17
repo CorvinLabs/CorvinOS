@@ -127,7 +127,7 @@ function NeedsYourLook({ csrf, onChanged }: { csrf: string; onChanged: () => voi
   const fail = (e: unknown) => setMsg(errText(e, "That did not work."));
   const ack = useMutation({ mutationFn: (i: pk.ReviewItem) => pk.acknowledgePair(i.uid, i.other_uid ?? "", csrf), onSuccess: after, onError: fail });
   const keep = useMutation({ mutationFn: (i: pk.ReviewItem) => pk.dismissReview(i.uid, "STUCK_REALIZATION", csrf), onSuccess: after, onError: fail });
-  const close = useMutation({ mutationFn: (i: pk.ReviewItem) => pk.updateEntity(i.uid, { status: "realized" }, csrf), onSuccess: after, onError: fail });
+  const close = useMutation({ mutationFn: (i: pk.ReviewItem) => pk.closeIdea(i.uid, csrf), onSuccess: after, onError: (e) => { fail(e); after(); } });
   if (q.isError) return <p className="text-xs text-muted-foreground">The consistency check could not run.</p>;
   const items = (q.data?.items ?? []).filter((i) => ["DUPLICATE_IDEAS", "STUCK_REALIZATION", "DECODER_STATE_LOST", "DUPLICATE_CHECK_CAPPED"].includes(i.code));
   if (!items.length) return null;
@@ -148,7 +148,7 @@ function NeedsYourLook({ csrf, onChanged }: { csrf: string; onChanged: () => voi
               <Button size="sm" variant="accent" disabled={!csrf || busy} onClick={() => close.mutate(i)}>Close as realized</Button>
               <Button size="sm" variant="ghost" disabled={!csrf || busy} onClick={() => keep.mutate(i)}>Keep it open</Button>
             </>}
-            {i.code === "DECODER_STATE_LOST" && <span className="text-muted-foreground">{name(i.display_id, i.title)} lost its development steps. Its notes and tasks are kept; develop it again to rebuild them.</span>}
+            {i.code === "DECODER_STATE_LOST" && <span className="text-muted-foreground">{name(i.display_id, i.title)} lost its development steps. Notes and tasks you changed are kept; developing it again replaces the drafts you never changed.</span>}
             {i.code === "DUPLICATE_CHECK_CAPPED" && <span className="text-muted-foreground">There are too many ideas to compare them all at once; the newest ones were compared first.</span>}
           </li>
         ))}
@@ -220,7 +220,9 @@ function Entries({ csrf, onChanged }: { csrf: string; onChanged: () => void }) {
                 {e.type === "idea" && <Button size="sm" variant="outline" onClick={() => setOpen(open === e.uid ? null : e.uid)}>{open === e.uid ? "Hide steps" : "Develop"}</Button>}
                 <Button size="sm" variant="outline" onClick={() => setEditing(editing === e.uid ? null : e.uid)}>{editing === e.uid ? "Close editor" : "Edit"}</Button>
                 <Button size="sm" variant="ghost" disabled={!csrf || forget.isPending}
-                  onClick={() => { if (window.confirm("Forget this entry for good? Corvin will not learn it again.")) forget.mutate(e.uid); }}>Forget</Button>
+                  onClick={() => { if (window.confirm(e.type === "idea"
+                    ? "Forget this idea for good? Corvin will not learn it again. The drafts its development steps made and you never changed go with it; notes and tasks you changed stay."
+                    : "Forget this entry for good? Corvin will not learn it again.")) forget.mutate(e.uid); }}>Forget</Button>
               </div>
               {e.body && <p className="text-sm text-muted-foreground whitespace-pre-wrap">{e.body}</p>}
               {editing === e.uid && <EntryEditor entry={e} csrf={csrf} onChanged={refresh} />}

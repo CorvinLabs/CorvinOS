@@ -31,7 +31,8 @@ export function DecoderPanel({ idea, csrf, onChanged }: { idea: pk.PersonalEntit
     onError: fail,
   });
   const obj = useMutation({
-    mutationFn: ({ i, action }: { i: number; action: "fix" | "dismiss" }) => pk.resolveObjection(idea.uid, i, action, csrf, reason[i] ?? ""),
+    mutationFn: ({ i, action, text }: { i: number; action: "fix" | "dismiss"; text: string }) =>
+      pk.resolveObjection(idea.uid, i, action, csrf, reason[i] ?? "", text),
     onSuccess: done, onError: fail,
   });
   if (q.isPending) return <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />;
@@ -51,19 +52,26 @@ export function DecoderPanel({ idea, csrf, onChanged }: { idea: pk.PersonalEntit
         ))}
         <span className="ml-auto text-muted-foreground">{pk.openIssuesLabel(Object.keys(d.gates ?? {}).length ? d.loss : null)} · {d.iterations}/5 revisions</span>
       </ol>
+      {q.data.critic_check?.last === "missed" && (
+        <p className="text-xs text-amber-700 dark:text-amber-300" data-testid="personal-critic-canary-missed">
+          The last test of the checker missed a problem planted on purpose. Read its remarks with extra care.
+        </p>
+      )}
       {Object.entries(d.gates).filter(([, g]) => !g.ok).map(([s, g]) => (
         <p key={s} className="text-xs text-amber-700 dark:text-amber-300">{pk.STAGE_LABELS[s]} is missing: {g.failures.join("; ")}</p>
       ))}
       {(() => {
         const { main, rest, earlier, done: resolved } = pk.splitObjections(d.objections, d.last_stage ?? d.stage);
-        const row = ([o, i]: [pk.DecoderObjection, number], loud: boolean) => (
+        // Remarks on an earlier step offer Dismiss only: reworking an earlier step replaces its drafts and uses a revision,
+        // which the Redo button asks about first.
+        const row = ([o, i]: [pk.DecoderObjection, number], loud: boolean, rework = true) => (
           <li key={i} className="flex flex-wrap items-center gap-2" data-testid={loud ? "personal-objection-main" : "personal-objection-other"}>
             <Badge variant={o.resolved ? "secondary" : loud ? "warn" : "outline"}>{o.category}</Badge>
             <span className={o.resolved ? "line-through text-muted-foreground" : loud ? "" : "text-muted-foreground"}>{o.text}</span>
             {!o.resolved && <>
-              <Button size="sm" variant="outline" disabled={!csrf || busy} onClick={() => obj.mutate({ i, action: "fix" })}>Rework this step</Button>
+              {rework && <Button size="sm" variant="outline" disabled={!csrf || busy} onClick={() => obj.mutate({ i, action: "fix", text: o.text })}>Rework this step</Button>}
               <Input className="h-8 max-w-[220px]" placeholder="Why it does not matter" value={reason[i] ?? ""} onChange={(e) => setReason({ ...reason, [i]: e.target.value })} />
-              <Button size="sm" variant="ghost" disabled={!csrf || busy || !(reason[i] ?? "").trim()} onClick={() => obj.mutate({ i, action: "dismiss" })}>Dismiss</Button>
+              <Button size="sm" variant="ghost" disabled={!csrf || busy || !(reason[i] ?? "").trim()} onClick={() => obj.mutate({ i, action: "dismiss", text: o.text })}>Dismiss</Button>
             </>}
           </li>
         );
@@ -80,9 +88,9 @@ export function DecoderPanel({ idea, csrf, onChanged }: { idea: pk.PersonalEntit
             <summary className="cursor-pointer text-xs text-muted-foreground">Open remarks on earlier steps ({earlier.length})</summary>
             <ul className="mt-2 space-y-2">{earlier.map((x) => (
               <li key={x[1]} className="space-y-1"><span className="text-xs text-muted-foreground">{pk.STAGE_LABELS[x[0].stage] ?? x[0].stage}</span>
-                <ul>{row(x, false)}</ul></li>))}</ul>
+                <ul>{row(x, false, false)}</ul></li>))}</ul>
           </details>}
-          {resolved.length > 0 && <ul className="space-y-1 text-xs">{resolved.map((x) => row(x, false))}</ul>}
+          {resolved.length > 0 && <ul className="space-y-1 text-xs">{resolved.map((x) => row(x, false, false))}</ul>}
         </>;
       })()}
       <div className="flex flex-wrap items-center gap-2">

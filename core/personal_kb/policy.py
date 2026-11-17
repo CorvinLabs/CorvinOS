@@ -130,7 +130,30 @@ def _apply(store: PersonalStore, target: dict[str, Any], *, event: str, cause: s
     params, deltas = _deltas(cur, target)
     audit.emit(event, tenant_id=store.tenant_id, owner_hash=store.owner_hash,
                policy_version=current_version(store) + 1, params=params, deltas=deltas, cause_code=cause)
-    return store.write_policy_version(target)
+    n = store.write_policy_version(target)
+    if not cause.startswith("owner"):
+        # An automatic change moves a waiting suggestion along; the owner's own edit or rollback leaves it stale, so its
+        # confirmation is refused as before (the owner has just decided about the policy themselves).
+        _rebase_pending(store, cur, target, n)
+    return n
+
+
+def _rebase_pending(store: PersonalStore, before: dict[str, Any], applied: dict[str, Any], version: int) -> None:
+    """A change applied directly (a lower plan-size cap, the owner's own edit) must not silently void a suggestion that
+    waits for the owner: the suggestion moves onto the new version, minus what the new policy already says. A brake
+    (rollback) drops it, as before."""
+    def _move(m: dict[str, Any]) -> None:
+        pend = m.get("policy_pending") or {}
+        if not pend:
+            return
+        # only what the suggestion itself changes (relative to the policy it was made on) moves along
+        own = {k: v for k, v in (pend.get("target") or {}).items() if k in ALLOWLIST and before.get(k) != v}
+        rest = {k: v for k, v in own.items() if applied.get(k) != v}
+        if not rest or m.get("frozen"):
+            m["policy_pending"] = None
+            return
+        m["policy_pending"] = dict(pend, base_version=version, target={**applied, **rest})
+    store.update_meta(_move)
 
 
 def _refuse(store: PersonalStore, params: str, cause: str, msg: str) -> None:

@@ -208,8 +208,11 @@ def _acknowledged(G: dict) -> set[frozenset[str]]:
 GRACE_S = 600.0   # a decoder step writes its drafts, then the idea; a sweep inside that window must not touch them
 
 
-def sweep(G: dict, now: float | None = None) -> list[Violation]:
+def sweep(G: dict, now: float | None = None, *, duplicates: bool = True) -> list[Violation]:
+    """``G["unreadable"]`` (optional) names entries that exist but cannot be read (a corrupt object): they count as
+    existing, so one flipped byte never makes the sweep delete the children of a still-recoverable idea."""
     ents = G["entities"]
+    known = set(ents) | set(G.get("unreadable") or ())
     found: list[Violation] = []
     derived_by_parent: dict[str, int] = {}
     for e in ents.values():
@@ -226,7 +229,7 @@ def sweep(G: dict, now: float | None = None) -> list[Violation]:
             continue
         for stage, uids in _pointers(idea).items():
             for u in uids:
-                if u not in ents:
+                if u not in known:
                     found.append(Violation("CHILD_MISSING", idea["uid"], "auto", f"{stage}:{u}"))
             if len(set(uids)) != len(uids):
                 found.append(Violation("CHILD_DUPLICATE", idea["uid"], "auto", stage))
@@ -244,12 +247,15 @@ def sweep(G: dict, now: float | None = None) -> list[Violation]:
     for e in ents.values():
         for ln in e.get("links") or []:
             to = ln.get("to")
-            if not is_local(to) or to in ents:
+            if not is_local(to) or to in known:
                 continue
             if ln.get("rel") == "derived_from" and e.get("origin") == "derived":
                 if untouched(e):
                     found.append(Violation("ORPHAN_CHILD", e["uid"], "auto", to))   # touched: standalone work, not a fault
-            elif ln.get("rel") not in KEEP_LINKS:
+            elif ln.get("rel") not in KEEP_LINKS and not untouched(e):
+                # An untouched decoder draft keeps its dangling link: rewriting it would bump its version and make it
+                # look owner-edited (a later redo would then keep it), and a plan being written has links to tasks
+                # that do not exist yet. The draft goes with its idea anyway.
                 found.append(Violation("DANGLING_LINK", e["uid"], "auto", f"{ln.get('rel')}->{to}"))
     for e in ents.values():     # an untouched derived draft that no current layer set points at (a crashed step left it)
         if e.get("origin") == "derived" and untouched(e) and (now is None or now - float(e.get("created") or 0) >= GRACE_S):
@@ -258,7 +264,7 @@ def sweep(G: dict, now: float | None = None) -> list[Violation]:
                 if parent is not None and parent["type"] == "idea" and parent.get("decoder") and e["uid"] not in {
                         u for us in _pointers(parent).values() for u in us}:
                     found.append(Violation("STRAY_DRAFT", e["uid"], "auto", parent["uid"]))
-    active = [i for i in ideas if i["status"] in ACTIVE_IDEA]
+    active = [i for i in ideas if i["status"] in ACTIVE_IDEA] if duplicates else []
     ack = _acknowledged(G)
     pairs, capped = _duplicates(active)
     if capped:
@@ -318,8 +324,21 @@ def _apply(H: dict, v: Violation) -> None:
 # ---- the live store ------------------------------------------------------------------------------------------------
 
 def _graph(store: Any) -> dict:
-    return {"entities": {e["uid"]: e for e in store.entries()},
+    index = {e["uid"]: e for e in store.entries()}
+    unreadable = set(getattr(store, "problems", {}) or {}) | {u for u in store.manifest.get("objects", {}) if u not in index}
+    return {"entities": index, "unreadable": unreadable,
             "meta": {"decoder_errors": list(store.meta.get("decoder_errors", []))}}
+
+
+def drafts_of(store: Any, entity: dict) -> list[str]:
+    """The untouched decoder drafts that will go when this idea is forgotten (they become orphans and are removed)."""
+    if entity.get("type") != "idea":
+        return []
+    out = []
+    for e in store.entries():
+        if _parent(e) == entity["uid"] and untouched(e):
+            out.append(e["uid"])
+    return out
 
 
 def _running_ideas(store: Any) -> set[str]:
@@ -328,12 +347,41 @@ def _running_ideas(store: Any) -> set[str]:
         return {uid for (tid, oid, uid) in decoder._RUNNING if tid == store.tenant_id and oid == store.owner_id}
 
 
+def _parent(e: dict) -> str | None:
+    return next((ln.get("to") for ln in e.get("links") or [] if ln.get("rel") == "derived_from"), None)
+
+
+def _busy(v: Violation, G: dict, busy: set[str]) -> bool:
+    """An idea whose step runs in this process, or an entry made for it: left alone until the step is over."""
+    if v.uid in busy:
+        return True
+    e = G["entities"].get(v.uid)
+    return bool(e is not None and _parent(e) in busy)
+
+
+def _still(v: Violation, G: dict, now: float | None) -> bool:
+    """Re-check ONE violation on a fresh graph (cheap: no full sweep, no duplicate search)."""
+    ents, known = G["entities"], set(G["entities"]) | set(G.get("unreadable") or ())
+    e = ents.get(v.uid)
+    if v.code == "ORPHAN_CHILD":
+        return e is not None and untouched(e) and _parent(e) is not None and is_local(_parent(e)) and _parent(e) not in known
+    if v.code == "STRAY_DRAFT":
+        if e is None or not untouched(e) or (now is not None and now - float(e.get("created") or 0) < GRACE_S):
+            return False
+        parent = ents.get(_parent(e) or "")
+        return bool(parent and parent["type"] == "idea" and parent.get("decoder")
+                    and e["uid"] not in {u for us in _pointers(parent).values() for u in us})
+    return True
+
+
 def _apply_live(store: Any, v: Violation, now: float | None) -> bool:
-    """One auto fix on the live store, re-checked against the current entity and written against its version."""
-    from .store import NotFound, VersionConflict  # noqa: PLC0415
+    """One auto fix on the live store, re-checked on a fresh read and written against the version it read."""
+    from .model import ValidationError  # noqa: PLC0415
+    from .store import NotFound, StoreError, VersionConflict  # noqa: PLC0415
 
     G = _graph(store)
     ents = G["entities"]
+    known = set(ents) | set(G.get("unreadable") or ())
     try:
         if v.code in ("CHILD_MISSING", "CHILD_DUPLICATE", "STAGE_CURSOR"):
             idea = ents.get(v.uid)
@@ -344,9 +392,11 @@ def _apply_live(store: Any, v: Violation, now: float | None) -> bool:
             for k, uids in list(ch.items()):
                 seen: list[str] = []
                 for u in uids if isinstance(uids, list) else []:
-                    if u in ents and u not in seen:
+                    if u in known and u not in seen:
                         seen.append(u)
                 ch[k] = seen
+                if not seen and isinstance(st.get("context"), dict):
+                    st["context"].pop(k, None)     # the layer is gone: so is the decoder's cached copy of its text
             st["children"] = ch
             probe = dict(idea, decoder=st)
             cur = st.get("stage", "seed")
@@ -360,46 +410,50 @@ def _apply_live(store: Any, v: Violation, now: float | None) -> bool:
             return True
         if v.code in ("ORPHAN_CHILD", "STRAY_DRAFT"):
             e = ents.get(v.uid)
-            if e is None or not untouched(e):
+            if e is None or not _still(v, G, now):
                 return False
-            fresh = [x for x in sweep(G, now) if x.code == v.code and x.uid == v.uid]
-            if not fresh:
-                return False
-            store.forget(v.uid)
+            store.forget(v.uid, expected_version=e["version"])
             return True
         if v.code == "DANGLING_LINK":
             e = ents.get(v.uid)
-            if e is None:
+            if e is None or untouched(e):
                 return False
-            keep = [ln for ln in e.get("links") or [] if not is_local(ln.get("to")) or ln.get("to") in ents or ln.get("rel") in KEEP_LINKS]
+            keep = [ln for ln in e.get("links") or [] if not is_local(ln.get("to")) or ln.get("to") in known or ln.get("rel") in KEEP_LINKS]
             if keep == (e.get("links") or []):
                 return False
             store.put(dict(e, links=keep), expected_version=e["version"], now=now)
             return True
         if v.code == "LEDGER_GHOST":
-            live = set(ents)
             store.update_meta(lambda m: m.__setitem__(
-                "decoder_errors", [x for x in m.get("decoder_errors", []) if x.get("u") in live]))
+                "decoder_errors", [x for x in m.get("decoder_errors", []) if x.get("u") in known]))
             return True
     except (VersionConflict, NotFound):
         return False          # a concurrent writer won; the next sweep looks again
+    except (StoreError, ValidationError):
+        return False          # one fix that cannot be written (a full store) never stops the others
     return False
+
+
+_DELETE_FIRST = {"ORPHAN_CHILD": 0, "STRAY_DRAFT": 0, "LEDGER_GHOST": 1, "CHILD_MISSING": 2, "CHILD_DUPLICATE": 2,
+                 "STAGE_CURSOR": 2, "DANGLING_LINK": 3}
 
 
 def run_sweep(store: Any, *, now: float | None = None, apply: bool = True) -> dict[str, Any]:
     """Sweep the owner's store; with ``apply`` heal what is derivable, to a fixpoint. Returns a content-free report
-    plus the review items (uids and codes only, for the owner's own session)."""
+    plus the review items (uids and codes only, for the owner's own session). Deletions run first (they free space),
+    the heal passes skip the duplicate search, and an idea whose step runs in this process is left alone."""
     import time as _time  # noqa: PLC0415
     from . import audit  # noqa: PLC0415
 
     ts = _time.time() if now is None else now
     store.reload_if_changed()
     fixed = 0
-    for _ in range(MAX_HEAL_PASSES if apply else 1):
+    for _ in range(MAX_HEAL_PASSES if apply else 0):
         busy = _running_ideas(store)
-        found = sweep(_graph(store), ts)
-        todo = [v for v in found if v.fix == "auto" and v.uid not in busy]
-        if not apply or not todo:
+        G = _graph(store)
+        todo = sorted((v for v in sweep(G, ts, duplicates=False) if v.fix == "auto" and not _busy(v, G, busy)),
+                      key=lambda v: _DELETE_FIRST.get(v.code, 9))
+        if not todo:
             break
         progressed = False
         for v in todo:

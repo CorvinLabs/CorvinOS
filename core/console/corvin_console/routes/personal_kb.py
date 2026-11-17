@@ -99,12 +99,19 @@ def _open_default(rec: Any, request: Request, response: Response) -> tuple[Any, 
     return entry, token
 
 
+_OPEN_HEALED: dict[str, int] = {}
+
+
 def _sweep_on_open(entry: Any, token: str) -> None:
-    """The full consistency sweep when a session opens the space (ADR-2329 item 7). It never blocks the opening."""
+    """The full consistency sweep when a session opens the space (ADR-2329 item 7). It never blocks the opening; how
+    much it healed is kept for this session's ``GET /consistency`` (``healed_on_open``)."""
     from core.personal_kb import consistency
 
     with contextlib.suppress(Exception):
-        consistency.run_sweep(_store_for(entry, token))
+        r = consistency.run_sweep(_store_for(entry, token))
+        if len(_OPEN_HEALED) > 1000:
+            _OPEN_HEALED.clear()
+        _OPEN_HEALED[hashlib.sha256(token.encode()).hexdigest()] = int(r.get("healed", 0))
 
 
 def entry_or_default(rec: Any, request: Request, response: Response, token: str | None) -> tuple[Any, str]:
@@ -246,6 +253,7 @@ class ObjectionBody(BaseModel):
     index: int
     action: str = Field(max_length=10)
     reason: str = Field(default="", max_length=300)
+    expect: str | None = Field(default=None, max_length=200)   # the first words of the remark the owner saw
 
 
 class PolicyEdit(BaseModel):
@@ -480,16 +488,18 @@ async def forget_entity(uid: str, response: Response, u: Annotated[Unlocked, Dep
     _no_store(response)
     s = await _store(u)
 
-    def _do():
+    def _do() -> int:
         e = s.get(uid)
         if e is None:
             raise KeyError(uid)
+        drafts = consistency.drafts_of(s, e)          # an idea's untouched drafts go with it (announced, counted)
         s.forget(uid, fingerprint=(f"{e.get('key')} {e['title']}" if e.get("key") else e["title"]))
         capture.note_owner_action(s, e, "forget")
         with contextlib.suppress(Exception):          # a forgotten layer note or task: prune the decoder's pointers
             consistency.run_sweep(s)
-    await _run(_do)
-    return {"forgotten": True}
+        return sum(1 for d in drafts if s.get(d) is None)
+    removed = await _run(_do)
+    return {"forgotten": True, "drafts_removed": removed}
 
 
 @router.post("/entities/{uid}/restore")
@@ -604,7 +614,9 @@ async def decoder_state(uid: str, response: Response, u: Annotated[Unlocked, Dep
         raise HTTPException(status_code=404, detail="not available")
     st = views.entity_public(e).get("decoder") or {"stage": "seed", "loss": 0.0, "iterations": 0, "gates": {},
                                                    "objections": [], "children": {}}
-    return {"idea": views.entity_public(e), "decoder": st, "next_stage": decoder.next_stage(e)}
+    cc = s.meta.get("critic_canary") or {}
+    return {"idea": views.entity_public(e), "decoder": st, "next_stage": decoder.next_stage(e),
+            "critic_check": {"runs": int(cc.get("runs", 0)), "missed": int(cc.get("missed", 0)), "last": cc.get("last")}}
 
 
 def _result(r: Any) -> dict[str, Any]:
@@ -630,7 +642,7 @@ async def objection(uid: str, body: ObjectionBody, response: Response, u: Annota
 
     _no_store(response)
     s = await _store(u)
-    r = await _run(decoder.resolve_objection, s, uid, body.index, body.action, reason=body.reason)
+    r = await _run(decoder.resolve_objection, s, uid, body.index, body.action, reason=body.reason, expect=body.expect)
     return _result(r) if r is not None else {"dismissed": True}
 
 
@@ -657,6 +669,11 @@ class AcknowledgeBody(BaseModel):
 
 
 DISMISSIBLE = ("STUCK_REALIZATION",)
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
+def _bad(code: int, msg: str) -> HTTPException:
+    return HTTPException(status_code=code, detail=msg, headers=_NO_STORE)
 
 
 def _review_view(s: Any, report: dict[str, Any]) -> dict[str, Any]:
@@ -673,12 +690,15 @@ def _review_view(s: Any, report: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("/consistency")
 async def consistency_report(response: Response, u: Annotated[Unlocked, Depends(_unlocked)]) -> dict[str, Any]:
-    """What needs the owner's look (read only: nothing is healed by a GET)."""
+    """What needs the owner's look. This GET heals nothing itself; the maintenance sweep runs when a session OPENS the
+    space (its count is in ``healed_on_open``) and after every decoder step and forget."""
     from core.personal_kb import consistency
 
     _no_store(response)
     s = await _store(u)
-    return _review_view(s, await _run(consistency.run_sweep, s, apply=False))
+    out = _review_view(s, await _run(consistency.run_sweep, s, apply=False))
+    out["healed_on_open"] = _OPEN_HEALED.get(hashlib.sha256((u.token or "").encode()).hexdigest(), 0)
+    return out
 
 
 @router.post("/consistency/sweep")
@@ -700,21 +720,41 @@ async def dismiss_review(uid: str, body: DismissBody, response: Response, u: Ann
 
     _no_store(response)
     if body.code not in DISMISSIBLE:
-        raise HTTPException(status_code=400, detail="this item cannot be dismissed")
+        raise _bad(400, "this item cannot be dismissed")
     s = await _store(u)
 
     def _do():
         e = s.get(uid)
         if e is None or e["type"] != "idea" or not e.get("decoder"):
-            raise KeyError(uid)
+            raise _bad(404, "not available")
         st = dict(e["decoder"])
+        if body.code in (st.get("dismissed") or []):
+            return {"dismissed": body.code}            # already: no new version, no 409 for other tabs
         st["dismissed"] = sorted(set(st.get("dismissed") or []) | {body.code})
         try:
             s.put(dict(e, decoder=st), expected_version=e["version"])
         except VersionConflict:
-            raise HTTPException(status_code=409, detail="the idea changed meanwhile; try again") from None
+            raise _bad(409, "the idea changed meanwhile; try again") from None
         return {"dismissed": body.code}
     return await _run(_do)
+
+
+@router.post("/ideas/{uid}/decoder/close")
+async def close_idea(uid: str, response: Response, u: Annotated[Unlocked, Depends(_unlocked)],
+                     _c: Annotated[Any, Depends(require_csrf)]) -> dict[str, Any]:
+    """"Close as realized": allowed only while the idea's CURRENT plan is finished (checked again here)."""
+    from core.personal_kb import decoder
+
+    _no_store(response)
+    s = await _store(u)
+    e = s.get(uid)
+    if e is None or e["type"] != "idea":
+        raise _bad(404, "not available")
+    try:
+        await asyncio.to_thread(decoder.close_idea, s, uid)
+    except decoder.DecoderError as exc:
+        raise _bad(409, str(exc)) from None
+    return {"closed": True}
 
 
 @router.post("/consistency/acknowledge")
@@ -726,16 +766,22 @@ async def acknowledge_pair(body: AcknowledgeBody, response: Response, u: Annotat
     _no_store(response)
     s = await _store(u)
 
+    if body.a == body.b:
+        raise _bad(400, "two different ideas are needed")
+
     def _do():
         a, b = s.get(body.a), s.get(body.b)
-        if a is None or b is None or a["type"] != "idea" or b["type"] != "idea" or a["uid"] == b["uid"]:
-            raise KeyError(body.a)
-        if any(ln.get("to") == b["uid"] for ln in a.get("links") or []):
-            return {"acknowledged": True}
+        if a is None or b is None:
+            raise _bad(404, "not available")
+        if a["type"] != "idea" or b["type"] != "idea":
+            raise _bad(400, "only two ideas can be marked as different")
+        if any(ln.get("to") == b["uid"] for ln in a.get("links") or []) or \
+                any(ln.get("to") == a["uid"] for ln in b.get("links") or []):
+            return {"acknowledged": True}               # either direction already says so
         try:
             s.put(dict(a, links=list(a.get("links") or []) + [{"rel": "related", "to": b["uid"]}]), expected_version=a["version"])
         except VersionConflict:
-            raise HTTPException(status_code=409, detail="the idea changed meanwhile; try again") from None
+            raise _bad(409, "the idea changed meanwhile; try again") from None
         return {"acknowledged": True}
     return await _run(_do)
 

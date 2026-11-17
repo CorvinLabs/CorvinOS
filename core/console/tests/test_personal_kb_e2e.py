@@ -407,6 +407,35 @@ class PersonalKbHttpE2E(unittest.TestCase):
         self.assertIn("personal_kb.decoder_swept", chain)
         self.assertNotIn("Balcony herbs", chain)
 
+    def test_v2_review_fixes_over_http(self):
+        self._fake_engine()
+        idea, st = self._planned_idea("Clean the attic")
+        # close is refused while the current plan is open, allowed once it is finished (checked again server-side)
+        r = self.a.post(f"/personal/ideas/{idea['uid']}/decoder/close")
+        self.assertEqual((r.status_code, r.headers.get("cache-control")), (409, "no-store"))
+        # acknowledge: 400 for the same uid or a non-idea, idempotent in either direction
+        a = self.a.post("/personal/entities", json={"type": "idea", "title": "Plant tulips by the gate"}).json()
+        b = self.a.post("/personal/entities", json={"type": "idea", "title": "Plant tulips by the gate again"}).json()
+        self.assertEqual(self.a.post("/personal/consistency/acknowledge", json={"a": a["uid"], "b": a["uid"]}).status_code, 400)
+        self.assertEqual(self.a.post("/personal/consistency/acknowledge", json={"a": a["uid"], "b": st["children"]["plan"][0]}).status_code, 400)
+        self.assertEqual(self.a.post("/personal/consistency/acknowledge", json={"a": a["uid"], "b": b["uid"]}).status_code, 200)
+        v = self.a.get(f"/personal/entities/{b['uid']}").json()["version"]
+        self.assertEqual(self.a.post("/personal/consistency/acknowledge", json={"a": b["uid"], "b": a["uid"]}).status_code, 200)
+        self.assertEqual(self.a.get(f"/personal/entities/{b['uid']}").json()["version"], v)       # no second, reciprocal link
+        # dismiss twice: one write
+        v0 = self.a.get(f"/personal/entities/{idea['uid']}").json()["version"]
+        for _ in range(2):
+            self.assertEqual(self.a.post(f"/personal/ideas/{idea['uid']}/decoder/dismiss", json={"code": "STUCK_REALIZATION"}).status_code, 200)
+        self.assertEqual(self.a.get(f"/personal/entities/{idea['uid']}").json()["version"], v0 + 1)
+        # a remark is resolved only with the text the owner saw
+        r = self.a.post(f"/personal/ideas/{idea['uid']}/decoder/objection", json={"index": 0, "action": "dismiss", "reason": "x", "expect": "not this"})
+        self.assertEqual(r.status_code, 400)
+        # forgetting the idea names the untouched drafts that went with it
+        r = self.a.delete(f"/personal/entities/{idea['uid']}")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["drafts_removed"], 5)                                           # shape, choices, 3 tasks
+        self.assertEqual([e for e in self.a.get("/personal/entities").json()["entities"] if e["title"].startswith(("Shape:", "Choices:"))], [])
+
     def test_v2_knob_changes_are_proposed_not_applied(self):
         bad = {"goal": "", "boundaries": [], "why_now": "", "success": ""}
         self._fake_engine(shape=bad)

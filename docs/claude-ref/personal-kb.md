@@ -176,22 +176,34 @@ changed meanwhile (an edit in another tab, the other process) is discarded with 
 - **Closing rule** (`decoder.closing_rule`): an idea closes when every task of its current plan is terminal and one is done
   (one cancelled task no longer keeps it open forever). A failure after the drafts were written removes them, whatever the
   error (not only a version conflict).
-- **Loss** = failed mechanical checks plus find-first duplicates. Objections are advice with the critic's `rank`; the console
-  shows the first open one of the last step as the main point, the others quietly. `/personal unfold` replies with the
-  issue count and the remark count apart. Fix/dismiss verdicts are counted per category in `meta.critic_verdicts` (not used).
+- **Loss** = failed mechanical checks plus find-first duplicates. Objections are advice with the critic's `rank`, one
+  ranking across all critic rounds, at most three in total; the console shows the first open one of the last step as the
+  main point, the others of that step quietly, open remarks of earlier steps apart (Dismiss only: reworking an earlier step
+  goes through Redo, which asks first). A remark is resolved only with its text (`expect`), so a stale panel cannot act on
+  a different one. `/personal unfold` replies with the issue count and the remark count apart. Fix/dismiss verdicts are
+  counted per category in `meta.critic_verdicts` (not used).
+- **Canary.** Every tenth plan step the critic also checks a copy of the plan with a task planted twice; the result is
+  counted in `meta.critic_canary` (never in the idea) and a miss shows a warning in the decoder panel. It is booked on the
+  daily budget and skipped when there is no room.
 - **Sweep and heal** (`consistency.run_sweep`): after every decoder step, after every forget (console and `/personal forget`)
-  and when a console session opens the space. Model-free. It prunes pointers to missing entities, lowers a cursor standing
-  on a layer with no live entity (never raises one), removes dangling local links, untouched orphans and untouched stray
-  drafts older than 10 minutes, and ghosts in the error ledger; it skips an idea whose step is running and writes every
-  change against the version it read. It never writes an idea's status, never removes `derived_from`, `promoted_to` or a
+  and when a console session opens the space (`GET /personal/consistency` itself heals nothing; it reports what opening
+  healed as `healed_on_open`). Model-free. It prunes pointers to missing entities (and the cached text of a layer that is
+  gone), lowers a cursor standing on a layer with no live entity (never raises one), removes dangling local links from
+  entries that are not untouched drafts, untouched orphans and untouched stray drafts older than 10 minutes, and ghosts in
+  the error ledger. Unreadable (corrupt) entries count as existing, so one damaged idea never loses its children. It skips
+  an idea whose step runs in this process and every entry made for it, deletes only against the version it read
+  (`store.forget(expected_version=...)`), does deletions first, and one fix that cannot be written never stops the others.
+  Forgetting an idea removes its untouched drafts and says so (`drafts_removed`, the bridge reply, the confirm dialog). It never writes an idea's status, never removes `derived_from`, `promoted_to` or a
   `kb:`/`legacy:` reference, never touches an entry the owner changed. Judgement calls are review items:
   `GET /personal/consistency` (read only), `POST /personal/consistency/sweep`, near-duplicate ideas ("They are different" =
-  `POST /personal/consistency/acknowledge`, a `related` link), a finished but open plan ("Close as realized" or "Keep it
-  open" = `POST /personal/ideas/{uid}/decoder/dismiss`, code `STUCK_REALIZATION` only), decoder state lost, a capped
-  duplicate check. The console shows them in "Needs your look" on the Entries tab, only when there is something.
+  `POST /personal/consistency/acknowledge`, a `related` link, idempotent in either direction), a finished but open plan
+  ("Close as realized" = `POST /personal/ideas/{uid}/decoder/close`, which checks the CURRENT plan again; "Keep it open" =
+  `POST /personal/ideas/{uid}/decoder/dismiss`, code `STUCK_REALIZATION` only, until the plan is redone), decoder state
+  lost, a capped duplicate check. The console shows them in "Needs your look" on the Entries tab, only when there is something.
 - **Learning.** Template strictness, critic rounds and "too big" changes from the outer loop are proposals
   (`policy.propose(..., require_confirmation=True)`), never applied without the owner; a second suggestion joins the
-  waiting one instead of replacing it. The plan size (`decoder_task_cap`) is estimated from what the owner finished of each
+  waiting one instead of replacing it, and an automatic change (a lower cap) moves the waiting one onto the new version
+  instead of voiding it (an owner's own edit still voids it). The plan size (`decoder_task_cap`) is estimated from what the owner finished of each
   closed plan (prior 6, headroom 1.25, finishing everything counts as "at least one more"); a lower cap applies, a higher
   one waits like every loosening. Audit (counts only): `personal_kb.decoder_swept`, `personal_kb.decoder_proposal`.
 - Evidence: `tests/personal_kb/decoder_v2/` (`run_eval.py`, the same module the product runs), `test_decoder_v2_eval.py`,

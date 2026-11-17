@@ -584,7 +584,7 @@ systems:
     callers:
       # automatic capture after a private bridge turn, and the owner's review in the console
       - core/personal_kb/bridge.py:86:capture.capture_turn
-      - core/console/corvin_console/routes/personal_kb.py:513:capture.review
+      - core/console/corvin_console/routes/personal_kb.py:523:capture.review
     readers:
       # every capture decision reads the owner's current policy (floor, cap, TTL, types)
       - core/personal_kb/capture.py:149:policy.current

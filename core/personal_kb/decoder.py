@@ -41,6 +41,9 @@ MAX_OBJECTIONS = 3
 # Regenerations with the gate failures as feedback (0 = the pre-LDD baseline, kept for the ablation
 # in tests/personal_kb/decoder_eval).
 REPAIR_ROUNDS = 1
+# The critic's canary (ADR-2329 item 5): on every CANARY_EVERY-th plan step the critic also checks a COPY of the plan
+# with a planted duplicate task. A canary it misses is shown as a warning; its remarks never reach the idea.
+CANARY_EVERY = 10
 
 Generate = Callable[[str, str], dict]  # (stage, prompt) -> parsed JSON
 
@@ -268,9 +271,9 @@ def _context(store: PersonalStore, st: dict) -> dict:
     for k in ("shape", "choices"):
         uids = (st.get("children") or {}).get(k) or []
         child = store.get(uids[0]) if uids else None
-        if uids and child is None:
-            continue
-        if child is not None and (child.get("origin") != "derived" or int(child.get("version", 0)) > 1):
+        if child is None:
+            continue        # no live layer note: its text was forgotten or never written; the cache must not revive it
+        if child.get("origin") != "derived" or int(child.get("version", 0)) > 1:
             out[k] = {"owner_text": _secret_free(str(child.get("body") or ""))[:2000]}
         elif k in (st.get("context") or {}):
             out[k] = st["context"][k]
@@ -392,9 +395,11 @@ def _unfold(store: PersonalStore, uid: str, *, stage: str | None, generate: Gene
         if not fails:
             break
     objections: list[dict[str, Any]] = []
+    kept = 0                       # one ranking across all critic rounds, MAX_OBJECTIONS in total
     for _ in range(rounds):
+        if kept >= MAX_OBJECTIONS:
+            break
         out = gen("adversarial", _prompt("adversarial", idea, ctx, [], pol, subject=data))
-        kept = 0
         for o in (out or {}).get("objections", []) if isinstance(out, dict) else []:
             if kept >= MAX_OBJECTIONS:
                 break
@@ -404,6 +409,8 @@ def _unfold(store: PersonalStore, uid: str, *, stage: str | None, generate: Gene
                                    "resolved": False, "stage": target, "rank": kept})
     # The loss is mechanical: failed gate checks and find-first duplicates. Objections are advice, never counted: the real
     # critic returns three of them on every plan, so their number carries no information (ADR-2329 item 5).
+    if target == "plan" and not fails and rounds > 0:
+        _maybe_canary(store, gen, idea, ctx, pol, data, ts)
     n_checks = len(checks) + len(dups)
     n_failed = len(fails) + len(dups)
     loss = round(n_failed / n_checks, 4) if n_checks else 0.0
@@ -419,20 +426,30 @@ def _unfold(store: PersonalStore, uid: str, *, stage: str | None, generate: Gene
     st["loss"] = loss
     st["checks"], st["failed"] = n_checks, n_failed
     st["last_stage"] = target
-    st.setdefault("metrics", {})[target] = {"checks": len(checks), "gate_failed": len(fails), "dups": len(dups)}
+    st.setdefault("metrics", {})[target] = {"checks": len(checks), "gate_failed": len(fails), "dups": len(dups),
+                                            "planned": len(data.get("tasks") or []) if target == "plan" and gate_ok else None}
     if rerun:
         st["iterations"] = int(st["iterations"]) + 1
     if gate_ok:
         st["stage"] = target
         st["children"][target] = created
         st["passed"] = sorted(set(_passed(st)) | {target}, key=STAGES.index)
+        if target == "plan":
+            st["dismissed"] = []   # "keep it open" was about the previous plan; a new plan may close again
     upd = dict(idea, decoder=st, status="exploring" if idea["status"] == "inbox" else idea["status"])
     try:
         store.put(upd, now=ts, expected_version=idea["version"])
     except BaseException as exc:
         # The idea was not written (changed meanwhile, store full, anything): drop this step's drafts so a retry does
-        # not double the plan (ADR-2329 change 4; before, only a VersionConflict cleaned up).
-        for cuid in created:
+        # not double the plan (ADR-2329 change 4; before, only a VersionConflict cleaned up). If the idea DID land (a
+        # later write in the same put failed, the store's repair kept the object), its pointers name the drafts: keep them.
+        landed = False
+        with contextlib.suppress(Exception):
+            store.reload_if_changed()
+            cur = store.get(uid)
+            landed = bool(cur and int(cur.get("version", 0)) > int(idea["version"])
+                          and set(created) & {u for us in ((cur.get("decoder") or {}).get("children") or {}).values() for u in us})
+        for cuid in ([] if landed else created):
             with contextlib.suppress(Exception):
                 store.forget(cuid)
         if isinstance(exc, VersionConflict):
@@ -479,8 +496,8 @@ def _write_stage(store: PersonalStore, idea: dict, stage: str, data: dict, ts: f
             for i in t.get("depends_on") or []:
                 if isinstance(i, int) and 0 <= i < j:
                     ents[i]["links"].append({"rel": "blocks", "to": ents[j]["uid"]})
-        for ent in ents:
-            created.append(store.put(ent, now=ts)["uid"])
+        for ent in reversed(ents):        # dependents first: a blocks link never points at a task not yet written
+            created.insert(0, store.put(ent, now=ts)["uid"])
         return created
     except BaseException:
         for cuid in created:
@@ -515,7 +532,8 @@ def _stage_loss(st: dict, stage: str) -> float:
 
 
 def resolve_objection(store: PersonalStore, uid: str, index: int, action: str, *, reason: str = "",
-                      generate: Generate | None = None, now: float | None = None) -> StageResult | None:
+                      generate: Generate | None = None, now: float | None = None,
+                      expect: str | None = None) -> StageResult | None:
     """``fix`` regenerates the stage with the objection as input; ``dismiss`` records the reason."""
     idea = store.get(uid)
     if idea is None:
@@ -524,6 +542,9 @@ def resolve_objection(store: PersonalStore, uid: str, index: int, action: str, *
     if not (0 <= index < len(st["objections"])):
         raise DecoderError("no such objection")
     obj = st["objections"][index]
+    if expect is not None and str(obj.get("text") or "")[:80] != str(expect)[:80]:
+        # a re-run reorders the list: a stale panel must not dismiss or rework a different remark
+        raise DecoderError("the remarks changed meanwhile; reload and try again")
     if action == "dismiss":
         if not reason.strip():
             raise DecoderError("say why you dismiss it")
@@ -544,6 +565,35 @@ def resolve_objection(store: PersonalStore, uid: str, index: int, action: str, *
         _count_verdict(store, str(obj.get("category") or ""), "fix")
         return result
     raise DecoderError("unknown action")
+
+
+def _maybe_canary(store: PersonalStore, gen: Generate, idea: dict, ctx: dict, pol: dict, data: dict, ts: float) -> None:
+    """Every CANARY_EVERY-th plan step: does the critic notice a task that is planted twice? Counted in meta, never in
+    the idea; skipped (not counted) when the daily budget has no room left."""
+    tasks = [t for t in data.get("tasks") or [] if isinstance(t, dict)]
+    if not tasks:
+        return
+    n = store.update_meta(lambda m: m.setdefault("critic_canary", {}).__setitem__(
+        "plan_steps", int(m["critic_canary"].get("plan_steps", 0)) + 1) or m["critic_canary"]["plan_steps"])
+    if n % max(1, CANARY_EVERY):
+        return
+    try:
+        _budget(store, 1, ts)
+    except DecoderError:
+        return
+    planted = dict(data, tasks=tasks + [dict(tasks[0])])
+    out = gen("adversarial", _prompt("adversarial", idea, ctx, [], pol, subject=planted))
+    title = _s(tasks[0].get("title")).lower()
+    found = any(isinstance(o, dict) and (o.get("category") == "duplicate" or (title and title in _s(o.get("text")).lower()))
+                for o in ((out or {}).get("objections") or [] if isinstance(out, dict) else []))
+
+    def _rec(m: dict) -> None:
+        c = m.setdefault("critic_canary", {})
+        c["runs"] = int(c.get("runs", 0)) + 1
+        c["missed"] = int(c.get("missed", 0)) + (0 if found else 1)
+        c["last"] = "found" if found else "missed"
+        c["at"] = ts
+    store.update_meta(_rec)
 
 
 def _count_verdict(store: PersonalStore, category: str, action: str) -> None:
@@ -592,6 +642,7 @@ def refresh_done(store: PersonalStore, uid: str) -> bool:
     st = _state(idea)
     planned = list(st["children"].get("plan") or [])
     tasks = [x for x in (store.get(t) for t in planned) if x is not None]
+    n_planned = max(len(planned), int(((st.get("metrics") or {}).get("plan") or {}).get("planned") or 0))
     if st["stage"] == "plan" and idea["status"] in ("inbox", "exploring") and closing_rule(tasks) \
             and "STUCK_REALIZATION" not in (st.get("dismissed") or []):
         st["stage"] = "done"
@@ -600,6 +651,28 @@ def refresh_done(store: PersonalStore, uid: str) -> bool:
         except VersionConflict:
             return False   # changed meanwhile; the next refresh closes it
         with contextlib.suppress(Exception):
-            evolve.record_plan_outcome(store, planned=len(planned), kept=sum(1 for x in tasks if x["status"] == "done"))
+            evolve.record_plan_outcome(store, planned=n_planned, kept=sum(1 for x in tasks if x["status"] == "done"))
         return True
     return False
+
+
+def close_idea(store: PersonalStore, uid: str) -> bool:
+    """The owner's "Close as realized": the closing rule is checked again on the CURRENT plan (a stale card must not
+    close an idea whose plan was redone meanwhile), and the plan-size estimator hears about it like any closed plan."""
+    idea = store.get(uid)
+    if idea is None or idea["type"] != "idea":
+        raise DecoderError("no such idea")
+    st = _state(idea)
+    tasks = [x for x in (store.get(t) for t in st["children"].get("plan") or []) if x is not None]
+    if idea["status"] not in ("inbox", "exploring") or st["stage"] not in ("plan", "done") or not closing_rule(tasks):
+        raise DecoderError("this idea's plan is not finished; reload")
+    st["stage"] = "done"
+    st["dismissed"] = []
+    try:
+        store.put(dict(idea, decoder=st, status="realized"), expected_version=idea["version"])
+    except VersionConflict:
+        raise DecoderError("the idea changed meanwhile; reload and try again") from None
+    n_planned = max(len(st["children"].get("plan") or []), int(((st.get("metrics") or {}).get("plan") or {}).get("planned") or 0))
+    with contextlib.suppress(Exception):
+        evolve.record_plan_outcome(store, planned=n_planned, kept=sum(1 for x in tasks if x["status"] == "done"))
+    return True

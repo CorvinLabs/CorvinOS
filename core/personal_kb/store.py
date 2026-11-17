@@ -424,12 +424,16 @@ class PersonalStore:
             self.index[uid] = ent
             return ent
 
-    def forget(self, uid: str, *, fingerprint: str | None = None) -> None:
-        """Hard-delete an entity and all its versions. *fingerprint*: a value to remember as forgotten."""
+    def forget(self, uid: str, *, fingerprint: str | None = None, expected_version: int | None = None) -> None:
+        """Hard-delete an entity and all its versions. *fingerprint*: a value to remember as forgotten.
+        *expected_version*: delete only if nobody wrote the entity since it was read (the consistency sweep passes it, so
+        a draft another process just edited is never removed on the strength of an older snapshot)."""
         with self._locked():
             rec = self.manifest["objects"].get(uid)
             if rec is None:
                 raise NotFound("no such entry")
+            if expected_version is not None and int(rec.get("version", 0)) != int(expected_version):
+                raise VersionConflict("entity changed since it was read")
             etype = (self.index.get(uid) or {}).get("type") or "note"
             audit.emit("personal_kb.entity_forgotten", tenant_id=self.tenant_id, owner_hash=self.owner_hash,
                        uid=uid, type=etype)

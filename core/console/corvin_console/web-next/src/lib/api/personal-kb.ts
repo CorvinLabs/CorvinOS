@@ -99,7 +99,7 @@ export const createEntity = (body: { type: EntityType; title: string; body?: str
 export const updateEntity = (uid: string, body: { title?: string; body?: string; status?: string; expected_version?: number }, csrf: string) =>
   api<PersonalEntity>(`${P}/entities/${encodeURIComponent(uid)}`, { method: "PATCH", csrf, body });
 export const forgetEntity = (uid: string, csrf: string) =>
-  api<{ forgotten: boolean }>(`${P}/entities/${encodeURIComponent(uid)}`, { method: "DELETE", csrf });
+  api<{ forgotten: boolean; drafts_removed?: number }>(`${P}/entities/${encodeURIComponent(uid)}`, { method: "DELETE", csrf });
 export const restoreEntity = (uid: string, version: number, csrf: string) =>
   api<PersonalEntity>(`${P}/entities/${encodeURIComponent(uid)}/restore`, { method: "POST", csrf, body: { version } });
 export const reviewEntity = (uid: string, action: "accept" | "edit" | "forget", csrf: string, new_title?: string) =>
@@ -111,11 +111,15 @@ export const transitionTask = (uid: string, to: string, csrf: string, extra: { r
   api<PersonalEntity>(`${P}/tasks/${encodeURIComponent(uid)}/transition`, { method: "POST", csrf, body: { to, ...extra } });
 
 export const getDecoder = (uid: string, signal?: AbortSignal) =>
-  api<{ idea: PersonalEntity; decoder: DecoderState; next_stage: string | null }>(`${P}/ideas/${encodeURIComponent(uid)}/decoder`, { signal });
+  api<{ idea: PersonalEntity; decoder: DecoderState; next_stage: string | null; critic_check?: { runs: number; missed: number; last: "found" | "missed" | null } }>(`${P}/ideas/${encodeURIComponent(uid)}/decoder`, { signal });
 export const unfoldIdea = (uid: string, csrf: string, stage?: string) =>
   api<StageResult>(`${P}/ideas/${encodeURIComponent(uid)}/unfold`, { method: "POST", csrf, body: { stage: stage ?? null }, timeoutMs: 600_000 });
-export const resolveObjection = (uid: string, index: number, action: "fix" | "dismiss", csrf: string, reason = "") =>
-  api<StageResult | { dismissed: boolean }>(`${P}/ideas/${encodeURIComponent(uid)}/decoder/objection`, { method: "POST", csrf, body: { index, action, reason }, timeoutMs: 600_000 });
+/** ``expect`` = the text of the remark the owner is looking at: the server refuses if the list changed meanwhile. */
+export const resolveObjection = (uid: string, index: number, action: "fix" | "dismiss", csrf: string, reason = "", expect?: string) =>
+  api<StageResult | { dismissed: boolean }>(`${P}/ideas/${encodeURIComponent(uid)}/decoder/objection`, { method: "POST", csrf, body: { index, action, reason, expect: expect?.slice(0, 80) }, timeoutMs: 600_000 });
+/** "Close as realized": the server checks again that the idea's current plan is finished. */
+export const closeIdea = (uid: string, csrf: string) =>
+  api<{ closed: boolean }>(`${P}/ideas/${encodeURIComponent(uid)}/decoder/close`, { method: "POST", csrf });
 export const revisitTask = (ideaUid: string, taskUid: string, category: string, csrf: string) =>
   api<StageResult | { revisit: null }>(`${P}/ideas/${encodeURIComponent(ideaUid)}/decoder/revisit`, { method: "POST", csrf, body: { task_uid: taskUid, category }, timeoutMs: 600_000 });
 
@@ -126,7 +130,7 @@ export interface ReviewItem {
   other_uid?: string | null; other_display_id?: string | null; other_title?: string;
 }
 export const getConsistency = (signal?: AbortSignal) =>
-  api<{ items: ReviewItem[]; healed: number; auto_left: number }>(`${P}/consistency`, { signal });
+  api<{ items: ReviewItem[]; healed: number; auto_left: number; healed_on_open?: number }>(`${P}/consistency`, { signal });
 export const dismissReview = (ideaUid: string, code: string, csrf: string) =>
   api<{ dismissed: string }>(`${P}/ideas/${encodeURIComponent(ideaUid)}/decoder/dismiss`, { method: "POST", csrf, body: { code } });
 export const acknowledgePair = (a: string, b: string, csrf: string) =>
