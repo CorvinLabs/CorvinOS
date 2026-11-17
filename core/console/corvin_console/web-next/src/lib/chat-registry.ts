@@ -12,7 +12,7 @@
 
 import { parseTurnUsage, type TurnUsage } from "@/lib/turn-usage";
 import { parseTurnOutcome, type TurnOutcome } from "@/lib/turn-outcome";
-import { useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import { emitCCCEvent } from "./ccc-bus";
 import { getBool, PREF_KEYS } from "./preferences";
 import {
@@ -1460,10 +1460,13 @@ export function subscribeEvents(sid: string, fn: (evt: StreamEvent) => void): ()
  * Does NOT manage the WS lifecycle — call ensureConnected separately.
  */
 export function useChatSession(sid: string): SessionState {
-  return useSyncExternalStore(
-    (fn) => subscribeState(sid, fn),
-    () => getSessionState(sid)
-  );
+  // Stable per sid. An inline subscribe has a new identity on every render, so React
+  // unsubscribes and resubscribes after each commit and re-checks the snapshot there; a
+  // streamed delta replaces the snapshot between a render and that check and forces another
+  // synchronous render. Under load that chain does not end (React error #185).
+  const subscribe = useCallback((fn: () => void) => subscribeState(sid, fn), [sid]);
+  const getSnapshot = useCallback(() => getSessionState(sid), [sid]);
+  return useSyncExternalStore(subscribe, getSnapshot);
 }
 
 // ── Test utilities ─────────────────────────────────────────────────────────────

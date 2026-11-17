@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { Markdown } from "@/components/markdown";
 import { BackgroundActivity } from "@/components/chat/BackgroundActivity";
+import { MessageRowsBoundary } from "@/components/chat/MessageRowsBoundary";
 import { WdatAuditPanel } from "@/components/WdatAuditPanel";
 import { DualTrackAuditPanel } from "@/components/DualTrackAuditPanel";
 import { TdeAuditGraphPanel } from "@/components/TdeAuditGraphPanel";
@@ -1807,6 +1808,7 @@ function ChatPane({
             </div>
           )}
           <ChatMessageRows
+            sid={sid}
             messages={messages}
             windowStart={windowStart}
             scrollRef={scrollRef}
@@ -2216,15 +2218,7 @@ const MessageRow = React.memo(function MessageRow({
 
 /** The windowed message list. It owns the scroll-driven window state, so a
  *  scroll step re-renders this list and nothing above it in ChatPane. */
-function ChatMessageRows({
-  messages,
-  windowStart,
-  scrollRef,
-  stickRef,
-  onViewTdeGraph,
-  onBtwAction,
-  onPlaySummary,
-}: {
+type MessageRowsProps = {
   messages: readonly ChatMessage[];
   windowStart: number;
   scrollRef: React.RefObject<HTMLElement>;
@@ -2232,7 +2226,56 @@ function ChatMessageRows({
   onViewTdeGraph: () => void;
   onBtwAction: (clientId: string, action: "edit" | "resend") => void;
   onPlaySummary: (text: string, msgId: string) => void;
-}) {
+};
+
+/** What the plain fallback list mounts: enough to read and answer, small enough to never lag. */
+const PLAIN_FALLBACK_TAIL = 60;
+const noRowRef = () => undefined;
+
+/** The list when the windowed one failed: the newest messages, mounted all at once. */
+function PlainMessageRows({
+  messages,
+  windowStart,
+  onViewTdeGraph,
+  onBtwAction,
+  onPlaySummary,
+}: MessageRowsProps) {
+  const from = Math.max(windowStart, messages.length - PLAIN_FALLBACK_TAIL);
+  return (
+    <div className="flex flex-col" data-testid="chat-message-rows-plain">
+      {messages.slice(from).map((m, j) => (
+        <MessageRow
+          key={m.id}
+          m={m}
+          prevTs={from + j > 0 ? messages[from + j - 1].ts : undefined}
+          rowRef={noRowRef}
+          onViewTdeGraph={onViewTdeGraph}
+          onBtwAction={onBtwAction}
+          onPlaySummary={onPlaySummary}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** The message list: windowed, and degrading to the plain list if the window logic ever throws. */
+function ChatMessageRows(props: MessageRowsProps & { sid: string }) {
+  return (
+    <MessageRowsBoundary resetKey={props.sid} fallback={<PlainMessageRows {...props} />}>
+      <VirtualMessageRows {...props} />
+    </MessageRowsBoundary>
+  );
+}
+
+function VirtualMessageRows({
+  messages,
+  windowStart,
+  scrollRef,
+  stickRef,
+  onViewTdeGraph,
+  onBtwAction,
+  onPlaySummary,
+}: MessageRowsProps) {
   const listRef = React.useRef<HTMLDivElement>(null);
   const visible = messages.slice(windowStart);
   const keys = visible.map((m) => m.id);

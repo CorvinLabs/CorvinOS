@@ -41,6 +41,18 @@ export interface VirtualListResult extends RowRange {
   measure: (key: string) => (node: HTMLElement | null) => void;
 }
 
+/**
+ * How many times a run of commits may move the window synchronously before the hook stops
+ * answering a commit with a setState. The window is re-derived from the browser's scroll
+ * geometry, and the browser answers a window change with a geometry change (scroll anchoring,
+ * clamping, a growing streamed row). When the two never agree, every commit moves the window
+ * again, the row heights that would settle it cannot be measured inside a synchronous cascade,
+ * and React throws #185 after 50 nested updates, taking the whole chat down. Past this budget
+ * the window only ever GROWS (a superset of both candidates, so the next commit agrees with
+ * it) and the budget is renewed by the next quiet commit or frame.
+ */
+export const MAX_SYNC_WINDOW_MOVES = 4;
+
 const DEFAULT_ESTIMATE = 120;
 const DEFAULT_OVERSCAN = 1000;
 const DEFAULT_VIEWPORT = 800; // used when the container reports no size (jsdom, hidden tab)
@@ -72,6 +84,9 @@ export function useVirtualList({
   const [range, setRange] = React.useState<RowRange>({ start: 0, end: 0 });
   const [layoutTick, setLayoutTick] = React.useState(0);
   const rafRef = React.useRef(0);
+  // Consecutive commit-driven window moves (see MAX_SYNC_WINDOW_MOVES); renewed by a quiet
+  // commit or by the next frame.
+  const cascade = React.useRef({ moves: 0, frame: 0 });
 
   // Mirrors the latest sync() so the stable callbacks below never go stale.
   const syncRef = React.useRef<(source: "commit" | "scroll") => void>(() => {});
@@ -130,11 +145,36 @@ export function useVirtualList({
       return;
     }
 
-    const next = windowRange(offsets, Math.max(0, top), viewport, overscan);
+    let next = windowRange(offsets, Math.max(0, top), viewport, overscan);
     const prev = rangeRef.current;
     if (prev.start !== next.start || prev.end !== next.end) {
-      rangeRef.current = next;
-      setRange(next);
+      if (source === "commit") {
+        const c = cascade.current;
+        c.moves += 1;
+        if (!c.frame) {
+          // Only the budget is renewed here. Re-deriving the window from a frame would be a
+          // second opinion that can disagree with the commit's and ping-pong frame by frame.
+          c.frame = requestAnimationFrame(() => {
+            c.frame = 0;
+            c.moves = 0;
+          });
+        }
+        if (c.moves > MAX_SYNC_WINDOW_MOVES) {
+          // The geometry keeps disagreeing with the window it just produced. Mount the
+          // union instead: it contains what either answer needs, so the next commit finds
+          // nothing to move and the cascade ends.
+          next = {
+            start: Math.min(prev.start, next.start),
+            end: Math.max(prev.end, next.end),
+          };
+        }
+      }
+      if (prev.start !== next.start || prev.end !== next.end) {
+        rangeRef.current = next;
+        setRange(next);
+      }
+    } else if (source === "commit") {
+      cascade.current.moves = 0; // a quiet commit ends the cascade
     }
 
     // Record the row at the top and its screen y while the reader is not stuck.
@@ -188,6 +228,15 @@ export function useVirtualList({
   React.useLayoutEffect(() => {
     sync("commit");
   });
+
+  // A pending settle frame must not outlive the list.
+  React.useEffect(() => {
+    const c = cascade.current;
+    return () => {
+      if (c.frame) cancelAnimationFrame(c.frame);
+      c.frame = 0;
+    };
+  }, []);
 
   // Throttled, passive scroll tracking: at most one geometry read per frame.
   React.useEffect(() => {

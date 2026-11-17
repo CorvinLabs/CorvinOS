@@ -162,3 +162,36 @@ Proof: `tests/sandbox/test_gap_chat.py` (real uvicorn console, HTTP + WebSocket)
 `web-next/tests/e2e/chat-gap-release.spec.ts` (Playwright: audit opener/close, Auto-Repair,
 palette, `/new`, `/audit`, `/create workflow`), `web-next/tests/unit/repair-session-csrf.test.ts`,
 `web-next/tests/unit/slash-command-insertion.test.ts`.
+
+## React error #185 in the message list (2026-11-17)
+
+**Symptom.** The route error boundary's card "Something went wrong on this page" with
+`Minified React error #185` on `/app/chat` (98 `console.client_error` records `react-185`
+between 2026-11-07 and 2026-11-17, all Linux). #185 is "Maximum update depth exceeded": React
+gave up after 50 nested synchronous updates. Reproduced once in dev (CPU throttled, streamed turn);
+the component stack named `ChatMessageRows`.
+
+**Cause.** `useVirtualList` re-derives the mounted window in a layout effect on EVERY commit
+and calls `setRange` when it moved. The window comes from the browser's scroll geometry, and the
+browser answers a window change with a geometry change (scroll anchoring, clamping when rows
+unmount above the reader, a growing streamed row). When the two never agree, each commit moves the
+window again; the `ResizeObserver` that would settle the row heights cannot run inside a
+synchronous cascade, so nothing ever converges.
+
+**Fix (three layers, none of them hides the error).**
+1. `use-virtual-list.ts`: `MAX_SYNC_WINDOW_MOVES` = 4 consecutive commit-driven moves; past it the
+   window only grows (union of both candidates), so the next commit finds nothing to move and the
+   cascade ends. A quiet commit or the next frame renews the budget. The frame NEVER re-derives
+   the window (a second derivation can disagree with the commit's and ping-pong frame by frame).
+2. `chat-registry.ts::useChatSession`: `subscribe`/`getSnapshot` are `useCallback`-stable per sid;
+   an inline `subscribe` resubscribes after every commit and re-checks a snapshot that a streamed
+   delta has replaced in the meantime, forcing yet another synchronous render.
+3. `components/chat/MessageRowsBoundary.tsx`: a fault in the windowed list degrades to
+   `PlainMessageRows` (newest 60 messages, no windowing) inside the chat instead of replacing the
+   page; a change of chat retries the windowed list. The failure is still logged.
+
+**Proof.** `web-next/tests/unit/use-virtual-list-feedback.test.tsx`: a simulated layout whose
+scroll position depends on the mounted rows. Red on the unfixed hook with exactly
+`Maximum update depth exceeded` at the `setRange` call, green with the budget.
+**Must NOT do:** add a layout-effect `setState` to the list that is not bounded per cascade ·
+re-derive the window from a frame · give `useSyncExternalStore` an inline `subscribe`.
