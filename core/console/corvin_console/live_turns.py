@@ -235,6 +235,12 @@ def live_turn_id(tenant_id: str, sid: str) -> str | None:
         return turn.turn_id if turn else None
 
 
+def attached_count(tenant_id: str, sid: str) -> int:
+    """How many sockets of *sid* are subscribed right now (the owner's included)."""
+    with _lock:
+        return len(_subs.get((tenant_id, sid), ()))
+
+
 def request_cancel(tenant_id: str, sid: str) -> bool:
     """Record that an operator asked to stop *sid*'s live turn from a socket
     that does not own it. Returns False when no turn is live. The caller

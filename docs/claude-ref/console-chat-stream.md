@@ -16,6 +16,13 @@ socket received nothing, and the client-side recovery could not apply the record
 "Client" below). Measured: a redeploy reloaded the operator's tab 8 s into a 95 s turn; the chat
 then showed no agent output at all.
 
+**Unattended turns.** While no socket of the chat is attached, the turn keeps running and is
+bounded by `CORVIN_DETACHED_TURN_MAX_S` (default 1800 s; `routes/chat.py::_detach_turn`). Any
+socket that connects to the chat disarms that bound (`_disarm_detached_watchdog`); when the last
+attached socket leaves, the bound is armed again from that moment. Past the bound the turn is
+finalised as `task.interrupted` and the user is told. It is not re-run: `turn_recovery` only
+re-runs turns cut off by a host restart.
+
 ## Server → client events
 
 | type | when | notes |

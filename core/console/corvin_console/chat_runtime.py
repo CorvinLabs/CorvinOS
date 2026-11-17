@@ -1887,6 +1887,12 @@ def unregister_live_turn(tenant_id: str, sid: str, loop: Any, task: Any) -> None
                 _live_turns.pop((tenant_id, sid), None)
 
 
+def live_turn_tasks(tenant_id: str, sid: str) -> list[Any]:
+    """The turn task(s) registered for *sid*, whichever socket started them."""
+    with _live_turns_guard:
+        return [task for _loop, task in _live_turns.get((tenant_id, sid), ())]
+
+
 def _cancel_live_turns(tenant_id: str, sid: str) -> None:
     with _live_turns_guard:
         entries = list(_live_turns.pop((tenant_id, sid), set()))

@@ -138,6 +138,48 @@ class ReloadSurvivalTest(unittest.TestCase):
         self._disconnect_mid_turn(self._impl(run_s=0.3))
         self.assertTrue(self._wait(lambda: not chat_routes._DETACHED_TURNS))
 
+    def _disconnect_then_reconnect_mid_turn(self, impl, *, watchdog_s: float,
+                                            viewer_s: float | None = None) -> None:
+        """Drop the socket mid-turn, then reattach a fresh socket to the same chat
+        while the turn still runs (a reconnect after a network blip). The viewer
+        watches until the turn ends, or for ``viewer_s`` and then leaves."""
+        app = FastAPI()
+        app.include_router(chat_routes.router, prefix="/v1/console")
+        terminal = ("completed", "cancelled", "interrupted")
+        with patch.object(chat_runtime, "_stream_turn_impl", impl), \
+                patch.object(chat_routes, "_detached_turn_max_s", return_value=watchdog_s):
+            with TestClient(app) as client:
+                client.cookies.set("corvin_console_sid", "valid-sid")
+                with client.websocket_connect(f"/v1/console/chat/sessions/{self.sess.sid}/stream") as ws:
+                    self.assertEqual(ws.receive_json()["type"], "ready")
+                    ws.send_json({"type": "user", "text": "lange Aufgabe", "voice_on": True})
+                    first = ws.receive_json()
+                    while first["type"] != "delta":
+                        first = ws.receive_json()
+                with client.websocket_connect(f"/v1/console/chat/sessions/{self.sess.sid}/stream") as ws2:
+                    self.assertEqual(ws2.receive_json()["type"], "ready")
+                    if viewer_s is None:
+                        self._wait(lambda: self._status() in terminal, 8.0)
+                    else:
+                        time.sleep(viewer_s)
+                # the last viewer has left: the turn is unattended again
+                self._wait(lambda: self._status() in terminal, 8.0)
+
+    def test_a_reattached_viewer_disarms_the_detached_watchdog(self) -> None:
+        # The watchdog bounds an UNATTENDED turn. A socket that reattaches to the
+        # running turn is watching it again: the turn must not be cut off at the
+        # deadline of the disconnect that came before (here it runs 1.5 s past a
+        # 1.0 s watchdog that was armed by the first socket's drop).
+        self._disconnect_then_reconnect_mid_turn(self._impl(run_s=1.5), watchdog_s=1.0)
+        self.assertEqual(self._status(), "completed")
+
+    def test_the_last_viewer_leaving_rearms_the_watchdog(self) -> None:
+        # Once the reattached viewer leaves, nobody watches the turn any more and
+        # the bound applies again from that moment.
+        self._disconnect_then_reconnect_mid_turn(
+            self._impl(run_s=30.0), watchdog_s=0.5, viewer_s=0.2)
+        self.assertEqual(self._status(), "interrupted")
+
 
 if __name__ == "__main__":
     unittest.main()

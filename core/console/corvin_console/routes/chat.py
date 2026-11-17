@@ -596,23 +596,51 @@ def _detached_turn_max_s() -> float:
         return _DETACHED_TURN_MAX_S_DEFAULT
 
 
+#: The armed wall-clock bound of each unattended turn, keyed by (tenant, sid).
+_DETACHED_WATCHDOGS: "dict[tuple[str, str], asyncio.TimerHandle]" = {}
+
+
+def _disarm_detached_watchdog(tenant_id: str, sid: str) -> None:
+    handle = _DETACHED_WATCHDOGS.pop((tenant_id, sid), None)
+    if handle is not None:
+        handle.cancel()
+
+
 def _detach_turn(task: "asyncio.Task[None] | None", *, tenant_id: str,
                  sid_fingerprint: str, sid: str) -> None:
-    """The client is gone while its turn runs: let the turn FINISH instead of
+    """A socket of this chat went away: let its running turn FINISH instead of
     cancelling it. A completed task is what owes the operator a voice summary
     (and an answer in the history) when they come back; cancelling it on a
-    reload threw both away."""
+    reload threw both away.
+
+    The wall-clock bound only applies while NO socket of the chat is attached:
+    a reconnect disarms it (see the connect path), and it is re-armed only when
+    the last attached socket leaves. Call this after that socket has left
+    ``live_turns`` so ``attached_count`` counts the sockets still watching."""
+    if task is None:
+        # This socket did not start the turn; it may be a viewer of one that runs
+        # on another socket of the chat.
+        live = [t for t in chat_runtime.live_turn_tasks(tenant_id, sid) if not t.done()]
+        task = live[0] if live else None
     if task is None or task.done():
         return
+    _disarm_detached_watchdog(tenant_id, sid)
+    if live_turns.attached_count(tenant_id, sid) > 0:
+        return
+
     def _watchdog_cancel() -> None:
+        _DETACHED_WATCHDOGS.pop((tenant_id, sid), None)
         chat_runtime.note_cancel_reason(tenant_id, sid, "detached_timeout")
         task.cancel()
 
     watchdog = asyncio.get_running_loop().call_later(_detached_turn_max_s(), _watchdog_cancel)
+    _DETACHED_WATCHDOGS[(tenant_id, sid)] = watchdog
     _DETACHED_TURNS.add(task)
 
     def _done(t: "asyncio.Task[None]") -> None:
         watchdog.cancel()
+        if _DETACHED_WATCHDOGS.get((tenant_id, sid)) is watchdog:
+            _DETACHED_WATCHDOGS.pop((tenant_id, sid), None)
         _DETACHED_TURNS.discard(t)
         if not t.cancelled() and t.exception() is not None:
             logger.warning("detached chat turn failed (sid=%s): %r", sid, t.exception())
@@ -690,6 +718,8 @@ async def chat_stream(
     # queued event.
     _hub_token = live_turns.new_token()
     _hub_snapshot, _hub_queue, _hub_unsub = live_turns.subscribe(rec.tenant_id, sid, _hub_token)
+    # Someone is watching the chat again: a running turn is no longer unattended.
+    _disarm_detached_watchdog(rec.tenant_id, sid)
     for _ev in _hub_snapshot:
         with contextlib.suppress(Exception):
             await websocket.send_json(_ev)
@@ -861,9 +891,9 @@ async def chat_stream(
                 raw = await websocket.receive_text()
             except WebSocketDisconnect:
                 _ws_gone = True
+                await _cleanup_voice_forward()
                 _detach_turn(_stream_task, tenant_id=rec.tenant_id,
                              sid_fingerprint=rec.sid_fingerprint, sid=sid)
-                await _cleanup_voice_forward()
                 await _maybe_snapshot_active_task()
                 return
             try:
@@ -1078,9 +1108,9 @@ async def chat_stream(
                                 side_raw = recv_task.result()
                             except WebSocketDisconnect:
                                 _ws_gone = True
+                                await _cleanup_voice_forward()
                                 _detach_turn(_stream_task, tenant_id=rec.tenant_id,
                                              sid_fingerprint=rec.sid_fingerprint, sid=sid)
-                                await _cleanup_voice_forward()
                                 await _maybe_snapshot_active_task()
                                 return
                             try:
@@ -1164,8 +1194,6 @@ async def chat_stream(
                 await websocket.send_json({"type": "error", "message": f"unknown type: {mtype!r}"})
     except WebSocketDisconnect:
         _ws_gone = True
-        _detach_turn(_stream_task, tenant_id=rec.tenant_id,
-                     sid_fingerprint=rec.sid_fingerprint, sid=sid)
         with contextlib.suppress(Exception):
             console_audit.action_performed(
                 tenant_id=rec.tenant_id,
@@ -1175,6 +1203,8 @@ async def chat_stream(
                 target_id=sid,
             )
         await _cleanup_voice_forward()
+        _detach_turn(_stream_task, tenant_id=rec.tenant_id,
+                     sid_fingerprint=rec.sid_fingerprint, sid=sid)
         await _maybe_snapshot_active_task()
         return
 
