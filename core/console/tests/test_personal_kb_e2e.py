@@ -85,12 +85,19 @@ class PersonalKbHttpE2E(unittest.TestCase):
     # ---------------------------------------------------------------------------------------
     def test_create_status_lock_unlock_and_identical_failures(self):
         s = self.a.get("/personal/status").json()
-        self.assertFalse(s["unlocked"])
+        self.assertTrue(s["unlocked"])          # no login: the tenant's default space is simply open
+        self.assertTrue(s["default"])
+        self.assertFalse(s["has_passphrase"])
         body = self._create()
         self.assertTrue(body["recovery_code"])
-        self.assertTrue(self.a.get("/personal/status").json()["unlocked"])
+        mine = self.a.get("/personal/status").json()
+        self.assertTrue(mine["unlocked"])
+        self.assertFalse(mine["default"])       # a passphrase space made through the API stays a separate space
+        self.assertTrue(mine["has_passphrase"])
         self.assertEqual(self.a.post("/personal/lock").status_code, 200)
-        self.assertFalse(self.a.get("/personal/status").json()["unlocked"])
+        after = self.a.get("/personal/status").json()
+        self.assertTrue(after["unlocked"])
+        self.assertTrue(after["default"])       # locking the passphrase space falls back to the default one
         from fastapi.testclient import TestClient
         r1 = self.b.post("/personal/unlock", json={"handle": "ghost", "passphrase": PW})
         r2 = self._client(TestClient).post("/personal/unlock", json={"handle": "anna",
@@ -104,6 +111,65 @@ class PersonalKbHttpE2E(unittest.TestCase):
         self.assertEqual(c.post("/personal/unlock", json={"handle": "anna", "passphrase": PW}).status_code, 200)
         self.assertTrue(c.get("/personal/status").json()["unlocked"])
 
+    # ---- the default space: no login ---------------------------------------------------------------
+
+    def test_default_space_needs_no_login_and_is_one_space(self):
+        from core.personal_kb import owner, paths
+        s = self.a.get("/personal/status").json()
+        self.assertTrue(s["unlocked"])
+        self.assertEqual((s["default"], s["has_passphrase"], s["entries"], s["auto_capture"]), (True, False, 0, False))
+        self.assertEqual(self.a.post("/personal/entities", json={"type": "note", "title": "no login needed"}).status_code, 201)
+        # a second console session of the same tenant sees the same space, and no second one is created
+        r = self.b.get("/personal/entities")
+        self.assertEqual([e["title"] for e in r.json()["entities"]], ["no login needed"])
+        oid = owner.find_default("_default")
+        self.assertEqual(len([o for o in owner.list_owner_ids("_default")]), 1)
+        # locking it only drops the session: the next request opens the same space again
+        self.assertEqual(self.a.post("/personal/lock").status_code, 200)
+        self.assertEqual(len(self.a.get("/personal/entities").json()["entities"]), 1)
+        self.assertEqual(owner.find_default("_default"), oid)
+        # on disk: a device wrap only (no passphrase, no recovery code) and no plaintext
+        info = owner.owner_info("_default", oid)
+        self.assertEqual((info["has_passphrase"], info["has_device"], info["default"]), (False, True, True))
+        for f in paths.owner_dir("_default", oid).rglob("*"):
+            if f.is_file():
+                self.assertNotIn(b"no login needed", f.read_bytes())
+
+    def test_default_space_learning_starts_off_and_switching_it_on_records_consent(self):
+        self.assertFalse(self.a.get("/personal/status").json()["auto_capture"])
+        self.assertEqual(self.a.post("/personal/settings", json={"auto_capture": True}).status_code, 200)
+        self.assertTrue(self.a.get("/personal/status").json()["auto_capture"])
+        from corvin_console.routes import personal_kb as routes
+        s = next(iter(routes._stores.values()))
+        self.assertEqual(s.meta["consent"]["version"], "pkb-consent-1")
+
+    def test_default_space_has_no_passphrase_to_change_and_erases_without_one(self):
+        from core.personal_kb import owner, paths
+        self.a.post("/personal/entities", json={"type": "note", "title": "bye"})
+        oid = owner.find_default("_default")
+        self.assertEqual(self.a.post("/personal/passphrase", json={"old": "x" * 12, "new": "y" * 14}).status_code, 400)
+        r = self.a.post("/personal/erase", json={})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["entries"], 1)
+        self.assertFalse(paths.owner_dir("_default", oid).exists())
+        self.assertFalse(paths.device_key_files("_default", oid))
+        # always on: the next visit finds a fresh, empty default space
+        s = self.a.get("/personal/status").json()
+        self.assertEqual((s["unlocked"], s["default"], s["entries"]), (True, True, 0))
+        self.assertNotEqual(owner.find_default("_default"), oid)
+
+    def test_tasks_and_graph_open_the_default_space_without_visiting_the_panel_first(self):
+        # a brand-new console session whose first personal request is NOT /personal/status
+        tasks = self.a.get("/task-tracking/items?scope=personal").json()
+        self.assertEqual((tasks["unlocked"], tasks["items"]), (True, []))
+        made = self.a.post("/personal/entities", json={"type": "task", "title": "from the default space"})
+        self.assertEqual(made.status_code, 201, made.text)
+        graph = self.b.get("/plugins/corvin-knowledge/graph?scope=personal").json()
+        self.assertTrue(graph["unlocked"])
+        self.assertIn(made.json()["uid"], [x["id"] for x in graph["entities"]])
+        self.assertEqual([i["title"] for i in self.b.get("/task-tracking/items?scope=personal").json()["items"]],
+                         ["from the default space"])
+
     def test_csrf_required_for_changes(self):
         self._create()
         r = self.a.post("/personal/entities", json={"type": "note", "title": "x"}, headers={"x-csrf-token": "0" * 64})
@@ -111,15 +177,22 @@ class PersonalKbHttpE2E(unittest.TestCase):
 
     def test_stolen_sid_and_token_reuse_open_nothing(self):
         self._create()
+        self.a.post("/personal/entities", json={"type": "note", "title": "anna only"})
         token = self.a.cookies.get("corvin_personal")
         self.assertTrue(token)
         from fastapi.testclient import TestClient
         thief = TestClient(self.app, base_url=BASE, raise_server_exceptions=False)
         thief.cookies.set("corvin_console_sid", self.a.rec.sid)  # read from the sessions directory
-        self.assertEqual(thief.get("/personal/entities").status_code, 423)
+        # The thief is an authenticated console session, so it gets the tenant's default space (no login) —
+        # never the passphrase space whose token it stole.
+        r = thief.get("/personal/entities")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["entities"], [])
         self.b.cookies.set("corvin_personal", token)  # the token with another session id
-        self.assertEqual(self.b.get("/personal/entities").status_code, 423)
-        self.assertEqual(self.a.get("/personal/entities").status_code, 200)
+        r = self.b.get("/personal/entities")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["entities"], [])
+        self.assertEqual([e["title"] for e in self.a.get("/personal/entities").json()["entities"]], ["anna only"])
 
     def test_entities_tasks_scope_and_shared_store_untouched(self):
         self._create()
@@ -133,7 +206,9 @@ class PersonalKbHttpE2E(unittest.TestCase):
         scoped = self.a.get("/task-tracking/items?scope=personal").json()
         self.assertEqual([i["title"] for i in scoped["items"]], [f"Task {marker}"])
         self.assertEqual(scoped["items"][0]["status"], "in_progress")
-        self.assertFalse(self.b.get("/task-tracking/items?scope=personal").json()["unlocked"])
+        other = self.b.get("/task-tracking/items?scope=personal").json()   # another session: the default space, not anna's
+        self.assertTrue(other["unlocked"])
+        self.assertEqual(other["items"], [])
         unscoped = self.a.get("/task-tracking/items")
         self.assertNotIn(marker, unscoped.text)
         # positive control: a normal board item's title IS found in tasks.db by the same scan
@@ -149,7 +224,9 @@ class PersonalKbHttpE2E(unittest.TestCase):
         g = self.a.get("/plugins/corvin-knowledge/graph?scope=personal").json()
         self.assertTrue(g["unlocked"])
         self.assertIn(e["uid"], [x["id"] for x in g["entities"]])
-        self.assertFalse(self.b.get("/plugins/corvin-knowledge/graph?scope=personal").json()["unlocked"])
+        og = self.b.get("/plugins/corvin-knowledge/graph?scope=personal").json()
+        self.assertTrue(og["unlocked"])
+        self.assertNotIn(e["uid"], [x["id"] for x in og["entities"]])
         self.assertEqual(self.a.get("/plugins/corvin-knowledge/graph?scope=personal&project=x").status_code, 422)
 
     def test_owner_isolation_by_uid(self):
@@ -249,7 +326,9 @@ class PersonalKbHttpE2E(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["entries"], 1)       # the space is erased once, with its real count
         self.assertFalse(paths.owner_dir("_default", oid).exists())
-        self.assertFalse(self.a.get("/personal/status").json()["unlocked"])
+        after = self.a.get("/personal/status").json()
+        self.assertTrue(after["default"])        # an erased passphrase space leaves the default space, empty
+        self.assertEqual(after["entries"], 0)
         chain = self.root / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
         text = chain.read_text(encoding="utf-8")
         self.assertIn("erasure.personal_kb_deleted", text)
@@ -274,6 +353,7 @@ class PersonalKbHttpE2E(unittest.TestCase):
 
     def test_logout_ends_the_unlock_and_personal_tasks_are_not_cached(self):
         self._create()
+        self.a.post("/personal/entities", json={"type": "note", "title": "anna only"})
         r = self.a.get("/task-tracking/items?scope=personal")
         self.assertEqual(r.headers.get("cache-control"), "no-store")
         token = self.a.cookies.get("corvin_personal")
@@ -283,7 +363,9 @@ class PersonalKbHttpE2E(unittest.TestCase):
         from fastapi.testclient import TestClient
         c = self._client(TestClient)
         c.cookies.set("corvin_personal", token)
-        self.assertEqual(c.get("/personal/entities").status_code, 423)
+        r = c.get("/personal/entities")          # a new console session opens the default space, not anna's
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["entities"], [])
 
     def test_locked_store_is_evicted_from_the_route_cache(self):
         self._create()
@@ -294,7 +376,9 @@ class PersonalKbHttpE2E(unittest.TestCase):
         self.b.get("/personal/status")
         self._create(c=self.b, handle="bert")
         self.b.get("/personal/entities")
-        self.assertEqual(len(routes._stores), 1)   # only bert's; anna's decrypted store is gone
+        from core.personal_kb import owner
+        anna = owner.find_by_handle("_default", "anna")
+        self.assertNotIn(anna, [s.owner_id for s in routes._stores.values()])   # anna's decrypted store is gone
 
     def test_concurrent_promote_creates_one_project_entry(self):
         import threading

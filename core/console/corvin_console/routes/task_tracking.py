@@ -18,7 +18,7 @@ import sqlite3
 import time
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -146,6 +146,7 @@ def _project_of(item: dict[str, Any]) -> Any:
 @router.get("/items")
 def get_items(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    request: Request,
     response: Response,
     include_deleted: bool = False,
     scope: str | None = Query(default=None, max_length=40,
@@ -161,7 +162,7 @@ def get_items(
         # ADR-2325 items 5-7: personal tasks come from the unlocked encrypted store, are never in the
         # shared store, and appear only in this explicit scope.
         response.headers["Cache-Control"] = "no-store"   # decrypted personal data: no browser or proxy cache
-        return _personal_items(rec, corvin_personal)
+        return _personal_items(rec, request, response, corvin_personal)
     if scope is not None:
         if scope == "bound":
             want = None
@@ -197,12 +198,12 @@ def get_items(
     return body
 
 
-def _personal_items(rec: Any, token: str | None) -> dict:
-    from core.personal_kb import session as pkb_session, views as pkb_views
+def _personal_items(rec: Any, request: Request, response: Response, token: str | None) -> dict:
+    from core.personal_kb import views as pkb_views
 
     from . import personal_kb as pkb_routes
 
-    entry = pkb_session.get_console(token, tenant_id=rec.tenant_id, sid=rec.sid)
+    entry, token = pkb_routes.entry_or_default(rec, request, response, token)   # no login: the default space opens
     now = time.time()
     if entry is None:
         return {"items": [], "summary": service.summary([], now), "scope": "personal", "unlocked": False,

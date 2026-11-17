@@ -22,6 +22,11 @@ export interface PersonalStatus {
   policy_pending?: boolean;
   bindings?: { channel: string; display: string }[];
   mode?: "convenient" | "strict";
+  /** the tenant's default space: open without a login, no passphrase */
+  default?: boolean;
+  has_passphrase?: boolean;
+  /** why the space could not be opened (a short sentence) */
+  reason?: string;
 }
 
 export interface DecoderObjection { category: string; text: string; resolved: boolean; stage: string; dismissed_because?: string }

@@ -1,13 +1,12 @@
 /**
  * "Only for me" — the owner's encrypted personal space inside the Knowledge Graph panel.
  *
- * States: not available on this build (404) · locked (create and unlock forms, both always shown,
- * because nothing tells the console whose space exists) · unlocked (tabs). Every number comes from
- * the server; nothing is invented. Personal tasks appear in Tasks under "Only for me" as well.
+ * States: not available on this build (404) · could not be opened (reason + retry) · open (tabs). There is
+ * no login: the tenant's default space opens by itself. Every number comes from the server; nothing is invented. Personal tasks appear in Tasks under "Only for me" as well.
  */
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, KeyRound, Loader2, Lock, ShieldCheck } from "lucide-react";
+import { AlertCircle, Loader2, Lock, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,14 +20,14 @@ import { GraphCanvas } from "../GraphCanvas";
 import { DecoderPanel } from "./DecoderPanel";
 
 /** Deploy marker (a string literal): only the personal-space bundle contains it. */
-export const MARKER_PERSONAL = "Only you can open this space. It is encrypted on this computer and never shared.";
+export const MARKER_PERSONAL = "Your personal space is encrypted on this computer and kept apart from the project knowledge base. There is no login: whoever can open this console can open it.";
 
 export const KEY = ["personal-kb"] as const;
 
 function errText(e: unknown, fallback: string): string {
   if (e instanceof ApiError) {
     if (e.status === 429) return "Please wait a moment and try again.";
-    if (e.status === 423) return "Your personal space was locked. Unlock it again.";
+    if (e.status === 423) return "The personal space could not be opened. Reload the page.";
     return e.message || fallback;
   }
   return fallback;
@@ -56,112 +55,20 @@ export function PersonalSpace() {
     <div className="space-y-4" data-testid="personal-space">
       <p className="text-sm text-muted-foreground flex items-center gap-2"><ShieldCheck size={16} className="text-accent" />{MARKER_PERSONAL}</p>
       {st.unlocked ? <Unlocked status={st} csrf={csrf} onChanged={() => qc.invalidateQueries({ queryKey: [...KEY] })} />
-        : <Access status={st} csrf={csrf} onDone={() => qc.invalidateQueries({ queryKey: [...KEY] })} />}
+        : <Unavailable reason={st.reason} onRetry={() => qc.invalidateQueries({ queryKey: [...KEY] })} />}
     </div>
   );
 }
 
-// ---- locked: create or unlock ------------------------------------------------------------------
+// There is no login: the console opens the tenant's default space on its own. The create and unlock forms
+// (handle + passphrase) are gone from this view; the routes stay for a later login flow.
 
-function Access({ status, csrf, onDone }: { status: pk.PersonalStatus; csrf: string; onDone: () => void }) {
-  const [mode, setMode] = useState<"unlock" | "recover">("unlock");
-  const [handle, setHandle] = useState("");
-  const [pass, setPass] = useState("");
-  const [code, setCode] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const unlock = useMutation({
-    mutationFn: () => mode === "unlock" ? pk.unlockSpace(handle, pass, csrf) : pk.unlockWithRecovery(handle, code, pass, csrf),
-    onSuccess: () => { setPass(""); setCode(""); onDone(); },
-    onError: (e) => setErr(errText(e, "That did not work.")),
-  });
+function Unavailable({ reason, onRetry }: { reason?: string; onRetry: () => void }) {
   return (
-    <div className="grid gap-4 md:grid-cols-2">
-      <Card><CardContent className="p-4 space-y-3">
-        <h2 className="font-semibold flex items-center gap-2"><Lock size={16} /> Open your space</h2>
-        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); setErr(null); unlock.mutate(); }} data-testid="personal-unlock-form">
-          <Input aria-label="Handle" placeholder="Your handle" value={handle} onChange={(e) => setHandle(e.target.value)} autoComplete="username" />
-          {mode === "recover" && <Input aria-label="Recovery code" placeholder="Recovery code" value={code} onChange={(e) => setCode(e.target.value)} />}
-          <Input aria-label={mode === "unlock" ? "Passphrase" : "New passphrase"} type="password"
-            placeholder={mode === "unlock" ? "Passphrase" : "New passphrase (at least 12 characters)"}
-            value={pass} onChange={(e) => setPass(e.target.value)} autoComplete={mode === "unlock" ? "current-password" : "new-password"} />
-          {err && <p role="alert" className="text-xs text-destructive">{err}</p>}
-          <div className="flex items-center gap-3">
-            <Button type="submit" variant="accent" size="sm" disabled={!csrf || !handle || !pass || unlock.isPending}>
-              {unlock.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />} {mode === "unlock" ? "Unlock" : "Recover and unlock"}
-            </Button>
-            <button type="button" className="text-xs text-muted-foreground underline" onClick={() => { setMode(mode === "unlock" ? "recover" : "unlock"); setErr(null); }}>
-              {mode === "unlock" ? "Forgot the passphrase?" : "Back to the passphrase"}
-            </button>
-          </div>
-        </form>
-      </CardContent></Card>
-      <CreateCard status={status} csrf={csrf} onDone={onDone} />
-    </div>
-  );
-}
-
-function CreateCard({ status, csrf, onDone }: { status: pk.PersonalStatus; csrf: string; onDone: () => void }) {
-  const [handle, setHandle] = useState("");
-  const [p1, setP1] = useState("");
-  const [p2, setP2] = useState("");
-  const [modeSel, setModeSel] = useState<"convenient" | "strict">(status.secure_device_key ? "convenient" : "strict");
-  const [consent, setConsent] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [code, setCode] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const create = useMutation({
-    mutationFn: () => pk.createSpace({ handle, passphrase: p1, consent, unlock_mode: modeSel }, csrf),
-    onSuccess: (r) => { setCode(r.recovery_code); setP1(""); setP2(""); },
-    onError: (e) => setErr(errText(e, "The space could not be created.")),
-  });
-  if (code) {
-    return (
-      <Card data-testid="personal-recovery-code"><CardContent className="p-4 space-y-3">
-        <h2 className="font-semibold">Save your recovery code</h2>
-        <p className="text-sm text-muted-foreground">It is shown only now. Without it and without your passphrase, nobody can open the space again, not even the operator.</p>
-        <pre className="rounded-md bg-muted px-3 py-2 font-mono text-sm break-all whitespace-pre-wrap">{code}</pre>
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(code)}>Copy</Button>
-          <Button size="sm" variant="outline" onClick={() => {
-            const url = URL.createObjectURL(new Blob([code + "\n"], { type: "text/plain" }));
-            const a = document.createElement("a"); a.href = url; a.download = "personal-space-recovery-code.txt"; a.click(); URL.revokeObjectURL(url);
-          }}>Download</Button>
-        </div>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} /> I saved the recovery code</label>
-        <Button size="sm" variant="accent" disabled={!saved} onClick={() => { setCode(null); onDone(); }}>Open my space</Button>
-      </CardContent></Card>
-    );
-  }
-  const mismatch = p2.length > 0 && p1 !== p2;
-  return (
-    <Card><CardContent className="p-4 space-y-3">
-      <h2 className="font-semibold">Create your space</h2>
-      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); setErr(null); create.mutate(); }} data-testid="personal-create-form">
-        <Input aria-label="New handle" placeholder="Handle (3-32 characters: a-z, 0-9, . - _)" value={handle} onChange={(e) => setHandle(e.target.value.toLowerCase())} />
-        <Input aria-label="New passphrase" type="password" placeholder="Passphrase (at least 12 characters)" value={p1} onChange={(e) => setP1(e.target.value)} autoComplete="new-password" />
-        <Input aria-label="Repeat passphrase" type="password" placeholder="Repeat the passphrase" value={p2} onChange={(e) => setP2(e.target.value)} autoComplete="new-password" />
-        {mismatch && <p className="text-xs text-destructive">The two passphrases differ.</p>}
-        <fieldset className="space-y-1 text-sm">
-          <legend className="font-medium">Protection</legend>
-          <label className="flex items-start gap-2">
-            <input type="radio" name="pkb-mode" checked={modeSel === "convenient"} disabled={!status.secure_device_key} onChange={() => setModeSel("convenient")} />
-            <span><span className="font-medium">Use in my chats</span> — Corvin can read the space in your private chats. It does not protect it from programs on this computer.
-              {!status.secure_device_key && <span className="block text-xs text-muted-foreground">Not available: this computer cannot protect the key file.</span>}</span>
-          </label>
-          <label className="flex items-start gap-2">
-            <input type="radio" name="pkb-mode" checked={modeSel === "strict"} onChange={() => setModeSel("strict")} />
-            <span><span className="font-medium">Console only</span> — nothing that opens the space is stored on disk. Best for sensitive notes.</span>
-          </label>
-        </fieldset>
-        <label className="flex items-start gap-2 text-sm">
-          <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} data-testid="personal-consent" />
-          <span>I agree that Corvin adds facts I state about myself automatically (language, tone, format, role, tools and similar settings) and keeps my ideas. I can review, change or forget every entry, export everything, or erase the space at any time.</span>
-        </label>
-        {err && <p role="alert" className="text-xs text-destructive">{err}</p>}
-        <Button type="submit" size="sm" variant="accent" disabled={!csrf || !handle || !p1 || mismatch || !consent || create.isPending}>
-          {create.isPending && <Loader2 className="w-4 h-4 animate-spin" />} Create my space
-        </Button>
-      </form>
+    <Card data-testid="personal-not-open"><CardContent className="py-6 text-sm flex flex-wrap items-center gap-3">
+      <AlertCircle size={16} className="text-muted-foreground" />
+      <span className="text-muted-foreground">The personal space could not be opened{reason ? `: ${reason}` : "."}</span>
+      <Button size="sm" variant="outline" onClick={onRetry}>Try again</Button>
     </CardContent></Card>
   );
 }
@@ -177,7 +84,7 @@ function Unlocked({ status, csrf, onChanged }: { status: pk.PersonalStatus; csrf
         <span><span className="text-muted-foreground">Entries:</span> <span className="font-mono tabular-nums">{status.entries ?? 0}</span></span>
         <span><span className="text-muted-foreground">Waiting for review:</span> <span className="font-mono tabular-nums">{status.review_pending ?? 0}</span></span>
         <span><span className="text-muted-foreground">Automatic learning:</span> {status.auto_capture ? "on" : "off"}{status.frozen && <Badge variant="warn" className="ml-2">paused</Badge>}</span>
-        <span><span className="text-muted-foreground">Mode:</span> {status.mode === "strict" ? "console only" : "use in my chats"}</span>
+        <span><span className="text-muted-foreground">Mode:</span> {status.default ? "always open on this computer" : status.mode === "strict" ? "console only" : "use in my chats"}</span>
         {(status.problems ?? 0) > 0 && <>
           <Badge variant="danger">{status.problems} unreadable entries</Badge>
           <Button size="sm" variant="outline" disabled={!csrf || repair.isPending} data-testid="personal-repair"
@@ -185,9 +92,11 @@ function Unlocked({ status, csrf, onChanged }: { status: pk.PersonalStatus; csrf
             Remove unreadable entries
           </Button>
         </>}
-        <Button className="ml-auto" size="sm" variant="outline" disabled={!csrf || lock.isPending} onClick={() => lock.mutate()} data-testid="personal-lock">
-          <Lock className="w-4 h-4" /> Lock
-        </Button>
+        {status.has_passphrase && (
+          <Button className="ml-auto" size="sm" variant="outline" disabled={!csrf || lock.isPending} onClick={() => lock.mutate()} data-testid="personal-lock">
+            <Lock className="w-4 h-4" /> Lock
+          </Button>
+        )}
       </CardContent></Card>
       <Tabs defaultValue="entries">
         <TabsList>
@@ -517,15 +426,15 @@ function Settings({ status, csrf, onChanged }: { status: pk.PersonalStatus; csrf
         <p className="text-muted-foreground">Downloads every entry as Markdown. The downloaded file is not encrypted; keep it somewhere safe.</p>
         <Button size="sm" variant="outline" disabled={exportM.isPending} onClick={() => exportM.mutate()}>Download everything</Button>
       </CardContent></Card>
-      <Card><CardContent className="p-4 space-y-2 text-sm">
+      {status.has_passphrase && <Card><CardContent className="p-4 space-y-2 text-sm">
         <h3 className="font-medium">Change passphrase</h3>
         <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); passM.mutate(); }}>
           <Input type="password" aria-label="Current passphrase" placeholder="Current passphrase" value={oldP} onChange={(e) => setOldP(e.target.value)} className="max-w-xs" />
           <Input type="password" aria-label="New passphrase" placeholder="New passphrase" value={newP} onChange={(e) => setNewP(e.target.value)} className="max-w-xs" />
           <Button size="sm" variant="outline" type="submit" disabled={!csrf || !oldP || !newP || passM.isPending}>Change</Button>
         </form>
-      </CardContent></Card>
-      <Card><CardContent className="p-4 space-y-2 text-sm">
+      </CardContent></Card>}
+      {status.has_passphrase && <Card><CardContent className="p-4 space-y-2 text-sm">
         <h3 className="font-medium">Renew the keys</h3>
         <p className="text-muted-foreground">Use this if you think your recovery code or a key file was seen by someone else. You get a new recovery code.</p>
         {newCode ? <><pre className="rounded-md bg-muted px-3 py-2 font-mono break-all whitespace-pre-wrap">{newCode}</pre><Button size="sm" variant="outline" onClick={() => setNewCode(null)}>I saved the new code</Button></> : (
@@ -534,15 +443,15 @@ function Settings({ status, csrf, onChanged }: { status: pk.PersonalStatus; csrf
             <Button size="sm" variant="outline" type="submit" disabled={!csrf || !rekeyPass || rekey.isPending}>Renew keys</Button>
           </form>
         )}
-      </CardContent></Card>
+      </CardContent></Card>}
       <Card className="border-destructive/40"><CardContent className="p-4 space-y-2 text-sm">
         <h3 className="font-medium">Erase my space</h3>
         <p className="text-muted-foreground">Deletes every entry and the keys for good. It cannot be undone.</p>
         <label className="flex items-start gap-2"><input type="checkbox" checked={eraseHistory} onChange={(e) => setEraseHistory(e.target.checked)} />
           <span>Also delete my chat history for linked chat accounts. That erasure request is recorded with the chat account id, as every erasure request is.</span></label>
         <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); if (window.confirm("Erase your personal space for good?")) erase.mutate(); }}>
-          <Input type="password" aria-label="Passphrase to erase" placeholder="Passphrase" value={erasePass} onChange={(e) => setErasePass(e.target.value)} className="max-w-xs" />
-          <Button size="sm" variant="destructive" type="submit" disabled={!csrf || !erasePass || erase.isPending}>Erase</Button>
+          {status.has_passphrase && <Input type="password" aria-label="Passphrase to erase" placeholder="Passphrase" value={erasePass} onChange={(e) => setErasePass(e.target.value)} className="max-w-xs" />}
+          <Button size="sm" variant="destructive" type="submit" disabled={!csrf || (status.has_passphrase && !erasePass) || erase.isPending}>Erase</Button>
         </form>
       </CardContent></Card>
     </div>

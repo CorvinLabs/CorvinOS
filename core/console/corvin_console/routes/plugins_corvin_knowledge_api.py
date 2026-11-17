@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 from ..deps import require_csrf, require_session
@@ -379,7 +379,7 @@ def graph_payload(tenant_id: str, project: Optional[str]) -> Dict[str, Any]:
 
 
 @router.get("/graph")
-async def get_graph(response: Response, session: Any = Depends(require_session),
+async def get_graph(request: Request, response: Response, session: Any = Depends(require_session),
                     project: Optional[str] = Query(default=None, max_length=28),
                     scope: Optional[str] = Query(default=None, max_length=16),
                     corvin_personal: Optional[str] = Cookie(default=None)) -> Dict[str, Any]:
@@ -389,17 +389,18 @@ async def get_graph(response: Response, session: Any = Depends(require_session),
         if scope != "personal" or project is not None:
             raise HTTPException(status_code=422, detail="scope must be 'personal' and cannot be combined with project")
         response.headers["Cache-Control"] = "no-store"
-        return await asyncio.to_thread(_personal_graph, tenant_id, getattr(session, "sid", ""), corvin_personal)
+        return await asyncio.to_thread(_personal_graph, session, request, response, corvin_personal)
     # off the event loop: a project graph may need a `kb index` run first (console loop health)
     return await asyncio.to_thread(graph_payload, tenant_id, project)
 
 
-def _personal_graph(tenant_id: str, sid: str, token: Optional[str]) -> Dict[str, Any]:
-    from core.personal_kb import session as pkb_session, views as pkb_views
+def _personal_graph(rec: Any, request: Request, response: Response, token: Optional[str]) -> Dict[str, Any]:
+    from core.personal_kb import views as pkb_views
 
     from . import personal_kb as pkb_routes
 
-    entry = pkb_session.get_console(token, tenant_id=tenant_id, sid=sid)
+    # no login: the tenant's default space opens for this session when no cookie names another one
+    entry, token = pkb_routes.entry_or_default(rec, request, response, token)
     if entry is None:
         return {"entities": [], "relations": [], "scope": "personal", "unlocked": False, "graph_state": "locked",
                 "graph_error": None, "project": None, "repo_path": ""}

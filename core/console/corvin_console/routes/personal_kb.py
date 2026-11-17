@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import hashlib
 import threading
+import time
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Cookie, Depends, HTTPException, Request, Response
@@ -82,15 +83,54 @@ def _evict_dead() -> None:
             _stores.pop(k, None)
 
 
-def _unlocked(rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-              corvin_personal: Annotated[str | None, Cookie()] = None) -> Unlocked:
-    from core.personal_kb import session
+def _open_default(rec: Any, request: Request, response: Response) -> tuple[Any, str]:
+    """Open the tenant's default space for this console session (no login): created on first use, unwrapped
+    with the device key. Returns (entry, token); the token travels in the same httponly cookie as before."""
+    from core.personal_kb import erasure, owner, session
+
+    erasure.resume_pending(rec.tenant_id)
+    oid, keys = owner.unlock_default(rec.tenant_id, surface="console")
+    token = session.put_console(rec.tenant_id, oid, keys, rec.sid)
+    _set_cookie(response, token, request)
+    entry = session.get_console(token, tenant_id=rec.tenant_id, sid=rec.sid)
+    if entry is None:
+        raise HTTPException(status_code=423, detail="personal space is not available")
+    return entry, token
+
+
+def entry_or_default(rec: Any, request: Request, response: Response, token: str | None) -> tuple[Any, str]:
+    """The open personal space of this console session: the one its cookie names, else the tenant's default
+    space (opened here, no login). ``(None, "")`` when it cannot be opened. Used by the readers outside this
+    router (Tasks "Only for me", the Knowledge Graph's personal scope), so none of them reports "locked"
+    just because the personal panel was not the first thing the user opened."""
+    from core.personal_kb import owner, session
+
+    entry = session.get_console(token, tenant_id=rec.tenant_id, sid=rec.sid)
+    if entry is not None:
+        return entry, token or ""
+    try:
+        return _open_default(rec, request, response)
+    except HTTPException:
+        return None, ""
+    except (owner.OwnerError, OSError):
+        return None, ""
+
+
+def _unlocked(rec: Annotated[session_auth.SessionRecord, Depends(require_session)], request: Request,
+              response: Response, corvin_personal: Annotated[str | None, Cookie()] = None) -> Unlocked:
+    from core.personal_kb import owner, session
 
     entry = session.get_console(corvin_personal, tenant_id=rec.tenant_id, sid=rec.sid)
     _evict_dead()
-    if entry is None:
-        raise HTTPException(status_code=423, detail="personal space is locked")
-    return Unlocked(rec, entry, corvin_personal or "")
+    if entry is not None:
+        return Unlocked(rec, entry, corvin_personal or "")
+    try:
+        entry, token = _open_default(rec, request, response)
+    except HTTPException:
+        raise
+    except (owner.OwnerError, OSError):
+        raise HTTPException(status_code=423, detail="personal space is not available") from None
+    return Unlocked(rec, entry, token)
 
 
 async def _store(u: Unlocked):
@@ -204,30 +244,43 @@ class PolicyEdit(BaseModel):
 
 
 class EraseBody(BaseModel):
-    passphrase: str = Field(max_length=512)
+    passphrase: str = Field(default="", max_length=512)   # empty is fine for a space that has no passphrase
     also_chat_history: bool = False
 
 
 # ---- status, create, unlock ---------------------------------------------------------------------
 
 @router.get("/status")
-async def status(response: Response, rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+async def status(response: Response, request: Request,
+                 rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
                  corvin_personal: Annotated[str | None, Cookie()] = None) -> dict[str, Any]:
-    from core.personal_kb import capabilities, session
+    from core.personal_kb import capabilities, owner, session
 
     _no_store(response)
     caps = await asyncio.to_thread(capabilities.probe)
     entry = await asyncio.to_thread(session.get_console, corvin_personal, tenant_id=rec.tenant_id, sid=rec.sid)
+    token = corvin_personal or ""
+    reason = ""
+    if entry is None:   # no login: the tenant's default space opens for any authenticated console session
+        try:
+            entry, token = await asyncio.to_thread(_open_default, rec, request, response)
+        except HTTPException:
+            reason = "not available"
+        except (owner.OwnerError, OSError) as exc:
+            reason = str(exc) or "not available"
     out: dict[str, Any] = {"available": True, "secure_device_key": caps.get("secure_files", False),
                            "unlocked": entry is not None}
+    if reason:
+        out["reason"] = reason
     if entry is not None:
-        s = await _store(Unlocked(rec, entry, corvin_personal or ""))
+        s = await _store(Unlocked(rec, entry, token))
         out.update({"auto_capture": bool(s.meta.get("auto_capture")), "frozen": bool(s.meta.get("frozen")),
                     "review_pending": len(s.list(review="pending")), "entries": len(s.entries()),
                     "problems": len(s.problems), "policy_pending": bool(s.meta.get("policy_pending")),
                     "bindings": [{"channel": b["channel"], "display": b.get("display", "")}
                                  for b in s.meta.get("bindings", [])],
-                    "mode": (await asyncio.to_thread(_owner_info, entry))["unlock_mode"]})
+                    **(lambda i: {"mode": i["unlock_mode"], "has_passphrase": i["has_passphrase"],
+                                  "default": i["default"]})(await asyncio.to_thread(_owner_info, entry))})
     return out
 
 
@@ -657,9 +710,17 @@ async def unfreeze_policy(response: Response, u: Annotated[Unlocked, Depends(_un
 @router.post("/settings")
 async def settings(response: Response, u: Annotated[Unlocked, Depends(_unlocked)],
                    _c: Annotated[Any, Depends(require_csrf)], auto_capture: bool = Body(embed=True)) -> dict[str, Any]:
+    from core.personal_kb import owner
+
     _no_store(response)
     s = await _store(u)
-    await _run(s.update_meta, lambda m: m.__setitem__("auto_capture", bool(auto_capture)))
+
+    def _set(m: dict[str, Any]) -> None:
+        m["auto_capture"] = bool(auto_capture)
+        # Switching learning on is the consent act (a default space starts with none recorded).
+        if auto_capture and (m.get("consent") or {}).get("version") != owner.CONSENT_VERSION:
+            m["consent"] = {"version": owner.CONSENT_VERSION, "at": time.time()}
+    await _run(s.update_meta, _set)
     return {"auto_capture": bool(auto_capture)}
 
 
@@ -740,9 +801,11 @@ async def erase(body: EraseBody, response: Response, request: Request, u: Annota
     from core.personal_kb import erasure, owner, session
 
     _no_store(response)
-    handle = (await _run(owner.read_owner_handle, u.entry.tenant_id, u.entry.owner_id))
-    await _run(owner.unlock_with_passphrase, u.entry.tenant_id, handle, body.passphrase,
-               session_key=u.rec.sid, surface="console")
+    info = await _run(owner.owner_info, u.entry.tenant_id, u.entry.owner_id)
+    if info["has_passphrase"]:   # a space without a passphrase is erased by its open, CSRF-checked console session
+        handle = (await _run(owner.read_owner_handle, u.entry.tenant_id, u.entry.owner_id))
+        await _run(owner.unlock_with_passphrase, u.entry.tenant_id, handle, body.passphrase,
+                   session_key=u.rec.sid, surface="console")
     s = await _store(u)
     bindings = list(s.meta.get("bindings", []))
     # The space first: the history purge runs the whole Art. 17 chain, whose personal-KB handler would

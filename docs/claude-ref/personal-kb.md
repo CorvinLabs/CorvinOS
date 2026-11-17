@@ -34,7 +34,29 @@ idea into a checked plan. It appears in the Knowledge Graph panel and in Tasks u
 - Quotas at write time: 20 000 objects, 64 MiB plaintext including versions, 60 manual adds per hour.
 - Export is built in memory and streamed; the server writes no export file.
 
+## The default space: no login (`owner.ensure_default_owner`, `unlock_default`)
+
+Every tenant has one personal space that is simply there. It is created on first use (under the tenant lock, one
+space even for concurrent first requests), wrapped by the device key alone: **no handle, no passphrase, no
+recovery code**. Any authenticated console session of the tenant opens it by itself (`routes/personal_kb.py`:
+`_unlocked`, `status`, and `entry_or_default` for Tasks "Only for me" and the Knowledge Graph's personal scope), so
+the console shows no "Open your space" form, no create form, no unlock form. Automatic learning starts OFF;
+switching it on in Settings is the consent act and records `pkb-consent-1`. Erasing needs no passphrase (the open,
+CSRF-checked console session is the authority); the next visit finds a fresh empty space. Operator erase:
+`python -m core.personal_kb.cli erase --tenant <tid> --default`.
+
+What this gives up, stated plainly: the console has no member identity, so every console session of a tenant opens
+the SAME default space; and the device key lies on the same disk (`secrets/personal_kb/<tenant>/`, mode 0600), so a
+copy of the whole CorvinOS home reads it. The handle + passphrase flows below are NOT removed: their routes
+(`POST /owner`, `/unlock`, `/unlock/recovery`, `/passphrase`, `/rekey`, `/lock`) and this module's functions stay
+working for a later login release, but the console no longer shows them. A passphrase space made through the API
+is a separate space; a session whose cookie names it opens it, any other session opens the default one. The
+default space has no "renew the keys" (rekey needs a passphrase).
+
 ## Owners, keys, unlock (`owner.py`, `session.py`, `limits.py`)
+
+The rest of this section describes the passphrase spaces and the bridge-only spaces. The default space above uses
+only the device wrap.
 
 | Mode | Console | Bridge chats | Protects against |
 |---|---|---|---|
@@ -147,8 +169,9 @@ changed meanwhile (an edit in another tab, the other process) is discarded with 
 
 ## Erasure (`erasure.py`)
 
-- Owner: Settings → Erase my space (passphrase), or `/personal erase` for a bridge-only space.
-- Operator: `python -m core.personal_kb.cli erase --tenant <tid> --handle <handle>` (no key needed; `count` prints the
+- Owner: Settings → Erase my space (the default space needs no passphrase; a passphrase space asks for it), or
+  `/personal erase` for a bridge-only space.
+- Operator: `python -m core.personal_kb.cli erase --tenant <tid> --handle <handle>` or `--default` (no key needed; `count` prints the
   number of spaces only).
 - Art. 17: `PersonalKbHandler` (`L-personal-kb`) in the default handler chain accepts a bound uid (bare or
   `channel:uid`), never an owner id, handle or `pkb:` value. Any console member who can file an Art. 17 request by uid

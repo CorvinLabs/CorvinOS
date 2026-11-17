@@ -161,7 +161,7 @@ def owner_info(tenant_id: str, owner_id: str) -> dict[str, Any]:
     o = read_owner(tenant_id, owner_id)
     w = o.get("wraps", {})
     return {"unlock_mode": o.get("unlock_mode"), "has_passphrase": "pass" in w, "has_device": "device" in w,
-            "key_epoch": o.get("key_epoch")}
+            "key_epoch": o.get("key_epoch"), "default": bool(o.get("default"))}
 
 
 # ---- creation -----------------------------------------------------------------------------------
@@ -193,11 +193,11 @@ def _read_device_key(tenant_id: str, owner_id: str, epoch: int) -> bytes:
 
 
 def _init_store_files(tenant_id: str, owner_id: str, keys: Keyring, *, auto_capture: bool, now: float,
-                      bindings: list[dict[str, str]] | None = None) -> None:
+                      bindings: list[dict[str, str]] | None = None, consent_version: str = CONSENT_VERSION) -> None:
     d = paths.owner_dir(tenant_id, owner_id)
     for sub in ("objects", "versions"):
         (d / sub).mkdir(mode=0o700, exist_ok=True)
-    meta = empty_meta(consent_version=CONSENT_VERSION, auto_capture=auto_capture, now=now)
+    meta = empty_meta(consent_version=consent_version, auto_capture=auto_capture, now=now)
     meta["bindings"] = list(bindings or [])
     write_encrypted_json(paths.meta_file(tenant_id, owner_id), keys, meta,
                          lambda e: crypto.aad("meta", owner_id, e))
@@ -295,6 +295,70 @@ def create_bridge_owner(tenant_id: str, *, channel: str, uid: str, display: str 
                 paths.device_key_file(tenant_id, owner_id, 1).unlink()
             raise
     return CreatedOwner(owner_id=owner_id, recovery_code=None, keys=keys)
+
+
+# ---- the tenant's default space (no login) ------------------------------------------------------
+# Every install has one personal space that is simply there: created on first use, wrapped by the device
+# key alone (no handle, no passphrase, no recovery code), opened by any authenticated console session of the
+# tenant. Login flows (handle + passphrase) stay in this module for a later release; nothing here depends on
+# them. Automatic learning starts OFF: switching it on is the consent act (see the console route).
+
+DEFAULT_CONSENT_VERSION = "default-space-no-consent"
+
+
+def find_default(tenant_id: str) -> str | None:
+    """The owner id of the tenant's default space, or None when none exists yet."""
+    for oid in list_owner_ids(tenant_id):
+        with contextlib.suppress(Exception):
+            if read_owner(tenant_id, oid).get("default"):
+                return oid
+    return None
+
+
+def ensure_default_owner(tenant_id: str, now: float | None = None) -> str:
+    """Create the default space once (under the tenant lock) and return its owner id."""
+    existing = find_default(tenant_id)
+    if existing:
+        return existing
+    ts = time.time() if now is None else now
+    if not capabilities.probe().get("secure_files", False):
+        raise OwnerError("this system cannot protect a device key")
+    _ensure_root(tenant_id)
+    with locks.exclusive(paths.tenant_lock_file(tenant_id)):
+        existing = find_default(tenant_id)
+        if existing:
+            return existing
+        try:
+            limits.check_creation(ts)
+        except limits.TooSoon as exc:
+            raise OwnerError("the personal space is being prepared; try again shortly") from exc
+        owner_id = new_ulid(int(ts * 1000))
+        keys = Keyring(epoch=1, dek=crypto.new_key())
+        audit.emit("personal_kb.owner_created", tenant_id=tenant_id, owner_hash=audit.owner_hash(owner_id),
+                   unlock_mode="default", schema=1)
+        d = paths.owner_dir(tenant_id, owner_id)
+        d.mkdir(mode=0o700)
+        try:
+            dev = _write_device_key(tenant_id, owner_id)
+            wraps = {"device": crypto.wrap(keys.dek, dev, owner_id=owner_id, epoch=1, kind="device")}
+            write_owner(tenant_id, owner_id, {"schema": 1, "owner_id": owner_id,
+                                              "handle": "space-" + secrets.token_hex(4), "created": ts,
+                                              "unlock_mode": "convenient", "key_epoch": 1, "wraps": wraps,
+                                              "erasing": False, "default": True})
+            _init_store_files(tenant_id, owner_id, keys, auto_capture=False, now=ts,
+                              consent_version=DEFAULT_CONSENT_VERSION)
+        except Exception:
+            _remove_tree(d)
+            with contextlib.suppress(Exception):
+                paths.device_key_file(tenant_id, owner_id, 1).unlink()
+            raise
+    return owner_id
+
+
+def unlock_default(tenant_id: str, *, surface: str = "console") -> tuple[str, Keyring]:
+    """Open the default space with the device key (creating it on first use). No credentials."""
+    oid = ensure_default_owner(tenant_id)
+    return oid, unlock_with_device(tenant_id, oid, surface=surface)
 
 
 # ---- unlock -------------------------------------------------------------------------------------
