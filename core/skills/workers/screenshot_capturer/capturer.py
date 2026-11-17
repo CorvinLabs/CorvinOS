@@ -19,6 +19,7 @@ import sys
 from core.skills.os_skills.video_producer.types import Scene, Storyboard
 from core.learning.learning_events import EventType
 from core.skills.workers._learning_emit import build_event_emitter, emit_worker_event
+from .scroll import ScrollCaptureError, ScrollConfig, capture_scroll_frames
 
 
 class ScreenshotCapturer:
@@ -41,6 +42,7 @@ class ScreenshotCapturer:
     async def capture_scenes(
         self,
         storyboard: Storyboard,
+        scroll: Optional[ScrollConfig] = None,
     ) -> dict[str, Any]:
         """
         Capture screenshots for all scenes in storyboard.
@@ -52,19 +54,27 @@ class ScreenshotCapturer:
         4. Emit SceneRenderedEvent per scene
         5. Collect metadata
 
+        Scroll capture is opt-in: pass `scroll`, or set scroll_steps / scroll_amount_px /
+        scroll_to_end in storyboard.metadata. Without either, one frame per scene as before.
+        With scroll, each scroll position is saved as {scene_id}_{NNN}.png (NNN from 001)
+        and listed in "scroll_frames".
+
         Args:
             storyboard: Scene list + metadata
+            scroll: Optional scroll configuration (overrides storyboard.metadata)
 
         Returns:
             {
-                "status": "success" | "partial",
+                "status": "success" | "partial" | "blocked",
                 "scenes_processed": int,
                 "scenes_failed": int,
-                "screenshots": {scene_id: screenshot_path},
+                "screenshots": {scene_id: screenshot_path},  # first frame per scene
+                "scroll_frames": {scene_id: [screenshot_path, ...]},  # scroll capture only
                 "metadata": {scene_id: {width, height, elements, ocr_text}},
                 "health": dict
             }
         """
+        scroll = scroll or ScrollConfig.from_mapping(storyboard.metadata)
         # 0. Console health check (precondition)
         health = await self._check_console_health()
         if not health.get("ok"):
@@ -83,13 +93,14 @@ class ScreenshotCapturer:
             "scenes_processed": 0,
             "scenes_failed": 0,
             "screenshots": {},
+            "scroll_frames": {},
             "metadata": {},
             "health": health,
         }
 
         # Capture each scene (parallel)
         tasks = [
-            self._capture_scene(scene, results)
+            self._capture_scene(scene, results, scroll)
             for scene in storyboard.scenes
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -141,8 +152,13 @@ class ScreenshotCapturer:
         self,
         scene: Scene,
         results: dict[str, Any],
+        scroll: Optional[ScrollConfig] = None,
     ) -> None:
         """Capture a single scene's screenshot."""
+        if scroll and scroll.enabled:
+            await self._capture_scroll_scene(scene, results, scroll)
+            return
+
         try:
             # 1. Parse scene instructions
             capture_params = await self._parse_scene_instructions(scene)
@@ -189,6 +205,74 @@ class ScreenshotCapturer:
         except Exception as e:
             results["scenes_failed"] += 1
             print(f"Failed to capture screenshot for scene {scene.id}: {str(e)}")
+
+    async def _capture_scroll_scene(
+        self,
+        scene: Scene,
+        results: dict[str, Any],
+        scroll: ScrollConfig,
+    ) -> None:
+        """Capture one numbered frame per scroll position for a scene."""
+        try:
+            capture_params = await self._parse_scene_instructions(scene)
+
+            start_time = time.time()
+            frames = await self._capture_scroll_via_playwright(
+                url=capture_params.get("url", f"{self.console_url}/console"),
+                scroll=scroll,
+            )
+            capture_latency_ms = (time.time() - start_time) * 1000
+            if not frames:
+                raise ScrollCaptureError(f"No frames captured for scene {scene.id}")
+
+            frame_paths = []
+            for number, (_, image_bytes) in enumerate(frames, start=1):
+                frame_path = self.screenshots_dir / f"{scene.id}_{number:03d}.png"
+                await self._write_screenshot_file(image_bytes, frame_path)
+                frame_paths.append(str(frame_path))
+
+            metadata = await self._extract_metadata(
+                Path(frame_paths[0]),
+                frames[0][1],
+            )
+            metadata["scroll_offsets"] = [scroll_y for scroll_y, _ in frames]
+
+            await self._emit_scene_rendered_event(
+                scene_id=scene.id,
+                capture_latency_ms=capture_latency_ms,
+                image_size_bytes=sum(len(image_bytes) for _, image_bytes in frames),
+                elements_detected=len(metadata.get("ui_elements", [])),
+                confidence="medium",
+            )
+
+            results["screenshots"][scene.id] = frame_paths[0]
+            results["scroll_frames"][scene.id] = frame_paths
+            results["metadata"][scene.id] = metadata
+            results["scenes_processed"] += 1
+
+        except Exception as e:
+            results["scenes_failed"] += 1
+            print(f"Failed to capture scroll frames for scene {scene.id}: {str(e)}")
+
+    async def _capture_scroll_via_playwright(
+        self,
+        url: str,
+        scroll: ScrollConfig,
+    ) -> list[tuple[int, bytes]]:
+        """Open url in headless Chromium and return (scroll_y, png) frames."""
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as e:
+            raise ScrollCaptureError("Playwright is not installed; scroll capture needs it") from e
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 1920, "height": 1080})
+                await page.goto(url, wait_until="networkidle", timeout=10000)
+                return await capture_scroll_frames(page, scroll)
+            finally:
+                await browser.close()
 
     async def _parse_scene_instructions(self, scene: Scene) -> dict[str, Any]:
         """Parse scene narration for screenshot instructions."""
