@@ -2,7 +2,7 @@
   <img src="assets/banner.svg" alt="CorvinOS — the operating system for AI work" width="100%"/>
 </p>
 <p align="center">
-  <strong>The operating system for AI work.</strong><br/>
+  <strong>The operating system for AI work — an amplifier for Claude Code.</strong><br/>
   It routes every turn to the cheapest model that fits — and proves the saving from its own audit log.<br/>
   It remembers, learns in the shadow before it decides, and runs your team's agents behind fail-closed gates.
 </p>
@@ -40,22 +40,19 @@
 
 ---
 
-## 🎥 Video — From Spark to Foundation: two questions, one series
+## 🎥 Video — S1E9: The Amplifier in the Fog
 
-The series opens with two questions:
+**CorvinOS is an amplifier for Claude Code.** It does not replace Claude Code, and it is more than a wrapper around it: Claude Code stays the engine, and CorvinOS carries its signal further with context engineering, memory, skills and tools, orchestration and a knowledge base. What review finds flows back into the next round.
 
-1. **How can decision-making be improved compared with native frontier models?**
-2. **Is it even still necessary to increase the model's intelligence?**
-
-Both are answered in episode 7. The preview plays right here on GitHub; click it to open the full series on YouTube.
+Episode 9 of *From Spark to Foundation* tells this as one story: an agent searching a maze in the fog, the same agent with the map already in the light, and the five controls of the amplifier. The preview plays right here on GitHub; click it to watch the episode on YouTube.
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">
-    <img src="docs/media/corvintv-e1s1-preview.en.gif" alt="Preview: From Spark to Foundation, episode 1 with the series' two guiding questions, answered in episode 7 (click to open the series on YouTube)" width="720"/>
+  <a href="https://www.youtube.com/watch?v=G193FVnvTUw&amp;t=268s" target="_blank" rel="noopener">
+    <img src="docs/media/corvintv-e1s9-preview.en.gif" alt="Preview: S1E9 The Amplifier in the Fog — the title, an agent searching a maze in the fog, the map lit in 3D, the amplifier with five controls, and the growing tree (click to watch on YouTube)" width="720"/>
   </a><br/>
 </p>
 
-All episodes on YouTube: <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">watch the series</a>
+Watch S1E9 on YouTube: <a href="https://www.youtube.com/watch?v=G193FVnvTUw&amp;t=268s" target="_blank" rel="noopener">The Amplifier in the Fog</a> &middot; All episodes: <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">watch the series</a>
 
 ---
 
