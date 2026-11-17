@@ -35,6 +35,10 @@ const NAV_EXEMPT = new Set<string>([
   "video-quality-metrics",
   // Reached from the Settings page (settings.tsx navigates to it), not the sidebar.
   "settings/github",
+  // Licence page: reached from the button at the bottom of Settings, not the sidebar.
+  "license",
+  // OTEL telemetry page: reached from the button at the bottom of Settings, not the sidebar.
+  "otel-telemetry",
   // Backend routes are absent — /api/console/audit/* and /api/console/releases/*
   // both 404 on the live host (verified 2026-08-26), and the working audit
   // surface is the separate /app/compliance panel. A sidebar entry here would

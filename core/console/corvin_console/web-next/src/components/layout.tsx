@@ -48,8 +48,7 @@ import { RouteErrorBoundary } from "@/components/error-boundary";
 import { useAuth } from "@/lib/auth";
 import { useSettingsStream } from "@/hooks/use-settings-stream";
 import { useBuildFreshness } from "@/hooks/use-build-freshness";
-import { getOsEngineSetting, getLicenseInfo } from "@/lib/api";
-import { LicenseBadge } from "@/components/license-gate";
+import { getOsEngineSetting } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   useCapabilities,
@@ -275,7 +274,6 @@ const NAV_GROUPS: NavGroup[] = [
     defaultOpen: false,
     items: [
       { to: "/app/api-keys",       label: "API Keys",           icon: KeyRound },
-      { to: "/app/license",        label: "License",            icon: Lock },
       // Licensing Audit was folded into the Audit & Compliance panel as its
       // "Learning events" section (2026-09-20). It read the same
       // /v1/console/v1/licensing/audit-events store the Learnings panel's
@@ -289,7 +287,6 @@ const NAV_GROUPS: NavGroup[] = [
       // it's now the "Layers" tab inside Forge (/app/forge?tab=layers,
       // see pages/forge.tsx). /app/layer-forge still redirects there.
       { to: "/app/sync-monitor",   label: "Sync Monitor",       icon: Activity },
-      { to: "/app/otel-telemetry", label: "OTEL Telemetry",     icon: Gauge },
       { to: "/app/settings",       label: "Settings",           icon: Settings },
     ],
   },
@@ -392,24 +389,6 @@ function NavGroupSection({ group }: { group: NavGroup }) {
   );
 }
 
-// ── Licence tier badge in sidebar footer ───────────────────────────────
-
-function LicenseTierFooter() {
-  const { data } = useQuery({
-    queryKey: ["license", "info"],
-    queryFn: ({ signal }) => getLicenseInfo(signal),
-    staleTime: 5 * 60_000,
-    retry: false,
-  });
-  if (!data) return null;
-  return (
-    <Link to="/app/license" className="flex items-center justify-between px-3 py-1.5 rounded-md hover:bg-muted/40 transition-colors">
-      <span className="text-[11px] text-muted-foreground">Licence</span>
-      <LicenseBadge tier={data.tier} />
-    </Link>
-  );
-}
-
 // ── AppLayout ───────────────────────────────────────────────────────────
 
 /** Filter the nav against the capability manifest (ADR-0357 P3). An item with no
@@ -454,6 +433,10 @@ export function gateNavGroups(
  *  from NAV_GROUPS (matched by route) is left exactly as it is, and a manifest
  *  panel whose flag / capability gate fails is not added. A manifest that is
  *  missing, slow, or of an unknown shape changes nothing. Exported for the unit test. */
+/** Routes that stay mounted but are deliberately not drawn in the sidebar; the
+ *  licence page is reached from a button at the bottom of Settings. */
+const HIDDEN_NAV_ROUTES = new Set<string>(["/app/license", "/app/otel-telemetry"]);
+
 export function mergeManifestNav(groups: NavGroup[], manifest: ConsoleManifest | null | undefined): NavGroup[] {
   if (!manifest || !Array.isArray(manifest.nav_groups) || !Array.isArray(manifest.panels)) return groups;
   const caps = new Set(manifest.capabilities ?? []);
@@ -466,7 +449,7 @@ export function mergeManifestNav(groups: NavGroup[], manifest: ConsoleManifest |
       const panel = panelsById.get(item.panel_id);
       if (!panel || !panel.route) continue;
       const to = `/app/${panel.route}`;
-      if (linked.has(to)) continue;
+      if (linked.has(to) || HIDDEN_NAV_ROUTES.has(to)) continue;
       if (panel.requiredCapability && !caps.has(panel.requiredCapability)) continue;
       if (panel.requiredFlag && !flags[panel.requiredFlag]) continue;
       const navItem: NavItem = { to, label: panel.title, icon: MANIFEST_ICONS[panel.icon] ?? Blocks };
@@ -565,7 +548,6 @@ export function AppLayout() {
           </React.Fragment>
         ))}
       </nav>
-      <LicenseTierFooter />
       <div className="mt-2 flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-xs">
         <div className="flex flex-col leading-snug">
           <span className="font-medium text-foreground">{session?.tenant_id ?? "—"}</span>

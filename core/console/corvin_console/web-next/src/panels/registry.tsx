@@ -147,7 +147,7 @@ export const PANELS: ConsolePanel[] = [
   rc("api-keys", "API Keys", ApiKeysPage, { nav: { label: "API Keys", icon: "KeyRound", group: "system" } }),
   rc("orgs", "Orgs", OrgsPage, { nav: { label: "Orgs", icon: "" } }), // hidden from nav (for future)
   rc("people", "People", PeoplePage, { nav: { label: "People", icon: "" } }), // hidden from nav (for future)
-  rc("license", "License", LicensePage, { nav: { label: "License", icon: "Lock", group: "system" } }),
+  rc("license", "License", LicensePage),
   rc("rag", "RAG", RAGPage, { nav: { label: "RAG", icon: "Database", group: "knowledge" } }),
   rc("rag-hub", "RAG Hub", RAGHubPage, { nav: { label: "RAG Hub", icon: "Globe2", group: "knowledge" } }),
   rc("custom-provider", "Custom Provider", CustomProviderPage, { nav: { label: "Custom Provider", icon: "Plug", group: "knowledge" } }),
@@ -187,8 +187,7 @@ export const PANELS: ConsolePanel[] = [
   // looks. The same store also fed the Learnings panel's "Audit Events" tab,
   // so the records had two homes and neither was the compliance page.
   // App.tsx redirects /app/licensing-audit to /app/compliance.
-  rc("otel-telemetry", "OTEL Telemetry", OTELTelemetryPage,
-     { nav: { label: "OTEL Telemetry", icon: "Gauge", group: "system" } }),
+  rc("otel-telemetry", "OTEL Telemetry", OTELTelemetryPage),
   // ADR-0885 — ONE panel for routing, usage & cost, learning and the catalogue.
   // Replaced engine-config, model-cost-optimizer and model-selection on
   // 2026-09-18; App.tsx redirects the three old paths to its tabs.

@@ -843,6 +843,26 @@ export function SettingsPage() {
           </div>
         </div>
       )}
+
+      <div className="flex items-center justify-between rounded-lg border border-border bg-muted/20 px-4 py-3">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground">Licence</h2>
+          <p className="text-xs text-muted-foreground">Your current tier, limits and usage.</p>
+        </div>
+        <Button variant="outline" onClick={() => navigate("/app/license")}>
+          Licence
+        </Button>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg border border-border bg-muted/20 px-4 py-3">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground">OTEL Telemetry</h2>
+          <p className="text-xs text-muted-foreground">Traces, metrics and export status.</p>
+        </div>
+        <Button variant="outline" onClick={() => navigate("/app/otel-telemetry")}>
+          OTEL Telemetry
+        </Button>
+      </div>
     </div>
   );
 }
