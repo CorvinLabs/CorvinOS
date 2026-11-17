@@ -165,19 +165,33 @@ def owner_edit(store: PersonalStore, changes: dict[str, Any]) -> Decision:
     return Decision("applied", n)
 
 
-def propose(store: PersonalStore, changes: dict[str, Any], *, cause: str) -> Decision:
-    """An automatic change (Level 1). Refused while frozen; loosening waits for the owner."""
+def propose(store: PersonalStore, changes: dict[str, Any], *, cause: str, require_confirmation: bool = False) -> Decision:
+    """An automatic change (Level 1). Refused while frozen; loosening waits for the owner, and so does every change with
+    ``require_confirmation`` (the decoder's prompt-level knobs, ADR-2329 item 6: no controller beat doing nothing)."""
     if store.meta.get("frozen"):
         _refuse(store, ",".join(sorted(changes or {})), cause, "tuning is frozen")
     cur = current(store)
     target = _validated_target(store, changes, cause)
     if target == cur:
         return Decision("unchanged", current_version(store))
-    if any(loosens(k, cur[k], target[k]) for k in ALLOWLIST):
+    if require_confirmation or any(loosens(k, cur[k], target[k]) for k in ALLOWLIST):
         change_id = secrets.token_hex(6)
-        pending = {"change_id": change_id, "base_version": current_version(store), "target": target,
-                   "cause": cause, "at": time.time()}
-        store.update_meta(lambda m: m.__setitem__("policy_pending", pending))
+
+        def _merge(m: dict[str, Any]) -> None:
+            # One pending slot: a second suggestion joins the first instead of replacing it (before, a proposal for more
+            # critic rounds silently dropped a waiting stricter template; ADR-2329 review).
+            old = m.get("policy_pending") or {}
+            base = current_version(store)
+            merged = dict(target)
+            causes = [cause]
+            if old and int(old.get("base_version", -1)) == base:
+                for k, v in (old.get("target") or {}).items():
+                    if k in ALLOWLIST and v != cur.get(k) and k not in changes:
+                        merged[k] = v
+                causes = sorted(set(str(old.get("cause", "")).split("+")) | {cause} - {""})
+            m["policy_pending"] = {"change_id": change_id, "base_version": base, "target": merged,
+                                   "cause": "+".join(causes)[:80], "at": time.time()}
+        store.update_meta(_merge)
         return Decision("pending_confirmation", current_version(store), change_id)
     n = _apply(store, target, event="personal_kb.policy_updated", cause=cause)
     return Decision("applied", n)

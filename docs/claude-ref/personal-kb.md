@@ -83,7 +83,7 @@ code. Passphrases need 12 characters, are checked against a common list and an e
 
 ## Surfaces
 
-**Console** (`/v1/console/personal/*`, `routes/personal_kb.py`): status, create, unlock, recovery, lock, entities
+**Console** (`/v1/console/personal/*`, `routes/personal_kb.py`): status, create, unlock, recovery, lock, consistency (report, sweep, acknowledge, dismiss), entities
 CRUD (Entries → Edit: title, details, earlier versions), restore a version, review, promote an idea to the project knowledge base, task transitions, decoder,
 feed, policy (view, edit, rollback, confirm, unfreeze), auto-capture switch, pairing, unbind, export, passphrase,
 rekey, erase. Scoped reads: `GET /plugins/corvin-knowledge/graph?scope=personal`,
@@ -158,24 +158,45 @@ only way in.
 Seed → Shape → Choices → Plan → Done, one step per call (`/personal unfold <IDEA-0001>` or the Develop button).
 Each step: find first (own entries, quoted as data) → generation (newest Sonnet) → deterministic gates → one repair
 round with the gate failures as feedback → up to `decoder_adversarial_rounds` critic passes (at most 3 material
-objections each, kept in the idea's decoder state) → loss = failed checks / checks of that stage (duplicates from
-"find first" count as failed checks; contradiction detection is not built). Dismissing an objection recomputes the
-loss of its own stage only. Redoing a step replaces only the drafts nobody touched: a task the owner moved on or a note
+objections each, kept with their rank in the idea's decoder state) → loss = failed mechanical checks / checks of that
+stage (duplicates from "find first" count as failed checks; objections are not counted, see below). Redoing a step replaces only the drafts nobody touched: a task the owner moved on or a note
 they edited stays as a standalone entry. A blocked or cancelled plan task offers **Rework the idea** in Tasks (the reason
 picks the stage: unclear goal → Shape, missing decision → Choices, missing step or too big → Plan); at
 most 5 revisions per idea; 12 decoder calls per owner per day. One step per idea runs at a time; a step whose idea
 changed meanwhile (an edit in another tab, the other process) is discarded with its drafts instead of overwriting it. Measurements: `tests/personal_kb/decoder_eval/`
 (`results.json` replay corpus, `live_results.json` real engine, `bench_results.json` find-first cache).
 
-**Decoder v2 (design, NOT shipped).** ADR-2329 (proposed) and CONCEPT-0135 describe a self-consistent, learning decoder; nothing
-in `core/` implements it yet. Measured gaps of the shipped decoder, pinned by a tripwire test
-(`tests/personal_kb/test_decoder_v2_eval.py::test_the_shipped_decoder_still_has_the_gaps_the_design_is_built_on`): the plan's
-`depends_on` is not stored, one cancelled task keeps an idea open forever, a forgotten task stays listed as a child, forgetting an
-idea leaves its derived children behind, and there is no sweep. The executable specification and every number are in
-`tests/personal_kb/decoder_v2/` (`python -m tests.personal_kb.decoder_v2.run_eval`; `critic_probe_twins.py` and
-`real_kb_crosscheck.py` are manual tools). When one of the gaps above is fixed, that test fails: update this paragraph and
-ADR-2329 in the same commit. The general method is the skill `code.decoder_unfold_in_checked_layers`; the protocol with
-the withdrawn claims is NOTE-0024.
+### Consistency and learning (ADR-2329, `consistency.py`, `evolve.py`)
+
+- **Stage = cursor.** A revisit moves it back on purpose and leaves later layers standing. The decoder's
+  `children` lists are the pointers of the current layer set. A re-run is any run of a stage that has passed before
+  (`decoder.passed`), whatever the cursor says, so a forget plus a sweep cannot escape the five revisions.
+- **Plan dependencies** are stored as `blocks` links between the plan's tasks; `decoder.context` is only a cache: a layer
+  note the owner edited reaches the next prompts as the owner wrote it, a forgotten one is left out.
+- **Closing rule** (`decoder.closing_rule`): an idea closes when every task of its current plan is terminal and one is done
+  (one cancelled task no longer keeps it open forever). A failure after the drafts were written removes them, whatever the
+  error (not only a version conflict).
+- **Loss** = failed mechanical checks plus find-first duplicates. Objections are advice with the critic's `rank`; the console
+  shows the first open one of the last step as the main point, the others quietly. `/personal unfold` replies with the
+  issue count and the remark count apart. Fix/dismiss verdicts are counted per category in `meta.critic_verdicts` (not used).
+- **Sweep and heal** (`consistency.run_sweep`): after every decoder step, after every forget (console and `/personal forget`)
+  and when a console session opens the space. Model-free. It prunes pointers to missing entities, lowers a cursor standing
+  on a layer with no live entity (never raises one), removes dangling local links, untouched orphans and untouched stray
+  drafts older than 10 minutes, and ghosts in the error ledger; it skips an idea whose step is running and writes every
+  change against the version it read. It never writes an idea's status, never removes `derived_from`, `promoted_to` or a
+  `kb:`/`legacy:` reference, never touches an entry the owner changed. Judgement calls are review items:
+  `GET /personal/consistency` (read only), `POST /personal/consistency/sweep`, near-duplicate ideas ("They are different" =
+  `POST /personal/consistency/acknowledge`, a `related` link), a finished but open plan ("Close as realized" or "Keep it
+  open" = `POST /personal/ideas/{uid}/decoder/dismiss`, code `STUCK_REALIZATION` only), decoder state lost, a capped
+  duplicate check. The console shows them in "Needs your look" on the Entries tab, only when there is something.
+- **Learning.** Template strictness, critic rounds and "too big" changes from the outer loop are proposals
+  (`policy.propose(..., require_confirmation=True)`), never applied without the owner; a second suggestion joins the
+  waiting one instead of replacing it. The plan size (`decoder_task_cap`) is estimated from what the owner finished of each
+  closed plan (prior 6, headroom 1.25, finishing everything counts as "at least one more"); a lower cap applies, a higher
+  one waits like every loosening. Audit (counts only): `personal_kb.decoder_swept`, `personal_kb.decoder_proposal`.
+- Evidence: `tests/personal_kb/decoder_v2/` (`run_eval.py`, the same module the product runs), `test_decoder_v2_eval.py`,
+  the HTTP E2E in `core/console/tests/test_personal_kb_e2e.py` (`test_v2_*`) and the bridge E2E
+  `test_forgetting_a_plan_task_in_chat_prunes_the_decoder_pointer`. Method: CONCEPT-0135, protocol NOTE-0024.
 
 ## Erasure (`erasure.py`)
 

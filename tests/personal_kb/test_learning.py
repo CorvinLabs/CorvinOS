@@ -257,11 +257,14 @@ def test_decoder_objections_dismiss_and_fix(store):
     idea = _idea(store)
     adv = {"objections": [{"category": "risk", "text": "frost in April"}, {"category": "bogus", "text": "x"}]}
     r = decoder.unfold(store, idea["uid"], generate=gen_from(dict(GOOD, adversarial=adv)), now=1000)
-    assert len(r.objections) == 1 and r.loss > 0
+    # ADR-2329 item 5: an objection is advice with the critic's rank; the loss is mechanical only
+    assert len(r.objections) == 1 and r.objections[0]["rank"] == 1 and r.loss == 0.0
     with pytest.raises(decoder.DecoderError):
         decoder.resolve_objection(store, idea["uid"], 0, "dismiss")
     decoder.resolve_objection(store, idea["uid"], 0, "dismiss", reason="planters stay inside until May")
-    assert decoder._state(store.get(idea["uid"]))["loss"] == 0.0
+    st = decoder._state(store.get(idea["uid"]))
+    assert st["loss"] == 0.0 and st["objections"][0]["resolved"] is True
+    assert store.meta["critic_verdicts"]["risk"] == {"fix": 0, "dismiss": 1}
 
 
 def test_decoder_find_first_duplicates(store):
@@ -284,7 +287,12 @@ def test_decoder_revisit_iterations_and_outer_loop(store):
     for i in range(1, 3):
         t = next(t for t in store.list(type="task") if any(ln["to"] == ideas[i]["uid"] for ln in t["links"]))
         decoder.revisit(store, t["uid"], "unclear_goal", generate=g, now=next(clock))
-    assert policy.current(store)["decoder_template_variant"] == "t0_strict"  # tightened after 3 ideas
+    # ADR-2329 item 6: after three ideas the stricter template is PROPOSED, never applied without the owner
+    assert policy.current(store)["decoder_template_variant"] == "t1"
+    pending = store.meta["policy_pending"]
+    assert pending["target"]["decoder_template_variant"] == "t0_strict" and pending["cause"] == "decoder_errors"
+    policy.confirm(store, pending["change_id"])
+    assert policy.current(store)["decoder_template_variant"] == "t0_strict"
     for _ in range(4):
         try:
             decoder.unfold(store, ideas[1]["uid"], stage="shape", generate=g, now=next(clock))
@@ -304,3 +312,30 @@ def test_decoder_budget_and_audit_content_free(store, home):
     store.update_meta(lambda m: m["rate"].__setitem__("decoder_calls", [1000.0] * decoder.DECODER_CALLS_PER_DAY))
     with pytest.raises(decoder.DecoderError, match="budget"):
         decoder.unfold(store, idea["uid"], generate=g, now=1001)
+
+
+def test_waiting_suggestions_are_merged_not_replaced(store):
+    """ADR-2329 review: one pending slot; a second suggestion joins the first, a newer value for the same knob wins."""
+    policy.propose(store, {"decoder_template_variant": "t0_strict"}, cause="decoder_errors", require_confirmation=True)
+    policy.propose(store, {"decoder_adversarial_rounds": 2}, cause="decoder_errors", require_confirmation=True)
+    pend = store.meta["policy_pending"]
+    assert pend["target"]["decoder_template_variant"] == "t0_strict" and pend["target"]["decoder_adversarial_rounds"] == 2
+    policy.propose(store, {"decoder_adversarial_rounds": 3}, cause="plan_size", require_confirmation=True)
+    pend = store.meta["policy_pending"]
+    assert pend["target"]["decoder_adversarial_rounds"] == 3 and pend["target"]["decoder_template_variant"] == "t0_strict"
+    assert set(pend["cause"].split("+")) == {"decoder_errors", "plan_size"}
+    assert policy.current(store)["decoder_template_variant"] == "t1"          # nothing applied without the owner
+    policy.confirm(store, pend["change_id"])
+    cur = policy.current(store)
+    assert (cur["decoder_template_variant"], cur["decoder_adversarial_rounds"]) == ("t0_strict", 3)
+
+
+def test_plan_size_estimate_lowers_the_cap_and_only_proposes_raising_it(store):
+    from core.personal_kb import evolve
+    for _ in range(4):                                   # the owner finishes 2 of 7 planned tasks, four times
+        evolve.record_plan_outcome(store, planned=7, kept=2)
+    assert policy.current(store)["decoder_task_cap"] < 7                     # tightening applies
+    for _ in range(12):                                  # then finishes every one of 12: only a suggestion to raise
+        evolve.record_plan_outcome(store, planned=12, kept=12)
+    pend = store.meta.get("policy_pending") or {}
+    assert pend.get("target", {}).get("decoder_task_cap", 0) > policy.current(store)["decoder_task_cap"]

@@ -221,8 +221,9 @@ def _dispatch(tenant_id: str, sub: str, arg: str, *, channel: str, uid: str, dis
             return "No such idea."
         r = decoder.unfold(store, e["uid"], generate=generate)
         state = "done" if r.gate_ok else "needs work: " + "; ".join(r.failures)
-        return (f"{e.get('display_id')}: stage {r.stage} {state}. Open issues: "
-                f"{len(r.objections) + len(r.failures) + len(r.duplicates)}. Review it in the console.")
+        # Objections are advice ranked by the critic, not issues to count (it always names three; ADR-2329 item 5).
+        return (f"{e.get('display_id')}: stage {r.stage} {state}. Open issues: {len(r.failures) + len(r.duplicates)}; "
+                f"critic remarks: {len(r.objections)}, the first one matters most. Review it in the console.")
     if sub == "forget":
         e = _find(store, arg)
         if e is None:
@@ -230,6 +231,9 @@ def _dispatch(tenant_id: str, sub: str, arg: str, *, channel: str, uid: str, dis
         fp = f"{e.get('key')} {e['title']}" if e.get("key") else e["title"]
         store.forget(e["uid"], fingerprint=fp)
         capture.note_owner_action(store, e, "forget")
+        from . import consistency  # noqa: PLC0415
+        with contextlib.suppress(Exception):   # prune the decoder's pointers to what was forgotten (ADR-2329)
+            consistency.run_sweep(store)
         return f"Forgot {e.get('display_id') or 'the entry'}."
     if sub == "auto":
         on = arg.lower() == "on"

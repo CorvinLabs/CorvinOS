@@ -29,7 +29,7 @@ export interface PersonalStatus {
   reason?: string;
 }
 
-export interface DecoderObjection { category: string; text: string; resolved: boolean; stage: string; dismissed_because?: string }
+export interface DecoderObjection { category: string; text: string; resolved: boolean; stage: string; dismissed_because?: string; rank?: number }
 export interface DecoderState {
   stage: "seed" | "shape" | "choices" | "plan" | "done";
   loss: number;
@@ -37,6 +37,7 @@ export interface DecoderState {
   gates: Record<string, { ok: boolean; failures: string[] }>;
   objections: DecoderObjection[];
   children: Record<string, string[]>;
+  last_stage?: string;
 }
 
 export interface PersonalEntity {
@@ -117,6 +118,31 @@ export const resolveObjection = (uid: string, index: number, action: "fix" | "di
   api<StageResult | { dismissed: boolean }>(`${P}/ideas/${encodeURIComponent(uid)}/decoder/objection`, { method: "POST", csrf, body: { index, action, reason }, timeoutMs: 600_000 });
 export const revisitTask = (ideaUid: string, taskUid: string, category: string, csrf: string) =>
   api<StageResult | { revisit: null }>(`${P}/ideas/${encodeURIComponent(ideaUid)}/decoder/revisit`, { method: "POST", csrf, body: { task_uid: taskUid, category }, timeoutMs: 600_000 });
+
+/** What the consistency sweep wants the owner to look at (ADR-2329): judgement calls only, never auto-applied. */
+export interface ReviewItem {
+  code: "DUPLICATE_IDEAS" | "STUCK_REALIZATION" | "DECODER_STATE_LOST" | "DUPLICATE_CHECK_CAPPED" | string;
+  uid: string; display_id?: string | null; title: string;
+  other_uid?: string | null; other_display_id?: string | null; other_title?: string;
+}
+export const getConsistency = (signal?: AbortSignal) =>
+  api<{ items: ReviewItem[]; healed: number; auto_left: number }>(`${P}/consistency`, { signal });
+export const dismissReview = (ideaUid: string, code: string, csrf: string) =>
+  api<{ dismissed: string }>(`${P}/ideas/${encodeURIComponent(ideaUid)}/decoder/dismiss`, { method: "POST", csrf, body: { code } });
+export const acknowledgePair = (a: string, b: string, csrf: string) =>
+  api<{ acknowledged: boolean }>(`${P}/consistency/acknowledge`, { method: "POST", csrf, body: { a, b } });
+
+/** The critic's objections in its own order of importance, for the step that ran last: its first open objection is the
+ *  main point, its other open ones are quiet, and open objections of earlier steps are listed apart (also quiet). */
+export function splitObjections<T extends { resolved: boolean; rank?: number; stage?: string }>(objs: T[], lastStage?: string): {
+  main: [T, number] | null; rest: [T, number][]; earlier: [T, number][]; done: [T, number][];
+} {
+  const indexed = objs.map((o, i) => [o, i] as [T, number]);
+  const current = (o: T) => !lastStage || !o.stage || o.stage === lastStage;
+  const open = indexed.filter(([o]) => !o.resolved && current(o)).sort((a, b) => (a[0].rank ?? a[1] + 1) - (b[0].rank ?? b[1] + 1));
+  return { main: open[0] ?? null, rest: open.slice(1), earlier: indexed.filter(([o]) => !o.resolved && !current(o)),
+           done: indexed.filter(([o]) => o.resolved) };
+}
 
 export const getFeed = (signal?: AbortSignal) => api<{ entries: PersonalEntity[] }>(`${P}/feed`, { signal });
 export const getPolicy = (signal?: AbortSignal) => api<PolicyView>(`${P}/policy`, { signal });

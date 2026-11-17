@@ -74,5 +74,6 @@ def entity_public(e: dict[str, Any]) -> dict[str, Any]:
         st = e["decoder"]
         out["decoder"] = {"stage": st.get("stage"), "loss": st.get("loss"), "iterations": st.get("iterations"),
                           "gates": st.get("gates"), "objections": st.get("objections"),
-                          "children": st.get("children")}
+                          "children": st.get("children"), "last_stage": st.get("last_stage"),
+                          "dismissed": st.get("dismissed") or []}
     return out

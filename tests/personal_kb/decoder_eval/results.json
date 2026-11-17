@@ -3,7 +3,7 @@
     "repair_rounds": 0,
     "stage_runs": 28,
     "gate_pass_rate": 0.6786,
-    "mean_loss": 0.1405,
+    "mean_loss": 0.1,
     "ideas_with_plan": 3,
     "ideas": 12
   },
@@ -11,7 +11,7 @@
     "repair_rounds": 1,
     "stage_runs": 36,
     "gate_pass_rate": 1.0,
-    "mean_loss": 0.0315,
+    "mean_loss": 0.0,
     "ideas_with_plan": 12,
     "ideas": 12
   }

@@ -118,6 +118,46 @@ function Unlocked({ status, csrf, onChanged }: { status: pk.PersonalStatus; csrf
 
 const TYPE_LABEL: Record<pk.EntityType, string> = { preference: "Setting", context: "About me", idea: "Idea", task: "Task", note: "Note" };
 
+/** What the consistency check could not decide on its own (ADR-2329). Shown only when there is something to decide. */
+function NeedsYourLook({ csrf, onChanged }: { csrf: string; onChanged: () => void }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: [...KEY, "consistency"], queryFn: ({ signal }) => pk.getConsistency(signal), retry: false });
+  const [msg, setMsg] = useState<string | null>(null);
+  const after = () => { qc.invalidateQueries({ queryKey: [...KEY] }); onChanged(); };
+  const fail = (e: unknown) => setMsg(errText(e, "That did not work."));
+  const ack = useMutation({ mutationFn: (i: pk.ReviewItem) => pk.acknowledgePair(i.uid, i.other_uid ?? "", csrf), onSuccess: after, onError: fail });
+  const keep = useMutation({ mutationFn: (i: pk.ReviewItem) => pk.dismissReview(i.uid, "STUCK_REALIZATION", csrf), onSuccess: after, onError: fail });
+  const close = useMutation({ mutationFn: (i: pk.ReviewItem) => pk.updateEntity(i.uid, { status: "realized" }, csrf), onSuccess: after, onError: fail });
+  if (q.isError) return <p className="text-xs text-muted-foreground">The consistency check could not run.</p>;
+  const items = (q.data?.items ?? []).filter((i) => ["DUPLICATE_IDEAS", "STUCK_REALIZATION", "DECODER_STATE_LOST", "DUPLICATE_CHECK_CAPPED"].includes(i.code));
+  if (!items.length) return null;
+  const busy = ack.isPending || keep.isPending || close.isPending;
+  const name = (id?: string | null, title?: string) => `${id ?? ""} ${title ? `"${title}"` : ""}`.trim();
+  return (
+    <Card data-testid="personal-needs-look"><CardContent className="p-4 space-y-2 text-sm">
+      <h3 className="font-medium">Needs your look</h3>
+      <ul className="space-y-2">
+        {items.map((i, n) => (
+          <li key={`${i.code}-${i.uid}-${n}`} className="flex flex-wrap items-center gap-2" data-testid={`personal-review-${i.code}`}>
+            {i.code === "DUPLICATE_IDEAS" && <>
+              <span>{name(i.display_id, i.title)} looks like {name(i.other_display_id, i.other_title)}.</span>
+              <Button size="sm" variant="outline" disabled={!csrf || busy || !i.other_uid} onClick={() => ack.mutate(i)}>They are different</Button>
+            </>}
+            {i.code === "STUCK_REALIZATION" && <>
+              <span>{name(i.display_id, i.title)}: every task of its plan is finished.</span>
+              <Button size="sm" variant="accent" disabled={!csrf || busy} onClick={() => close.mutate(i)}>Close as realized</Button>
+              <Button size="sm" variant="ghost" disabled={!csrf || busy} onClick={() => keep.mutate(i)}>Keep it open</Button>
+            </>}
+            {i.code === "DECODER_STATE_LOST" && <span className="text-muted-foreground">{name(i.display_id, i.title)} lost its development steps. Its notes and tasks are kept; develop it again to rebuild them.</span>}
+            {i.code === "DUPLICATE_CHECK_CAPPED" && <span className="text-muted-foreground">There are too many ideas to compare them all at once; the newest ones were compared first.</span>}
+          </li>
+        ))}
+      </ul>
+      {msg && <p role="status" className="text-xs text-muted-foreground">{msg}</p>}
+    </CardContent></Card>
+  );
+}
+
 function Entries({ csrf, onChanged }: { csrf: string; onChanged: () => void }) {
   const qc = useQueryClient();
   const [type, setType] = useState<pk.EntityType | "">("");
@@ -143,6 +183,7 @@ function Entries({ csrf, onChanged }: { csrf: string; onChanged: () => void }) {
   const openIdea = entities.find((e) => e.uid === open && e.type === "idea");
   return (
     <div className="space-y-4">
+      <NeedsYourLook csrf={csrf} onChanged={refresh} />
       <Card><CardContent className="p-4">
         <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); add.mutate(); }} data-testid="personal-add-form">
           <select aria-label="Entry type" className="h-10 rounded-md border border-input bg-background px-2 text-sm" value={newType} onChange={(e) => setNewType(e.target.value as pk.EntityType)}>

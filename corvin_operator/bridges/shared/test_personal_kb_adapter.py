@@ -276,3 +276,34 @@ def test_python_and_announcer_agree_on_odd_whitespace(sandbox):
     for t in ("\x85/personal remember x", "\x1f/personal remember x", "<@123>\x1f/personal x", "﻿/personal x",
               "/personal\x85remember x"):
         assert adapter._PKB_COMMAND_RE.match(adapter._pkb_norm_text(t)), repr(t)
+
+
+def test_forgetting_a_plan_task_in_chat_prunes_the_decoder_pointer(sandbox, monkeypatch):
+    """ADR-2329: /personal forget goes through the same sweep as the console, so the idea never lists a ghost task."""
+    adapter, base = sandbox
+    from core.personal_kb import decoder, owner
+    from core.personal_kb.store import PersonalStore
+
+    good = {"shape": {"goal": "g", "boundaries": ["b"], "why_now": "w", "success": "s"},
+            "choices": {"meaning": "m", "reach": "r", "doing": "d", "decisions": [], "no_decision_needed": "simple"},
+            "plan": {"tasks": [{"title": "Buy pots", "dod": "pots at home", "depends_on": []},
+                               {"title": "Plant herbs", "dod": "planted", "depends_on": [0]}]},
+            "adversarial": {"objections": [{"category": "risk", "text": "frost"}]}}
+    monkeypatch.setattr(decoder, "default_generate", lambda tenant_id: (lambda stage, prompt: json.loads(json.dumps(good[stage]))))
+    _send(adapter, base, "/personal on", mid="f1")
+    _send(adapter, base, "/personal on yes", mid="f2")
+    replies, _ = _send(adapter, base, "/personal idea Balcony herbs", mid="f3")
+    idea_id = replies[0].split("Saved as ")[1].split(".")[0]
+    for i, stage in enumerate(("shape", "choices", "plan")):
+        replies, _ = _send(adapter, base, f"/personal unfold {idea_id}", mid=f"f4{i}")
+        assert f"stage {stage} done" in replies[0] and "critic remarks: 1" in replies[0], replies
+    oid = owner.resolve_owner("_default", channel="discord", uid="424242")
+    s = PersonalStore.open("_default", oid, owner.unlock_with_device("_default", oid, surface="test"))
+    idea = next(e for e in s.list(type="idea"))
+    plan = idea["decoder"]["children"]["plan"]
+    first = s.get(plan[0])
+    assert any(ln["rel"] == "blocks" and ln["to"] == plan[1] for ln in first["links"])
+    replies, _ = _send(adapter, base, f"/personal forget {first['display_id']}", mid="f5")
+    assert "Forgot" in replies[0]
+    s = PersonalStore.open("_default", oid, owner.unlock_with_device("_default", oid, surface="test"))
+    assert s.get(idea["uid"])["decoder"]["children"]["plan"] == [plan[1]]

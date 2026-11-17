@@ -261,6 +261,29 @@ def _render(stage: str, data: dict) -> str:
 
 # ---- the step -----------------------------------------------------------------------------------
 
+def _context(store: PersonalStore, st: dict) -> dict:
+    """What earlier layers say, for the prompt. ``decoder.context`` is only a cache of what the decoder wrote: a layer
+    note the owner edited is used as the owner wrote it, a forgotten one is left out (ADR-2329 change 1)."""
+    out: dict = {}
+    for k in ("shape", "choices"):
+        uids = (st.get("children") or {}).get(k) or []
+        child = store.get(uids[0]) if uids else None
+        if uids and child is None:
+            continue
+        if child is not None and (child.get("origin") != "derived" or int(child.get("version", 0)) > 1):
+            out[k] = {"owner_text": _secret_free(str(child.get("body") or ""))[:2000]}
+        elif k in (st.get("context") or {}):
+            out[k] = st["context"][k]
+    return out
+
+
+def _passed(st: dict) -> list[str]:
+    """Stages that have passed their gate at least once (a stored idea from before ADR-2329 derives it from its gates)."""
+    if isinstance(st.get("passed"), list):
+        return list(st["passed"])
+    return [s for s, g in (st.get("gates") or {}).items() if isinstance(g, dict) and g.get("ok")]
+
+
 def _state(idea: dict) -> dict:
     st = copy.deepcopy(idea.get("decoder") or {})   # never mutate the cached entry
     st.setdefault("stage", "seed")
@@ -317,7 +340,17 @@ def unfold(store: PersonalStore, uid: str, *, stage: str | None = None, generate
            now: float | None = None) -> StageResult:
     """Run exactly one stage for idea *uid*. *stage* defaults to the next one; an earlier stage is a revisit."""
     with _one_run_per_idea(store, uid):
-        return _unfold(store, uid, stage=stage, generate=generate, now=now)
+        result = _unfold(store, uid, stage=stage, generate=generate, now=now)
+    _sweep_after(store, now)
+    return result
+
+
+def _sweep_after(store: PersonalStore, now: float | None) -> None:
+    """The incremental consistency sweep after a step (ADR-2329 item 7). Never fails the step that triggered it."""
+    from . import consistency  # noqa: PLC0415
+
+    with contextlib.suppress(Exception):
+        consistency.run_sweep(store, now=now)
 
 
 def _unfold(store: PersonalStore, uid: str, *, stage: str | None, generate: Generate | None,
@@ -335,20 +368,23 @@ def _unfold(store: PersonalStore, uid: str, *, stage: str | None, generate: Gene
     order = STAGES.index(target)
     if order > STAGES.index(st["stage"]) + 1:
         raise DecoderError("run the earlier stages first")
-    if order <= STAGES.index(st["stage"]):
-        if st["iterations"] >= MAX_ITERATIONS:
-            raise DecoderError("this idea reached its five iterations; edit it by hand or start a new idea")
+    # A re-run is any run of a stage that has passed before, whatever the cursor says: a forgotten layer plus a heal
+    # lowers the cursor, and that must not turn a re-run into a forward step (ADR-2329 change 5).
+    rerun = target in _passed(st) or order <= STAGES.index(st["stage"])
+    if rerun and st["iterations"] >= MAX_ITERATIONS:
+        raise DecoderError("this idea reached its five iterations; edit it by hand or start a new idea")
     pol = policy.current(store)
     rounds = int(pol["decoder_adversarial_rounds"])
     _budget(store, 1 + REPAIR_ROUNDS + rounds, ts)  # generation + repair + adversarial passes (upper bound)
     gen = generate or default_generate(store.tenant_id)
     related, dups = find_first(store, idea)
-    data = _clean(gen(target, _prompt(target, idea, st["context"], related, pol)))
+    ctx = _context(store, st)
+    data = _clean(gen(target, _prompt(target, idea, ctx, related, pol)))
     if not isinstance(data, dict):
         data = {}
     checks, fails = gate(target, data, task_cap=int(pol["decoder_task_cap"]))
     for _ in range(REPAIR_ROUNDS if fails else 0):  # repair with gate failures as feedback (LDD loop)
-        data2 = _clean(gen(target, _prompt(target, idea, st["context"], related, pol, feedback=fails)))
+        data2 = _clean(gen(target, _prompt(target, idea, ctx, related, pol, feedback=fails)))
         if isinstance(data2, dict):
             c2, f2 = gate(target, data2, task_cap=int(pol["decoder_task_cap"]))
             if len(f2) < len(fails):
@@ -357,7 +393,7 @@ def _unfold(store: PersonalStore, uid: str, *, stage: str | None, generate: Gene
             break
     objections: list[dict[str, Any]] = []
     for _ in range(rounds):
-        out = gen("adversarial", _prompt("adversarial", idea, st["context"], [], pol, subject=data))
+        out = gen("adversarial", _prompt("adversarial", idea, ctx, [], pol, subject=data))
         kept = 0
         for o in (out or {}).get("objections", []) if isinstance(out, dict) else []:
             if kept >= MAX_OBJECTIONS:
@@ -365,9 +401,11 @@ def _unfold(store: PersonalStore, uid: str, *, stage: str | None, generate: Gene
             if isinstance(o, dict) and o.get("category") in OBJECTION_CATEGORIES and _s(o.get("text")):
                 kept += 1
                 objections.append({"category": o["category"], "text": _secret_free(_s(o["text"]))[:500],
-                                   "resolved": False, "stage": target})
-    n_checks = len(checks) + len(objections) + len(dups)
-    n_failed = len(fails) + len(objections) + len(dups)
+                                   "resolved": False, "stage": target, "rank": kept})
+    # The loss is mechanical: failed gate checks and find-first duplicates. Objections are advice, never counted: the real
+    # critic returns three of them on every plan, so their number carries no information (ADR-2329 item 5).
+    n_checks = len(checks) + len(dups)
+    n_failed = len(fails) + len(dups)
     loss = round(n_failed / n_checks, 4) if n_checks else 0.0
     gate_ok = not fails
     created: list[str] = []
@@ -382,20 +420,24 @@ def _unfold(store: PersonalStore, uid: str, *, stage: str | None, generate: Gene
     st["checks"], st["failed"] = n_checks, n_failed
     st["last_stage"] = target
     st.setdefault("metrics", {})[target] = {"checks": len(checks), "gate_failed": len(fails), "dups": len(dups)}
-    if order <= STAGES.index(st["stage"]):
+    if rerun:
         st["iterations"] = int(st["iterations"]) + 1
     if gate_ok:
         st["stage"] = target
         st["children"][target] = created
+        st["passed"] = sorted(set(_passed(st)) | {target}, key=STAGES.index)
     upd = dict(idea, decoder=st, status="exploring" if idea["status"] == "inbox" else idea["status"])
     try:
         store.put(upd, now=ts, expected_version=idea["version"])
-    except VersionConflict:
-        # the owner (or another process) changed the idea meanwhile: keep their version, drop this step's drafts
+    except BaseException as exc:
+        # The idea was not written (changed meanwhile, store full, anything): drop this step's drafts so a retry does
+        # not double the plan (ADR-2329 change 4; before, only a VersionConflict cleaned up).
         for cuid in created:
             with contextlib.suppress(Exception):
                 store.forget(cuid)
-        raise DecoderError("the idea changed while this step ran; run the step again") from None
+        if isinstance(exc, VersionConflict):
+            raise DecoderError("the idea changed while this step ran; run the step again") from None
+        raise
     _drop_replaced_children(store, idea, target if gate_ok else "", created)
     audit.emit("personal_kb.decoder_stage", tenant_id=store.tenant_id, owner_hash=store.owner_hash, uid=uid,
                stage=target, gate="pass" if gate_ok else "fail", loss_bucket=audit.bucket(loss),
@@ -413,21 +455,38 @@ def _unfold(store: PersonalStore, uid: str, *, stage: str | None, generate: Gene
 
 
 def _write_stage(store: PersonalStore, idea: dict, stage: str, data: dict, ts: float) -> list[str]:
+    """Write a passed stage's entries. A plan's ``depends_on`` is stored as ``blocks`` links between its tasks (before,
+    only the decoder's cached copy knew the order). A failure part-way removes what this call already wrote."""
     link = [{"rel": "derived_from", "to": idea["uid"]}]
-    if stage in ("shape", "choices"):
-        n = model.new_entity("note", f"{stage.capitalize()}: {idea['title']}"[:model.MAX_TITLE],
-                             body=_render(stage, data)[:model.MAX_BODY], origin="derived", links=link,
-                             labels=[stage, "decoder"], now=ts)
-        return [store.put(n, now=ts)["uid"]]
-    created = []
-    choices_uid = ((_state(idea)["children"] or {}).get("choices") or [None])[0]
-    for t in data.get("tasks", []):
-        links = list(link) + ([{"rel": "related", "to": choices_uid}] if choices_uid else [])
-        ent = model.new_entity("task", _s(t.get("title"))[:model.MAX_TITLE], origin="derived", links=links,
-                               labels=["decoder"], now=ts)
-        ent["task"]["dod"] = _s(t.get("dod"))[:2000]
-        created.append(store.put(ent, now=ts)["uid"])
-    return created
+    created: list[str] = []
+    try:
+        if stage in ("shape", "choices"):
+            n = model.new_entity("note", f"{stage.capitalize()}: {idea['title']}"[:model.MAX_TITLE],
+                                 body=_render(stage, data)[:model.MAX_BODY], origin="derived", links=link,
+                                 labels=[stage, "decoder"], now=ts)
+            created.append(store.put(n, now=ts)["uid"])
+            return created
+        choices_uid = ((_state(idea)["children"] or {}).get("choices") or [None])[0]
+        tasks = [t for t in data.get("tasks", []) if isinstance(t, dict)]
+        ents = []
+        for t in tasks:
+            links = list(link) + ([{"rel": "related", "to": choices_uid}] if choices_uid else [])
+            ent = model.new_entity("task", _s(t.get("title"))[:model.MAX_TITLE], origin="derived", links=links,
+                                   labels=["decoder"], now=ts)
+            ent["task"]["dod"] = _s(t.get("dod"))[:2000]
+            ents.append(ent)
+        for j, t in enumerate(tasks):        # task i blocks task j when j depends on i (the gate made them point back)
+            for i in t.get("depends_on") or []:
+                if isinstance(i, int) and 0 <= i < j:
+                    ents[i]["links"].append({"rel": "blocks", "to": ents[j]["uid"]})
+        for ent in ents:
+            created.append(store.put(ent, now=ts)["uid"])
+        return created
+    except BaseException:
+        for cuid in created:
+            with contextlib.suppress(Exception):
+                store.forget(cuid)
+        raise
 
 
 def _drop_replaced_children(store: PersonalStore, idea: dict, stage: str, created: list[str]) -> None:
@@ -448,11 +507,10 @@ def _drop_replaced_children(store: PersonalStore, idea: dict, stage: str, create
 
 
 def _stage_loss(st: dict, stage: str) -> float:
-    """Loss of one stage, recomputed from that stage's own checks and its unresolved objections."""
+    """Loss of one stage, recomputed from that stage's own mechanical checks (objections are advice, not loss)."""
     m = (st.get("metrics") or {}).get(stage) or {}
-    objs = [o for o in st.get("objections", []) if o.get("stage") == stage]
-    checks = int(m.get("checks", 0)) + len(objs) + int(m.get("dups", 0))
-    failed = int(m.get("gate_failed", 0)) + sum(1 for o in objs if not o.get("resolved")) + int(m.get("dups", 0))
+    checks = int(m.get("checks", 0)) + int(m.get("dups", 0))          # mechanical only (ADR-2329 item 5)
+    failed = int(m.get("gate_failed", 0)) + int(m.get("dups", 0))
     return round(failed / checks, 4) if checks else 0.0
 
 
@@ -479,10 +537,26 @@ def resolve_objection(store: PersonalStore, uid: str, index: int, action: str, *
             raise DecoderError("the idea changed meanwhile; try again") from None
         audit.emit("personal_kb.decoder_objection", tenant_id=store.tenant_id, owner_hash=store.owner_hash,
                    uid=uid, stage=obj["stage"], count=1, resolved=1)
+        _count_verdict(store, str(obj.get("category") or ""), "dismiss")     # counted only once it took effect
         return None
     if action == "fix":
-        return unfold(store, uid, stage=obj["stage"], generate=generate, now=now)
+        result = unfold(store, uid, stage=obj["stage"], generate=generate, now=now)
+        _count_verdict(store, str(obj.get("category") or ""), "fix")
+        return result
     raise DecoderError("unknown action")
+
+
+def _count_verdict(store: PersonalStore, category: str, action: str) -> None:
+    """How often the owner fixed or dismissed an objection of each category: counts only, kept for a later decision on
+    showing categories differently (no re-ranking is done: it showed no benefit, ADR-2329 item 5)."""
+    if category not in OBJECTION_CATEGORIES:
+        return
+
+    def _add(m: dict) -> None:
+        v = m.setdefault("critic_verdicts", {}).setdefault(category, {"fix": 0, "dismiss": 0})
+        v[action] = int(v.get(action, 0)) + 1
+    with contextlib.suppress(Exception):
+        store.update_meta(_add)
 
 
 def revisit(store: PersonalStore, task_uid: str, category: str, *, generate: Generate | None = None,
@@ -503,18 +577,29 @@ def revisit(store: PersonalStore, task_uid: str, category: str, *, generate: Gen
     return unfold(store, idea_uid, stage=target, generate=generate, now=now)
 
 
+def closing_rule(tasks: list[dict]) -> bool:
+    """Every task of the current plan is terminal and at least one is done (ADR-2329 change 2). Before, every task had to
+    be done, so one cancelled task kept an idea open forever."""
+    return bool(tasks) and all(t["status"] in ("done", "cancelled") for t in tasks) and any(t["status"] == "done" for t in tasks)
+
+
 def refresh_done(store: PersonalStore, uid: str) -> bool:
-    """Close the idea as ``realized`` when every planned task is done."""
+    """Close the idea as ``realized`` when its current plan is finished, and tell the plan-size estimator what the owner
+    finished of it."""
     idea = store.get(uid)
     if idea is None:
         return False
     st = _state(idea)
-    tasks = [store.get(t) for t in (st["children"].get("plan") or [])]
-    if st["stage"] == "plan" and tasks and all(t and t["status"] == "done" for t in tasks):
+    planned = list(st["children"].get("plan") or [])
+    tasks = [x for x in (store.get(t) for t in planned) if x is not None]
+    if st["stage"] == "plan" and idea["status"] in ("inbox", "exploring") and closing_rule(tasks) \
+            and "STUCK_REALIZATION" not in (st.get("dismissed") or []):
         st["stage"] = "done"
         try:
             store.put(dict(idea, decoder=st, status="realized"), expected_version=idea["version"])
         except VersionConflict:
             return False   # changed meanwhile; the next refresh closes it
+        with contextlib.suppress(Exception):
+            evolve.record_plan_outcome(store, planned=len(planned), kept=sum(1 for x in tasks if x["status"] == "done"))
         return True
     return False

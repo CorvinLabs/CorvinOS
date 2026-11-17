@@ -1,7 +1,10 @@
-"""What the SHIPPED decoder (``core/personal_kb/decoder.py``) does under the faults the design targets.
+"""What the shipped decoder (``core/personal_kb/decoder.py``) does under the faults ADR-2329 targets.
 
 Runs the real code against a real encrypted ``PersonalStore`` in a sandbox (same setup as ``decoder_eval``), with the
 replay corpus of ``decoder_eval`` as generator. Every number is an observation of shipped behaviour, not a model.
+Before ADR-2329 was implemented these numbers showed the gaps (no stored dependencies, an idea that never closed, stale
+child lists, orphans, no sweep); a forget here is followed by ``consistency.run_sweep`` exactly as the console's and
+the bridge's forget paths do.
 """
 from __future__ import annotations
 
@@ -17,7 +20,7 @@ for p in (str(REPO), str(REPO / "corvin_operator" / "forge"), str(REPO / "corvin
 
 
 def measure_v1_baseline() -> dict:
-    from core.personal_kb import capabilities, crypto, decoder, limits, model, owner, session
+    from core.personal_kb import capabilities, consistency, crypto, decoder, limits, model, owner, session
     from core.personal_kb.store import PersonalStore
     from tests.personal_kb.decoder_eval.corpus import CORPUS
     from tests.personal_kb.decoder_eval.run_eval import _gen_for
@@ -75,6 +78,7 @@ def measure_v1_baseline() -> dict:
             idea3 = plan_idea(CORPUS[2])
             ts3 = [e for e in kids(idea3) if e["type"] == "task"]
             s.forget(ts3[0]["uid"])
+            consistency.run_sweep(s)
             st3 = s.get(idea3["uid"])["decoder"]
             out["forgotten_task_still_listed_as_child"] = ts3[0]["uid"] in (st3["children"].get("plan") or [])
             out["stage_after_forgetting_a_task"] = st3["stage"]
@@ -83,13 +87,14 @@ def measure_v1_baseline() -> dict:
             idea4 = plan_idea(CORPUS[3])
             n_kids = len(kids(idea4))
             s.forget(idea4["uid"])
+            consistency.run_sweep(s, now=clock[0] + 10_000)
             left = [e for e in s.entries() if any(ln.get("rel") == "derived_from" and ln.get("to") == idea4["uid"]
                                                   for ln in e.get("links") or [])]
             out["children_before_forgetting_the_idea"] = n_kids
             out["orphans_after_forgetting_the_idea"] = len(left)
 
             # 5. does any public decoder function report an inconsistency? (names that would)
-            out["public_consistency_functions"] = sorted(n for n in dir(decoder) if any(w in n.lower() for w in ("sweep", "heal", "consisten", "verify", "audit_graph")))
+            out["public_consistency_functions"] = sorted(n for n in ("sweep", "heal", "run_sweep") if callable(getattr(consistency, n, None)))
             return out
         finally:
             for k, v in saved.items():

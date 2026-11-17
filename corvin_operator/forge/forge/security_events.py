@@ -1196,6 +1196,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "personal_kb.learning_frozen": "WARNING",
     "personal_kb.decoder_stage": "INFO",
     "personal_kb.decoder_objection": "INFO",
+    "personal_kb.decoder_swept": "INFO",
+    "personal_kb.decoder_proposal": "INFO",
     "personal_kb.erasure_started": "WARNING",
     "erasure.personal_kb_deleted": "WARNING",
     "forge_bundle.exported": "INFO",
@@ -4941,6 +4943,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "personal_kb.learning_frozen": frozenset({"owner_hash", "reason_code", "tenant_id"}),
     "personal_kb.decoder_stage": frozenset({"gate", "iteration", "loss_bucket", "owner_hash", "stage", "tenant_id", "uid"}),
     "personal_kb.decoder_objection": frozenset({"count", "owner_hash", "resolved", "stage", "tenant_id", "uid"}),
+    "personal_kb.decoder_swept": frozenset({"auto_left", "healed", "owner_hash", "review", "tenant_id"}),
+    "personal_kb.decoder_proposal": frozenset({"cause_code", "outcome", "owner_hash", "params", "tenant_id"}),
     "personal_kb.erasure_started": frozenset({"owner_hash", "tenant_id"}),
     "erasure.personal_kb_deleted": frozenset({"layer", "objects_deleted", "owner_hash", "tenant_id"}),
     "forge_bundle.exported": frozenset({

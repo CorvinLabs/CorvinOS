@@ -95,7 +95,16 @@ def _open_default(rec: Any, request: Request, response: Response) -> tuple[Any, 
     entry = session.get_console(token, tenant_id=rec.tenant_id, sid=rec.sid)
     if entry is None:
         raise HTTPException(status_code=423, detail="personal space is not available")
+    _sweep_on_open(entry, token)
     return entry, token
+
+
+def _sweep_on_open(entry: Any, token: str) -> None:
+    """The full consistency sweep when a session opens the space (ADR-2329 item 7). It never blocks the opening."""
+    from core.personal_kb import consistency
+
+    with contextlib.suppress(Exception):
+        consistency.run_sweep(_store_for(entry, token))
 
 
 def entry_or_default(rec: Any, request: Request, response: Response, token: str | None) -> tuple[Any, str]:
@@ -312,7 +321,11 @@ async def unlock(body: UnlockBody, response: Response, request: Request,
     await asyncio.to_thread(erasure.resume_pending, rec.tenant_id)
     oid, keys = await _run(owner.unlock_with_passphrase, rec.tenant_id, body.handle, body.passphrase,
                            session_key=rec.sid, surface="console")
-    _set_cookie(response, session.put_console(rec.tenant_id, oid, keys, rec.sid), request)
+    token = session.put_console(rec.tenant_id, oid, keys, rec.sid)
+    _set_cookie(response, token, request)
+    entry = session.get_console(token, tenant_id=rec.tenant_id, sid=rec.sid)
+    if entry is not None:
+        await asyncio.to_thread(_sweep_on_open, entry, token)
     return {"unlocked": True}
 
 
@@ -462,7 +475,7 @@ async def patch_entity(uid: str, body: EntityPatch, response: Response, u: Annot
 @router.delete("/entities/{uid}")
 async def forget_entity(uid: str, response: Response, u: Annotated[Unlocked, Depends(_unlocked)],
                         _c: Annotated[Any, Depends(require_csrf)]) -> dict[str, Any]:
-    from core.personal_kb import capture
+    from core.personal_kb import capture, consistency
 
     _no_store(response)
     s = await _store(u)
@@ -473,6 +486,8 @@ async def forget_entity(uid: str, response: Response, u: Annotated[Unlocked, Dep
             raise KeyError(uid)
         s.forget(uid, fingerprint=(f"{e.get('key')} {e['title']}" if e.get("key") else e["title"]))
         capture.note_owner_action(s, e, "forget")
+        with contextlib.suppress(Exception):          # a forgotten layer note or task: prune the decoder's pointers
+            consistency.run_sweep(s)
     await _run(_do)
     return {"forgotten": True}
 
@@ -629,6 +644,100 @@ async def revisit(uid: str, response: Response, u: Annotated[Unlocked, Depends(_
     s = await _store(u)
     r = await _run(decoder.revisit, s, task_uid, category)
     return _result(r) if r is not None else {"revisit": None}
+
+
+class DismissBody(BaseModel):
+    code: str = Field(max_length=40)
+    reason: str = Field(default="", max_length=300)
+
+
+class AcknowledgeBody(BaseModel):
+    a: str = Field(max_length=40)
+    b: str = Field(max_length=40)
+
+
+DISMISSIBLE = ("STUCK_REALIZATION",)
+
+
+def _review_view(s: Any, report: dict[str, Any]) -> dict[str, Any]:
+    """The review items for the owner's own session: codes, uids, display ids and titles of their own entries."""
+    items = []
+    for r in report["review"]:
+        e = s.get(r["uid"]) if r["uid"] != "meta" else None
+        other = s.get(r["detail"]) if r.get("detail") else None
+        items.append({"code": r["code"], "uid": r["uid"], "display_id": (e or {}).get("display_id"),
+                      "title": (e or {}).get("title", ""), "other_uid": (other or {}).get("uid"),
+                      "other_display_id": (other or {}).get("display_id"), "other_title": (other or {}).get("title", "")})
+    return {"items": items, "healed": report["healed"], "auto_left": report["auto_left"]}
+
+
+@router.get("/consistency")
+async def consistency_report(response: Response, u: Annotated[Unlocked, Depends(_unlocked)]) -> dict[str, Any]:
+    """What needs the owner's look (read only: nothing is healed by a GET)."""
+    from core.personal_kb import consistency
+
+    _no_store(response)
+    s = await _store(u)
+    return _review_view(s, await _run(consistency.run_sweep, s, apply=False))
+
+
+@router.post("/consistency/sweep")
+async def consistency_sweep(response: Response, u: Annotated[Unlocked, Depends(_unlocked)],
+                            _c: Annotated[Any, Depends(require_csrf)]) -> dict[str, Any]:
+    """Run the sweep now and heal what is derivable (never a word of the owner, never a status)."""
+    from core.personal_kb import consistency
+
+    _no_store(response)
+    s = await _store(u)
+    return _review_view(s, await _run(consistency.run_sweep, s))
+
+
+@router.post("/ideas/{uid}/decoder/dismiss")
+async def dismiss_review(uid: str, body: DismissBody, response: Response, u: Annotated[Unlocked, Depends(_unlocked)],
+                         _c: Annotated[Any, Depends(require_csrf)]) -> dict[str, Any]:
+    """The owner keeps an idea open although its plan is finished: the nudge goes away for this idea."""
+    from core.personal_kb.store import VersionConflict
+
+    _no_store(response)
+    if body.code not in DISMISSIBLE:
+        raise HTTPException(status_code=400, detail="this item cannot be dismissed")
+    s = await _store(u)
+
+    def _do():
+        e = s.get(uid)
+        if e is None or e["type"] != "idea" or not e.get("decoder"):
+            raise KeyError(uid)
+        st = dict(e["decoder"])
+        st["dismissed"] = sorted(set(st.get("dismissed") or []) | {body.code})
+        try:
+            s.put(dict(e, decoder=st), expected_version=e["version"])
+        except VersionConflict:
+            raise HTTPException(status_code=409, detail="the idea changed meanwhile; try again") from None
+        return {"dismissed": body.code}
+    return await _run(_do)
+
+
+@router.post("/consistency/acknowledge")
+async def acknowledge_pair(body: AcknowledgeBody, response: Response, u: Annotated[Unlocked, Depends(_unlocked)],
+                           _c: Annotated[Any, Depends(require_csrf)]) -> dict[str, Any]:
+    """"These two ideas are different": a related link between them, which is how a similar pair is acknowledged."""
+    from core.personal_kb.store import VersionConflict
+
+    _no_store(response)
+    s = await _store(u)
+
+    def _do():
+        a, b = s.get(body.a), s.get(body.b)
+        if a is None or b is None or a["type"] != "idea" or b["type"] != "idea" or a["uid"] == b["uid"]:
+            raise KeyError(body.a)
+        if any(ln.get("to") == b["uid"] for ln in a.get("links") or []):
+            return {"acknowledged": True}
+        try:
+            s.put(dict(a, links=list(a.get("links") or []) + [{"rel": "related", "to": b["uid"]}]), expected_version=a["version"])
+        except VersionConflict:
+            raise HTTPException(status_code=409, detail="the idea changed meanwhile; try again") from None
+        return {"acknowledged": True}
+    return await _run(_do)
 
 
 # ---- feed and policy ----------------------------------------------------------------------------

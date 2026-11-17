@@ -35,8 +35,9 @@ def test_consistency_layer_scores_on_the_seeded_faults_and_the_legitimate_action
 
 
 def test_the_duplicate_index_equals_brute_force_when_no_word_is_dropped(monkeypatch):
-    monkeypatch.setattr(C, "EXACT_PAIRS_UP_TO", 0)
-    monkeypatch.setattr(C, "COMMON_TOKEN_FLOOR", 10 ** 9)
+    from core.personal_kb import consistency as product
+    monkeypatch.setattr(product, "EXACT_PAIRS_UP_TO", 0)
+    monkeypatch.setattr(product, "COMMON_TOKEN_FLOOR", 10 ** 9)
     rng = random.Random(1)
     words = [f"w{i}x" for i in range(14)]
     pairs_seen = 0
@@ -131,14 +132,13 @@ def test_the_stored_real_kb_crosscheck_matches_the_design_note():
     assert nd["both"] == nd["mine"] and nd["both"] >= 4                          # no false alarm against kb check's own rule
 
 
-def test_the_shipped_decoder_still_has_the_gaps_the_design_is_built_on():
-    """Tripwire. If one of these fails, the shipped decoder was fixed: update the design note (section 1) and this test."""
+def test_the_shipped_decoder_closes_the_gaps_adr_2329_was_built_on():
+    """On a real encrypted store: the gaps measured before ADR-2329 are closed (they were this test's tripwire)."""
     from tests.personal_kb.decoder_v2.baseline_v1 import measure_v1_baseline
 
     o = measure_v1_baseline()
-    assert o["tasks_with_a_blocks_link"] == 0 and o["plan_tasks"] >= 2             # depends_on is not stored
-    assert o["closed_after_one_cancelled_rest_done"] is False                      # one cancelled task keeps the idea open forever
-    assert o["forgotten_task_still_listed_as_child"] is True
-    assert o["orphans_after_forgetting_the_idea"] == o["children_before_forgetting_the_idea"] >= 2
-    assert o["public_consistency_functions"] == []
-    assert o["context_copy_of_stage_data_kept_on_the_idea"] == ["choices", "plan", "shape"]
+    assert o["plan_tasks"] >= 2 and o["tasks_with_a_blocks_link"] >= 1          # depends_on is stored as blocks links
+    assert o["closed_after_one_cancelled_rest_done"] is True and o["idea_status_after_that"] == "realized"
+    assert o["forgotten_task_still_listed_as_child"] is False                  # the sweep pruned the pointer
+    assert o["children_before_forgetting_the_idea"] >= 2 and o["orphans_after_forgetting_the_idea"] == 0
+    assert o["public_consistency_functions"] == ["heal", "run_sweep", "sweep"]

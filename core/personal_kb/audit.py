@@ -49,6 +49,8 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "personal_kb.learning_frozen": frozenset({_O, "reason_code", _T}),
     "personal_kb.decoder_stage": frozenset({_O, "uid", "stage", "gate", "loss_bucket", "iteration", _T}),
     "personal_kb.decoder_objection": frozenset({_O, "uid", "stage", "count", "resolved", _T}),
+    "personal_kb.decoder_swept": frozenset({_O, "healed", "review", "auto_left", _T}),
+    "personal_kb.decoder_proposal": frozenset({_O, "params", "outcome", "cause_code", _T}),
     "personal_kb.erasure_started": frozenset({_O, _T}),
     "erasure.personal_kb_deleted": frozenset({_O, "objects_deleted", "layer", _T}),
 }

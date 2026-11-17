@@ -306,6 +306,122 @@ class PersonalKbHttpE2E(unittest.TestCase):
                         json={"index": 0, "action": "dismiss", "reason": "covered"}).json()
         self.assertTrue(d["dismissed"])
 
+    # ---- ADR-2329: the decoder keeps itself consistent -----------------------------------------
+
+    def _fake_engine(self, plan_tasks=None, shape=None):
+        from core.personal_kb import decoder
+
+        good = {"shape": shape or {"goal": "g", "boundaries": ["b"], "why_now": "w", "success": "s"},
+                "choices": {"meaning": "m", "reach": "r", "doing": "d", "decisions": [], "no_decision_needed": "simple"},
+                "plan": {"tasks": plan_tasks or [{"title": "Buy pots", "dod": "pots at home", "depends_on": []},
+                                                 {"title": "Plant herbs", "dod": "herbs planted", "depends_on": [0]},
+                                                 {"title": "Water daily", "dod": "alive after two weeks", "depends_on": [1]}]},
+                "adversarial": {"objections": [{"category": "risk", "text": "frost"}, {"category": "gap", "text": "light"}]}}
+        orig = decoder.default_generate
+        decoder.default_generate = lambda tenant_id: (lambda stage, prompt: json.loads(json.dumps(good[stage])))
+        self.addCleanup(lambda: setattr(decoder, "default_generate", orig))
+
+    def _planned_idea(self, title="Balcony herbs"):
+        idea = self.a.post("/personal/entities", json={"type": "idea", "title": title}).json()
+        for stage in ("shape", "choices", "plan"):
+            r = self.a.post(f"/personal/ideas/{idea['uid']}/unfold", json={})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["stage"], stage)
+        st = self.a.get(f"/personal/ideas/{idea['uid']}/decoder").json()
+        return idea, st["decoder"]
+
+    def _task(self, uid, *steps, reason=None):
+        for to in steps:
+            body = {"to": to}
+            if to == "cancelled":
+                body["reason"] = reason or "not needed"
+            if to == "done":
+                body["dod"] = "checked"
+            r = self.a.post(f"/personal/tasks/{uid}/transition", json=body)
+            self.assertEqual(r.status_code, 200, r.text)
+
+    def test_v2_plan_stores_dependencies_ranks_objections_and_closes_with_a_cancelled_task(self):
+        self._fake_engine()
+        idea, st = self._planned_idea()
+        tasks = [self.a.get(f"/personal/entities/{u}").json() for u in st["children"]["plan"]]
+        blocks = {(t["uid"], ln["to"]) for t in tasks for ln in t["links"] if ln["rel"] == "blocks"}
+        self.assertEqual(blocks, {(tasks[0]["uid"], tasks[1]["uid"]), (tasks[1]["uid"], tasks[2]["uid"])})
+        self.assertEqual([o["rank"] for o in st["objections"] if o["stage"] == "plan"], [1, 2])
+        self.assertEqual(st["loss"], 0.0)                       # objections are advice, not loss
+        self._task(tasks[0]["uid"], "cancelled")
+        self._task(tasks[1]["uid"], "in_progress", "done")
+        self.assertEqual(self.a.get(f"/personal/entities/{idea['uid']}").json()["status"], "exploring")
+        self._task(tasks[2]["uid"], "in_progress", "done")
+        self.assertEqual(self.a.get(f"/personal/entities/{idea['uid']}").json()["status"], "realized")
+
+    def test_v2_forgetting_the_plan_lowers_the_cursor_and_the_decoder_continues(self):
+        self._fake_engine()
+        idea, st = self._planned_idea()
+        for u in st["children"]["plan"]:
+            self.assertEqual(self.a.delete(f"/personal/entities/{u}").status_code, 200)
+        now = self.a.get(f"/personal/ideas/{idea['uid']}/decoder").json()
+        self.assertEqual((now["decoder"]["stage"], now["decoder"]["children"]["plan"], now["next_stage"]), ("choices", [], "plan"))
+        r = self.a.post(f"/personal/ideas/{idea['uid']}/unfold", json={})
+        self.assertEqual((r.status_code, r.json()["stage"]), (200, "plan"))
+        after = self.a.get(f"/personal/ideas/{idea['uid']}/decoder").json()["decoder"]
+        self.assertEqual(after["iterations"], 1)                # a re-run, whatever the cursor said
+
+    def test_v2_review_items_dismiss_and_acknowledge_over_http(self):
+        self._fake_engine()
+        a = self.a.post("/personal/entities", json={"type": "idea", "title": "Build a bird house for the garden"}).json()
+        b = self.a.post("/personal/entities", json={"type": "idea", "title": "Build a bird house for the garden too"}).json()
+        items = self.a.get("/personal/consistency").json()["items"]
+        self.assertIn("DUPLICATE_IDEAS", [i["code"] for i in items])
+        r = self.a.post("/personal/consistency/acknowledge", json={"a": b["uid"], "b": a["uid"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertNotIn("DUPLICATE_IDEAS", [i["code"] for i in self.a.get("/personal/consistency").json()["items"]])
+        idea, st = self._planned_idea("Repaint the fence")
+        plan = st["children"]["plan"]
+        for u in plan[:-1]:
+            self._task(u, "in_progress", "done")
+        self.assertEqual(self.a.delete(f"/personal/entities/{plan[-1]}").status_code, 200)   # the last open task, forgotten
+        self.assertEqual(self.a.get(f"/personal/entities/{idea['uid']}").json()["status"], "exploring")
+        codes = [(i["code"], i["uid"]) for i in self.a.get("/personal/consistency").json()["items"]]
+        self.assertIn(("STUCK_REALIZATION", idea["uid"]), codes)                         # a nudge, never an automatic close
+        self.assertEqual(self.a.post(f"/personal/ideas/{idea['uid']}/decoder/dismiss", json={"code": "STUCK_REALIZATION"}).status_code, 200)
+        self.assertEqual(self.a.post(f"/personal/ideas/{idea['uid']}/decoder/dismiss", json={"code": "DANGLING_LINK"}).status_code, 400)
+        self.assertNotIn(("STUCK_REALIZATION", idea["uid"]), [(i["code"], i["uid"]) for i in self.a.get("/personal/consistency").json()["items"]])
+        self.assertEqual(self.a.get(f"/personal/entities/{idea['uid']}").json()["status"], "exploring")   # the owner's call stands
+
+    def test_v2_a_new_session_sweeps_what_was_left_stale(self):
+        self._fake_engine()
+        idea, st = self._planned_idea()
+        from core.personal_kb import owner
+        from core.personal_kb.store import PersonalStore
+        oid, keys = owner.unlock_default("_default")
+        s = PersonalStore.open("_default", oid, keys)
+        s.forget(st["children"]["plan"][0])                         # behind the console's back: no sweep ran
+        self.assertIn(st["children"]["plan"][0], self.a.get(f"/personal/ideas/{idea['uid']}/decoder").json()["decoder"]["children"]["plan"])
+        from fastapi.testclient import TestClient
+        c = self._client(TestClient)                                # opening the space runs the full sweep
+        self.assertTrue(c.get("/personal/status").json()["unlocked"])
+        plan = c.get(f"/personal/ideas/{idea['uid']}/decoder").json()["decoder"]["children"]["plan"]
+        self.assertNotIn(st["children"]["plan"][0], plan)
+        self.assertEqual(len(plan), 2)
+        chain = (self.root / "tenants" / "_default" / "global" / "forge" / "audit.jsonl").read_text(encoding="utf-8")
+        self.assertIn("personal_kb.decoder_swept", chain)
+        self.assertNotIn("Balcony herbs", chain)
+
+    def test_v2_knob_changes_are_proposed_not_applied(self):
+        bad = {"goal": "", "boundaries": [], "why_now": "", "success": ""}
+        self._fake_engine(shape=bad)
+        for i in range(3):
+            idea = self.a.post("/personal/entities", json={"type": "idea", "title": f"Idea number {i} about the shed"}).json()
+            r = self.a.post(f"/personal/ideas/{idea['uid']}/unfold", json={})
+            self.assertEqual((r.status_code, r.json()["gate_ok"]), (200, False))
+        pol = self.a.get("/personal/policy").json()
+        self.assertEqual(pol["current"]["decoder_template_variant"], "t1")
+        self.assertEqual(pol["pending"]["target"]["decoder_template_variant"], "t0_strict")     # kept, not overwritten
+        self.assertEqual(pol["pending"]["target"]["decoder_adversarial_rounds"], 2)              # joined by the second suggestion
+        self.assertEqual(pol["current"]["decoder_adversarial_rounds"], 1)
+        chain = (self.root / "tenants" / "_default" / "global" / "forge" / "audit.jsonl").read_text(encoding="utf-8")
+        self.assertIn("personal_kb.decoder_proposal", chain)
+
     def test_promote_without_kb_fails_cleanly(self):
         self._create()
         idea = self.a.post("/personal/entities", json={"type": "idea", "title": "Promote me"}).json()

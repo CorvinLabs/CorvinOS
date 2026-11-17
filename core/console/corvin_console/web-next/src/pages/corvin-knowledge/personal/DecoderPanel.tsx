@@ -2,7 +2,9 @@
  * The personal decoder for one idea: Seed · Shape · Choices · Plan · Done, one step per click.
  *
  * Each step shows its check results and the critic's objections; "open issues" is the share of
- * failed checks, measured by plain rules, never the model's own opinion. Nothing runs by itself.
+ * failed checks, measured by plain rules, never the model's own opinion, and never the number of objections (the critic
+ * always names about three). The critic's first open objection is the main point; the others stay visible but quiet,
+ * because measured on real runs the first one is far more often a real defect. Nothing runs by itself.
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -52,21 +54,37 @@ export function DecoderPanel({ idea, csrf, onChanged }: { idea: pk.PersonalEntit
       {Object.entries(d.gates).filter(([, g]) => !g.ok).map(([s, g]) => (
         <p key={s} className="text-xs text-amber-700 dark:text-amber-300">{pk.STAGE_LABELS[s]} is missing: {g.failures.join("; ")}</p>
       ))}
-      {d.objections.length > 0 && (
-        <ul className="space-y-2 text-sm">
-          {d.objections.map((o, i) => (
-            <li key={i} className="flex flex-wrap items-center gap-2">
-              <Badge variant={o.resolved ? "secondary" : "warn"}>{o.category}</Badge>
-              <span className={o.resolved ? "line-through text-muted-foreground" : ""}>{o.text}</span>
-              {!o.resolved && <>
-                <Button size="sm" variant="outline" disabled={!csrf || busy} onClick={() => obj.mutate({ i, action: "fix" })}>Rework this step</Button>
-                <Input className="h-8 max-w-[220px]" placeholder="Why it does not matter" value={reason[i] ?? ""} onChange={(e) => setReason({ ...reason, [i]: e.target.value })} />
-                <Button size="sm" variant="ghost" disabled={!csrf || busy || !(reason[i] ?? "").trim()} onClick={() => obj.mutate({ i, action: "dismiss" })}>Dismiss</Button>
-              </>}
-            </li>
-          ))}
-        </ul>
-      )}
+      {(() => {
+        const { main, rest, earlier, done: resolved } = pk.splitObjections(d.objections, d.last_stage ?? d.stage);
+        const row = ([o, i]: [pk.DecoderObjection, number], loud: boolean) => (
+          <li key={i} className="flex flex-wrap items-center gap-2" data-testid={loud ? "personal-objection-main" : "personal-objection-other"}>
+            <Badge variant={o.resolved ? "secondary" : loud ? "warn" : "outline"}>{o.category}</Badge>
+            <span className={o.resolved ? "line-through text-muted-foreground" : loud ? "" : "text-muted-foreground"}>{o.text}</span>
+            {!o.resolved && <>
+              <Button size="sm" variant="outline" disabled={!csrf || busy} onClick={() => obj.mutate({ i, action: "fix" })}>Rework this step</Button>
+              <Input className="h-8 max-w-[220px]" placeholder="Why it does not matter" value={reason[i] ?? ""} onChange={(e) => setReason({ ...reason, [i]: e.target.value })} />
+              <Button size="sm" variant="ghost" disabled={!csrf || busy || !(reason[i] ?? "").trim()} onClick={() => obj.mutate({ i, action: "dismiss" })}>Dismiss</Button>
+            </>}
+          </li>
+        );
+        return <>
+          {main && <div className="space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Main point from the check</p>
+            <ul className="space-y-2 text-sm">{row(main, true)}</ul>
+          </div>}
+          {rest.length > 0 && <details className="text-sm" data-testid="personal-objections-other">
+            <summary className="cursor-pointer text-xs text-muted-foreground">Other remarks on this step ({rest.length})</summary>
+            <ul className="mt-2 space-y-2">{rest.map((x) => row(x, false))}</ul>
+          </details>}
+          {earlier.length > 0 && <details className="text-sm" data-testid="personal-objections-earlier">
+            <summary className="cursor-pointer text-xs text-muted-foreground">Open remarks on earlier steps ({earlier.length})</summary>
+            <ul className="mt-2 space-y-2">{earlier.map((x) => (
+              <li key={x[1]} className="space-y-1"><span className="text-xs text-muted-foreground">{pk.STAGE_LABELS[x[0].stage] ?? x[0].stage}</span>
+                <ul>{row(x, false)}</ul></li>))}</ul>
+          </details>}
+          {resolved.length > 0 && <ul className="space-y-1 text-xs">{resolved.map((x) => row(x, false))}</ul>}
+        </>;
+      })()}
       <div className="flex flex-wrap items-center gap-2">
         {q.data.next_stage && (
           <Button size="sm" variant="accent" disabled={!csrf || busy} onClick={() => step.mutate(undefined)} data-testid="personal-decoder-next">
