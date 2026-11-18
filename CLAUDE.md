@@ -294,6 +294,7 @@ before reporting a KB change as published. → [layer-10-path-gate.md](docs/clau
 reviews derived_from evidence source discussed_in regresses`; a target is an id/uid (must resolve to
 exactly one entity — otherwise refused) or a URI (`https:`, `repo:CorvinOS/path`, `commit:`, …).
 A task needs an epic, an epic an initiative. ADRs keep the ADR-0264 frontmatter (`paths`/`docs`/`commits`).
+A task is written in ticket form (CONCEPT-0136, ADR-2330): fill every section of `Corvin-Knowledge/docs/ticket-templates/task.md` (an epic follows `epic.md`) and run `python3 /home/shumway/projects/Corvin-Knowledge/docs/ticket-templates/lint_ticket.py --ready <task file>` before `kb task … in_progress`; exit 1 names the gap (form, `human_required`, verification, every id in Dependencies linked as `depends_on`, each `depends_on` done as the kb engine judges it). It does not replace agent autonomy (A2 still needs an implementation-ready ADR).
 
 **Work status** — ONLY `kb task <T-id> <to> [--reason …] [--dod …]` (state machine: done needs a
 definition of done and done dependencies; blocked/cancelled need a reason; done is terminal — a
