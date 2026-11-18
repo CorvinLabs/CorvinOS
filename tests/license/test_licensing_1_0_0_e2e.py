@@ -29,7 +29,9 @@ from unittest import mock
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _license_console_sandbox import console, member_tier  # noqa: E402
+from _license_console_sandbox import (  # noqa: E402
+    FREE_FORGE_LOCKED_ONLY, FREE_FORGE_UNLOCKED_ONLY, console, free_forge_unlocked, member_tier,
+)
 
 import corvin_operator.license.capability_api as capability_api  # noqa: E402
 
@@ -77,8 +79,15 @@ def test_answers_the_real_decision_per_tier(con):
         "quota_remaining": None, "reason": None, "upgrade_url": None,
     }
     free_forge = _ask(con, "forge.create")
-    assert free_forge["allowed"] is False and free_forge["tier"] == "free"
-    assert free_forge["reason"] == "not_available_in_tier"
+    assert free_forge["tier"] == "free"
+    if free_forge_unlocked():
+        assert free_forge["allowed"] is True and free_forge["quota_remaining"] is None
+    else:
+        assert free_forge["allowed"] is False
+        assert free_forge["reason"] == "not_available_in_tier"
+    # A capability that stays Member-only keeps the not-available-in-tier answer.
+    free_a2a = _ask(con, "a2a.network")
+    assert free_a2a["allowed"] is False and free_a2a["reason"] == "not_available_in_tier"
     assert _ask(con, "compute.run")["allowed"] is True           # free allowance 10
     assert _ask(con, "compute.run", requested=11)["reason"] == "quota_exceeded"
     assert _ask(con, "no.such.capability")["reason"] == "unknown_capability"
@@ -98,12 +107,39 @@ def test_non_positive_requested_is_422(con, requested):
 
 def test_body_tier_field_cannot_elevate(con):
     """The request's ``tier`` is never honoured — the tier comes from the licence."""
-    resp = con.client.post(VERIFY, json={"capability": "forge.create", "tier": "member"},
+    # a2a.network stays Member-only whatever the forge.create unlock state is.
+    resp = con.client.post(VERIFY, json={"capability": "a2a.network", "tier": "member"},
                            headers=con.h)
     assert resp.status_code == 200
     assert resp.json()["allowed"] is False and resp.json()["tier"] == "free"
 
 
+@FREE_FORGE_UNLOCKED_ONLY
+def test_capability_decisions_reach_the_tenant_audit_chain_while_forge_is_unlocked(con):
+    """Same proof as below with a capability that stays Member-only: a direct deny
+    (a2a.network), a direct allow (forge.create, unlocked) and a verify-endpoint
+    allow are all on the chain."""
+    with pytest.raises(capability_api.LicenseDenied):
+        capability_api.require_capability("a2a.network", tenant_id="_default",
+                                          entry_point="test")
+    capability_api.require_capability("forge.create", tenant_id="_default",
+                                      entry_point="test")
+    _ask(con, "chat.turns")
+    decisions = [e for e in con.audit_events()
+                 if e.get("event_type") == "license.capability_decision"]
+    got = [(d["details"]["capability"], d["details"]["decision"], d["details"]["entry_point"])
+           for d in decisions]
+    assert got == [
+        ("a2a.network", "deny", "test"),
+        ("forge.create", "allow", "test"),
+        ("chat.turns", "allow", "http:licensing_verify"),
+    ]
+    for d in decisions:
+        assert d["details"]["tenant_id"] == "_default" and d["details"]["tier"] == "free"
+        assert d.get("hash") and d["details"].get("lom_bound") is True
+
+
+@FREE_FORGE_LOCKED_ONLY
 def test_capability_decisions_reach_the_tenant_audit_chain(con):
     """Was KNOWN BUG: ``_audit_capability_decision`` imported ``forge.audit`` (no
     such module) and swallowed the error — no decision was ever recorded. A G3

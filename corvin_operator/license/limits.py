@@ -134,15 +134,16 @@ FREE_TIER: dict[str, Any] = {
 
     # Tool Forge (ADR-0365)
     # Daily limit for Tool Forge tool generations (L30, Forge compute_run).
-    # Free tier: 3/day; Member: unlimited.
-    "tool_forge_per_day":       3,
+    # TEMPORARY: Free unlocked (None = unlimited). Restore Free to 3/day for the Member-only model.
+    "tool_forge_per_day":       None,
 
     # Skill Forge (ADR-0365, re-activated by ADR-2095)
     # Daily skill-authoring writes on the free tier — every surface counts the
     # same (Skill-Creator, manual editor, MCP skill_create, canary fork), charged
     # by SkillRegistry.create. Member: unlimited. Tool Forge stays member-only
     # (forge.create).
-    "skill_forge_per_day":      5,
+    # TEMPORARY: Free unlocked (None = unlimited). Restore Free to 5/day for the ADR-2095 model.
+    "skill_forge_per_day":      None,
 
     # Plugin Limit (ADR-0365)
     # Maximum number of simultaneously loaded custom plugins.
@@ -301,7 +302,7 @@ CAPABILITIES: dict[str, dict[str, Any]] = {
     },
     "forge.create": {
         "class": "L",
-        "free": {"limit": 0},         # MEMBER ONLY — Forge/Skill-Forge authoring
+        "free": {"limit": None},      # TEMPORARY: Free unlocked (None = unlimited); Member-only again = limit 0
         "member": {"limit": None},
     },
     # Automatic model downgrading (ADR-2259, PLAN-0955). Free has an ALLOWANCE,

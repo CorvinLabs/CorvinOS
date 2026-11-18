@@ -16,7 +16,9 @@ from unittest.mock import patch
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _license_console_sandbox import member_tier  # noqa: E402
+from _license_console_sandbox import (  # noqa: E402
+    FREE_FORGE_LOCKED_ONLY, FREE_FORGE_UNLOCKED_ONLY, member_tier,
+)
 
 IMPL = "def main(**kwargs):\n    return {'ok': True}\n"
 
@@ -32,6 +34,17 @@ def _chain_decisions(home: Path) -> list[dict]:
 class TestG1E2E:
     """E2E: forge.create gate on Registry.create/promote"""
 
+    @FREE_FORGE_UNLOCKED_ONLY
+    def test_g1_create_with_free_tier_allowed_while_unlocked(self, tmp_path):
+        from corvin_operator.forge.forge.registry import Registry
+
+        registry = Registry(tmp_path / "reg")
+        result = registry.create(name="test_tool", description="test tool",
+                                 input_schema={"type": "object"}, impl=IMPL)
+        assert result.name == "test_tool"
+        assert registry.get("test_tool") is not None
+
+    @FREE_FORGE_LOCKED_ONLY
     def test_g1_create_with_free_tier_denied(self, tmp_path):
         from corvin_operator.forge.forge.registry import Registry
 
@@ -51,6 +64,16 @@ class TestG1E2E:
                                      input_schema={"type": "object"}, impl=IMPL)
         assert result.name == "test_tool"
 
+    @FREE_FORGE_UNLOCKED_ONLY
+    def test_g1_promote_with_free_tier_allowed_while_unlocked(self, tmp_path):
+        from corvin_operator.forge.forge.registry import Registry
+
+        registry = Registry(tmp_path / "reg")
+        registry.create(name="test_tool", description="test",
+                        input_schema={"type": "object"}, impl=IMPL)
+        assert registry.promote("test_tool").is_dir()
+
+    @FREE_FORGE_LOCKED_ONLY
     def test_g1_promote_enforces_gate(self, tmp_path):
         """Created as member, promote after a downgrade to free is refused."""
         from corvin_operator.forge.forge.registry import Registry
@@ -63,6 +86,7 @@ class TestG1E2E:
         with pytest.raises(PermissionError, match="forge.create denied"):
             registry.promote("test_tool")
 
+    @FREE_FORGE_LOCKED_ONLY
     def test_g1_ignores_an_import_order_no_op(self, tmp_path):
         """The gate is resolved at call time, so the capability_api/forge import
         cycle can no longer bind a no-op (fresh interpreter, both orders)."""
@@ -93,6 +117,19 @@ class TestG1E2E:
 class TestG4E2E:
     """E2E: plugin_builder gate on /plugin-builder command"""
 
+    @FREE_FORGE_UNLOCKED_ONLY
+    def test_g4_command_allows_free_tier_while_unlocked(self):
+        from core.plugins.plugin_builder.turn import command
+
+        with patch("corvin_operator.license.capability_api.active_tier",
+                   lambda **k: "free"):
+            with patch("core.plugins.plugin_builder.turn.session_store.get") as mock_get:
+                mock_get.return_value = None
+                result = command("status", tenant_id="_default", session_key="test_session")
+
+        assert "member seat" not in result
+
+    @FREE_FORGE_LOCKED_ONLY
     def test_g4_command_denies_free_tier(self):
         """E2E: /plugin-builder command denies free tier through the real gate."""
         from core.plugins.plugin_builder.turn import command
@@ -122,6 +159,13 @@ class TestG4E2E:
 class TestG5E2E:
     """E2E: orchestration quota gate on skill_forge/tool_forge"""
 
+    @FREE_FORGE_UNLOCKED_ONLY
+    def test_g5_skill_forge_allows_free_tier_while_unlocked(self):
+        from core.orchestration.quota_gate import check_forge_capability
+
+        assert check_forge_capability("_default", entry_point="skill_forge_mcp") is None
+
+    @FREE_FORGE_LOCKED_ONLY
     def test_g5_skill_forge_denies_free_tier(self):
         from core.orchestration.quota_gate import check_forge_capability
         from corvin_operator.license.capability_api import LicenseDenied
@@ -146,6 +190,26 @@ class TestG5E2E:
 class TestGateAuditTrail:
     """Every decision — allow and deny — lands on THE tenant chain."""
 
+    @FREE_FORGE_UNLOCKED_ONLY
+    def test_g1_decisions_are_on_the_tenant_chain_while_unlocked(self, tmp_path):
+        import os
+        from corvin_operator.forge.forge.registry import Registry
+
+        home = Path(os.environ["CORVIN_HOME"])
+        before = len(_chain_decisions(home))
+        registry = Registry(tmp_path / "reg")
+        registry.create("free_tool", "d", {"type": "object"}, IMPL)
+        with member_tier():
+            registry.create("allowed_tool", "d", {"type": "object"}, IMPL)
+        new = _chain_decisions(home)[before:]
+        verdicts = [(r["details"]["tier"], r["details"]["decision"]) for r in new]
+        assert verdicts == [("free", "allow"), ("member", "allow")]
+        for r in new:
+            assert r["details"]["capability"] == "forge.create"
+            assert r["details"]["entry_point"] == "forge:registry.create"
+            assert r["hash"] and "prev_hash" in r
+
+    @FREE_FORGE_LOCKED_ONLY
     def test_g1_decisions_are_on_the_tenant_chain(self, tmp_path):
         import os
         from corvin_operator.forge.forge.registry import Registry

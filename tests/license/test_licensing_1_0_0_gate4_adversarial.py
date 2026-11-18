@@ -25,7 +25,9 @@ from unittest import mock
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _license_console_sandbox import member_tier  # noqa: E402
+from _license_console_sandbox import (  # noqa: E402
+    FREE_FORGE_LOCKED_ONLY, FREE_FORGE_UNLOCKED_ONLY, free_forge_unlocked, member_tier,
+)
 
 import corvin_operator.license.capability_api as ca  # noqa: E402
 from corvin_operator.license import limits, quota_counter  # noqa: E402
@@ -55,11 +57,19 @@ def test_forged_tenant_never_yields_allow(tenant):
     assert exc.value.reason == "invalid_tenant"
 
 
+@FREE_FORGE_LOCKED_ONLY
 def test_free_forge_limit_is_zero_not_negative():
     assert limits.CAPABILITIES["forge.create"]["free"]["limit"] == 0
     with pytest.raises(ca.LicenseDenied) as exc:
         _decide("forge.create")
     assert exc.value.reason == "not_available_in_tier"
+
+
+@FREE_FORGE_UNLOCKED_ONLY
+def test_free_forge_unlocked_is_none_not_a_large_number():
+    assert limits.CAPABILITIES["forge.create"]["free"]["limit"] is None
+    decision = _decide("forge.create", 10**12)
+    assert decision.decision is ca.Decision.ALLOW and decision.allowed is None
 
 
 def test_member_unlimited_is_none_not_a_large_number():
@@ -95,7 +105,8 @@ def test_fifty_concurrent_checks_agree():
 
     with ThreadPoolExecutor(max_workers=50) as pool:
         results = list(pool.map(check, range(50)))
-    assert results == ["not_available_in_tier"] * 50
+    expected = "allow" if free_forge_unlocked() else "not_available_in_tier"
+    assert results == [expected] * 50
 
 
 def test_fifty_concurrent_increments_lose_no_update(tmp_path):

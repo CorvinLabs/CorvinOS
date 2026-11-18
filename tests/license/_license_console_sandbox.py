@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Iterator
 from unittest import mock
 
+import pytest
+
 _HERE = Path(__file__).resolve().parent
 REPO = _HERE.parents[1]
 _CONSOLE_TESTS = REPO / "core" / "console" / "tests"
@@ -40,6 +42,28 @@ for _p in (str(_CONSOLE_TESTS), str(_SKILL_FORGE)):
 from test_admin_route import _sandbox  # noqa: E402
 
 TENANT = "_default"
+
+
+def free_forge_unlocked() -> bool:
+    """True while the Free tier has unlimited ``forge.create`` (limit ``None``).
+
+    The single switch is ``limits.CAPABILITIES["forge.create"]["free"]["limit"]``:
+    ``0`` is the Member-only model (ADR-0701), ``None`` is the temporary Free
+    unlock. Tests that pin the Free denial are skipped while it is unlocked and
+    their unlocked counterparts run instead, so setting the value back to ``0``
+    re-arms the original tests without touching them.
+    """
+    from corvin_operator.license import limits
+
+    return limits.CAPABILITIES["forge.create"]["free"]["limit"] is None
+
+
+FREE_FORGE_LOCKED_ONLY = pytest.mark.skipif(
+    free_forge_unlocked(),
+    reason="Free tier forge.create is temporarily unlocked (limits.py)")
+FREE_FORGE_UNLOCKED_ONLY = pytest.mark.skipif(
+    not free_forge_unlocked(),
+    reason="Free tier forge.create is Member-only (limit 0)")
 
 
 @dataclasses.dataclass
