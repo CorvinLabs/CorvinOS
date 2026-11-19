@@ -2,9 +2,10 @@
   <img src="assets/banner.svg" alt="CorvinOS — the operating system for AI work" width="100%"/>
 </p>
 <p align="center">
-  <strong>The operating system for AI work — an amplifier for Claude Code.</strong><br/>
-  It routes every turn to the cheapest model that fits — and proves the saving from its own audit log.<br/>
-  It remembers, learns in the shadow before it decides, and runs your team's agents behind fail-closed gates.
+  <strong>CorvinOS is an amplifier for Claude Code.</strong><br/>
+  <strong>Claude Code brings the intelligence. CorvinOS brings the judgement.</strong><br/>
+  It remembers across sessions, puts a gate in front of every step that changes something,<br/>
+  and writes down what a check finds, so the next round starts with it. The final say over risk stays with you.
 </p>
 
 <p align="center">
@@ -40,9 +41,19 @@
 
 ---
 
+## 🔊 Same signal, more judgement
+
+An amplifier does not replace the instrument and does not invent a note. CorvinOS works the same way: the intelligence stays with the model, and CorvinOS makes sure it reaches further — and that every step can be remembered, checked and measured.
+
+- **Memory across sessions.** Every turn is recorded verbatim outside the worker's folder; each start reads a fresh view of it. The model forgets, the environment remembers. → [Session ledger](docs/claude-ref/adapter-runtime.md)
+- **Rules before every engine.** House rules and a data-flow gate check before an engine starts; the path gate hooks in through Claude Code's own hook mechanism. → [Layer 44](docs/claude-ref/layer-44-house-rules.md) · [Layer 10](docs/claude-ref/layer-10-path-gate.md)
+- **Decisions you can read back.** What a check finds goes into the knowledge base and into a hash-chained trail, and can be in the context of the next run. A wrapper passes through; an amplifier feeds back. → [Compliance baseline](docs/claude-ref/compliance-baseline.md)
+
+**Get started:** `curl -fsSL https://corvin-labs.com/install.sh | sh` — the installer brings Claude Code along. [Quick Start](#-quick-start)
+
 ## 🎥 Video — S1E9: The Amplifier in the Fog
 
-**CorvinOS is an amplifier for Claude Code.** It does not replace Claude Code, and it is more than a wrapper around it: Claude Code stays the engine, and CorvinOS carries its signal further with context engineering, memory, skills and tools, orchestration and a knowledge base. What review finds flows back into the next round.
+It does not replace Claude Code, and it is more than a wrapper around it: Claude Code stays the engine, and CorvinOS carries its signal further with context engineering, memory, skills and tools, orchestration and a knowledge base. What review finds flows back into the next round.
 
 Episode 9 of *From Spark to Foundation* tells this as one story: an agent searching a maze in the fog, the same agent with the map already in the light, and the five controls of the amplifier. The preview plays right here on GitHub; click it to watch the episode on YouTube.
 
