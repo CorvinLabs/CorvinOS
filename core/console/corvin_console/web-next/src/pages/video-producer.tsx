@@ -38,6 +38,8 @@ import { extractVideoSources, MAX_VIDEO_SOURCES, VIDEO_SOURCE_ACCEPT, type Video
 import { BUILTIN_STYLE_ID, STYLE_DECK_ACCEPT, isDeckFile, type StyleList } from "@/lib/api/video-styles";
 import { DEFAULT_FILM_MINUTES, FILM_MINUTES, MAX_DESIGN_CHARS, MAX_FILM_DESIGNS, designName, jobBody, type FilmDesign } from "@/lib/api/video-film";
 import { StyleChip, StyleImportDialog, StylesSection } from "@/components/video-styles";
+import { TemplateChip } from "@/components/video-templates";
+import { effectiveTemplateId, type VideoTemplateList } from "@/lib/api/video-templates";
 import { ProductionSignals } from "@/components/video-quality-report";
 import { AssetsTab, CanvasTab, CaptureDialog, CodeTab } from "@/components/video-expressive";
 import { LearningOverview } from "@/components/video-learning-overview";
@@ -399,8 +401,9 @@ function VideoStage({ job, loading, csrf }: { job: Job | undefined; loading: boo
 
 type Mode = "new" | "revise";
 
-function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, pickedStyle, onPickStyle, onImportStyle, onUseDeckAsStyle, importBlocked, capture, captureError }: {
+function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, templates, templatesError, styles, pickedStyle, onPickStyle, onImportStyle, onUseDeckAsStyle, importBlocked, capture, captureError }: {
   capture: CaptureSettings | undefined; captureError: boolean;
+  templates: VideoTemplateList | undefined; templatesError: boolean;
   csrf: string; selected: Job | undefined; mode: Mode; setMode: (m: Mode) => void;
   inputRef: React.RefObject<HTMLTextAreaElement>; onCreated: (jobId: string) => void;
   styles: StyleList | undefined; pickedStyle: string | null; onPickStyle: (id: string) => void;
@@ -428,11 +431,21 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
   const stillThere = (id: string) => !assetsNow.data || assetsNow.data.assets.some((a) => a.id === id);
   const canRevise = selected?.status === "complete";
   const revising = mode === "revise" && canRevise;
+  const [pickedTemplate, setPickedTemplate] = useState<string | null>(null);
+  const templateId = effectiveTemplateId(templates, pickedTemplate);
+  const templateOff = revising ? "A revision keeps the structure of the original video" : film ? "A film has its own structure" : null;
+  // the choice is remembered on the server (audited); the pick only stays local when that write fails
+  const rememberTemplate = useMutation({
+    mutationFn: (id: string) => api<{ default_template_id: string }>(`${BASE}/templates/default`, { method: "PUT", csrf, body: { template_id: id } }),
+    onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: ["video", "templates"] }); },
+    onError: (e) => setError(e instanceof ApiError ? e.message : "The template choice could not be saved."),
+  });
+  const pickTemplate = (id: string) => { setPickedTemplate(id); if (csrf) rememberTemplate.mutate(id); };
 
   const create = useMutation({
     mutationFn: () => api<{ job_id: string }>(`${BASE}/jobs`, {
       method: "POST", csrf,
-      body: jobBody({ task: text.trim(), baseJobId: revising ? selected!.id : undefined, styleId: pickedStyle, sources, film, filmMinutes, designs }),
+      body: jobBody({ task: text.trim(), baseJobId: revising ? selected!.id : undefined, styleId: pickedStyle, sources, film, filmMinutes, designs, videoTemplate: templateId }),
     }),
     onSuccess: (r) => { setText(""); setSources([]); setDesigns([]); setError(null); setMode("new"); onCreated(r.job_id); void qc.invalidateQueries({ queryKey: ["video"] }); },
     onError: (e) => setError(e instanceof ApiError ? e.message : "The production could not be started."),
@@ -487,6 +500,7 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
           </select>
         )}
         <span className="ml-auto" />
+        <TemplateChip list={templates} current={templateId} onPick={pickTemplate} disabledReason={templateOff} error={templatesError} />
         <StyleChip list={styles} picked={pickedStyle} onPick={onPickStyle} onImport={onImportStyle} importDisabledReason={importBlocked}
           label={pickedStyle ? (pickedStyle === BUILTIN_STYLE_ID ? styles?.builtin.name ?? "CorvinOS" : styles?.styles.find((s) => s.id === pickedStyle)?.name ?? "CorvinOS")
             : revising ? "same as original" : (styles?.styles.find((s) => s.id === styles.default_style_id)?.name ?? styles?.builtin.name ?? "CorvinOS")} />
@@ -647,6 +661,7 @@ export function VideoProducerPage() {
   const job = useQuery({ queryKey: ["video", "job", selected], queryFn: ({ signal }) => api<Job>(`${BASE}/jobs/${selected}`, { signal }), enabled: !!selected, retry: false,
     refetchInterval: (q) => (q.state.data && ACTIVE.includes(q.state.data.status) ? 1000 : false) });
   const quality = useQuery({ queryKey: ["video", "quality", selected, job.data?.status], queryFn: ({ signal }) => api<Quality>(`${BASE}/jobs/${selected}/quality-metrics`, { signal }), enabled: !!selected && TERMINAL.includes(job.data?.status ?? ""), retry: false });
+  const templates = useQuery({ queryKey: ["video", "templates"], queryFn: ({ signal }) => api<VideoTemplateList>(`${BASE}/templates`, { signal }), retry: false });
   const styles = useQuery({ queryKey: ["video", "styles"], queryFn: ({ signal }) => api<StyleList>(`${BASE}/styles`, { signal }), retry: false });
   // A deleted style can no longer be the session choice.
   useEffect(() => {
@@ -700,6 +715,7 @@ export function VideoProducerPage() {
       <VideoStage job={j} loading={!!selected && job.isLoading} csrf={csrf} />
 
       <Composer csrf={csrf} selected={j} mode={mode} setMode={setMode} inputRef={inputRef}
+        templates={templates.data} templatesError={templates.isError}
         onCreated={(id) => { setSelected(id); }}
         styles={styles.data} pickedStyle={pickedStyle} onPickStyle={setPickedStyle} importBlocked={importBlocked}
         onImportStyle={() => deckPicker.current?.click()} onUseDeckAsStyle={setDeckFile}

@@ -1438,6 +1438,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # single source of truth) and the tenant's default video style; both audit-first.
     "video_producer.settings_changed":   "INFO",
     "video_producer.style_default_changed": "INFO",
+    "video_producer.template_default_changed": "INFO",  # CONCEPT-0137: the tenant's default video template
     "video_producer.capture_started":    "INFO",
     "video_producer.capture_finished":   "INFO",
     # ADR validation framework (core/deployment/adr_validation_framework.py via
@@ -5423,7 +5424,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "video_producer.style_applied": frozenset({"tenant_id", "job_id", "style_id"}),
     "video_producer.job_started": frozenset({
         "tenant_id", "job_id", "runner", "tts_engine", "storyboard_backend", "is_revision", "grounded",
-        "styled", "max_duration_minutes", "mode",
+        "styled", "max_duration_minutes", "mode", "video_template",
     }),
     "video_producer.job_completed": _VP_JOB_END_FIELDS,
     "video_producer.job_failed": _VP_JOB_END_FIELDS,
@@ -5462,6 +5463,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "max_duration_minutes", "previous_max_duration_minutes",
     }),
     "video_producer.style_default_changed": frozenset({"tenant_id", "style_id", "previous_style_id"}),
+    "video_producer.template_default_changed": frozenset({"tenant_id", "template_id", "previous_template_id"}),
     "video_producer.capture_started": frozenset({"tenant_id", "host", "url_sha256_prefix", "viewport"}),
     "video_producer.capture_finished": frozenset({
         "tenant_id", "host", "url_sha256_prefix", "viewport", "outcome", "refusal", "asset_id", "bytes",

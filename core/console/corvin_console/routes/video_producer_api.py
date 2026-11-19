@@ -26,6 +26,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -453,6 +454,9 @@ class CreateJobRequest(BaseModel):
     cinematic_langs: Optional[List[str]] = Field(None, max_length=2)
     # The user's own designs (Penpot SVG exports) the film may show; the plugin sanitises each one on import.
     designs: List[DesignItem] = Field(default_factory=list, max_length=_MAX_DESIGNS)
+    # CONCEPT-0137: a named video recipe (Marketing, Code debugging, ...). Absent = the tenant's default
+    # (a revision keeps the standard one); "standard" = the previous behaviour. Slide mode only.
+    video_template: Optional[str] = Field(None, max_length=32, pattern=r"^[a-z][a-z0-9_]{1,31}$")
 
 
 class JobResponse(BaseModel):
@@ -1536,6 +1540,7 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
             f"Video storage is full ({_fmt_size(store_use['used_bytes'])} of {_fmt_size(store_use['quota_bytes'])} used). "
             "Delete videos you no longer need to produce a new one."))
     web_style = await asyncio.to_thread(_resolve_job_style, rec, req.style_id, req.base_job_id)
+    template_id = await asyncio.to_thread(_resolve_job_template, rec, req.video_template, req.mode, bool(req.base_job_id))
     settings = _tenant_settings(rec)
     settings["tts_engine"] = await asyncio.to_thread(_effective_tts_engine, settings["tts_engine"])
     missing = await asyncio.to_thread(_missing_runtime_dependencies, settings["tts_engine"])
@@ -1601,6 +1606,8 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     }
     if web_style is not None:
         config["web_style"] = web_style
+    if template_id != _STANDARD_TEMPLATE_ID:
+        config["video_template"] = template_id
     if req.mode == "cinematic":
         config["mode"] = "cinematic"
         if req.cinematic_minutes:
@@ -1638,6 +1645,7 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         "job_id": job_id, "runner": _JOB_RUNNER, "tts_engine": settings["tts_engine"],
         "storyboard_backend": backend, "is_revision": bool(req.base_job_id),
         "grounded": grounding_pack is not None, "styled": web_style is not None, "mode": req.mode,
+        "video_template": template_id,
         "max_duration_minutes": settings["max_duration_minutes"]})
     _watch_job_execution(rec.tenant_id, job_id, config["storage_base"])
     return {"job_id": job_id, "status": "pending", "created_at": job.created_at.isoformat()}
@@ -2183,7 +2191,8 @@ _gate_cache: "collections.OrderedDict[tuple, tuple]" = collections.OrderedDict()
 _gate_cache_lock = threading.Lock()
 
 
-_MOD_UNAVAILABLE = {"asset_store": "Uploaded images are not available on this build",
+_MOD_UNAVAILABLE = {"video_templates": "Video templates are not available on this build",
+                    "asset_store": "Uploaded images are not available on this build",
                     "capture": "Website capture is not available on this build"}
 
 
@@ -2324,6 +2333,100 @@ async def _previews(style, themes: Optional[List[str]] = None) -> Dict[str, Any]
 
 def _public_style(style) -> Dict[str, Any]:
     return style.public()
+
+
+# ── Video templates (CONCEPT-0137) ───────────────────────────────────────────
+
+_STANDARD_TEMPLATE_ID = "standard"
+
+
+def _vt_mod():
+    """The plugin's video_templates module; 501 on a CorvinTV build that predates it."""
+    return _style_mod("video_templates")
+
+
+def _template_default_file(rec) -> Path:
+    return _tenant_base(rec) / "template_default"
+
+
+def _read_template_default(rec) -> str:
+    """The tenant's remembered template id; the standard one when nothing valid is stored (never raises)."""
+    try:
+        raw = _template_default_file(rec).read_text(encoding="ascii").strip()
+        t = _vt_mod().get(raw)
+        return t.id if t.available else _STANDARD_TEMPLATE_ID
+    except Exception:  # noqa: BLE001 - absent, unreadable, unknown or unavailable: the standard recipe
+        return _STANDARD_TEMPLATE_ID
+
+
+def _write_template_default(rec, template_id: str) -> None:
+    path = _template_default_file(rec)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".template_default.")
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as fh:
+            fh.write(template_id)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _resolve_job_template(rec, requested: Optional[str], mode: str, is_revision: bool) -> str:
+    """The template id a job runs with. Explicit > tenant default (new videos only) > standard.
+    A film has no slide recipe; an unknown or unavailable template is refused with its reason."""
+    if requested is None and (is_revision or mode == "cinematic"):
+        return _STANDARD_TEMPLATE_ID
+    if requested is None:
+        requested = _read_template_default(rec)
+    if requested == _STANDARD_TEMPLATE_ID:
+        return requested
+    if mode == "cinematic":
+        raise HTTPException(status_code=422, detail="A video template applies to slide videos, not to cinematic films")
+    vt = _vt_mod()
+    try:
+        return vt.usable(requested).id
+    except vt.TemplateError as e:
+        raise HTTPException(status_code=409 if "not available" in str(e) else 422, detail=str(e)) from None
+
+
+@router.get("/templates")
+def list_video_templates(rec=_SessionRec):
+    vt = _vt_mod()
+    return {
+        "templates": [t.public() for t in vt.load_all().values()],
+        "default_template_id": _read_template_default(rec),
+        "standard_template_id": _STANDARD_TEMPLATE_ID,
+    }
+
+
+class DefaultTemplateRequest(BaseModel):
+    template_id: str = Field(..., max_length=32, pattern=r"^[a-z][a-z0-9_]{1,31}$")
+
+
+@router.put("/templates/default")
+def set_default_template(req: DefaultTemplateRequest, rec=_SessionRec):
+    vt = _vt_mod()
+    try:
+        chosen = vt.usable(req.template_id)
+    except vt.TemplateError as e:
+        raise HTTPException(status_code=409 if "not available" in str(e) else 422, detail=str(e)) from None
+    previous = _read_template_default(rec)
+    if chosen.id != previous:
+        # audit-first: the record exists before the default changes
+        if not _audit(rec.tenant_id, "video_producer.template_default_changed",
+                      {"template_id": chosen.id, "previous_template_id": previous}):
+            raise HTTPException(status_code=503, detail="The change could not be recorded; the default was kept")
+        try:
+            _write_template_default(rec, chosen.id)
+        except OSError as e:
+            logger.warning("video producer: template default write failed (%s)", type(e).__name__)
+            raise HTTPException(status_code=503, detail="The default could not be saved") from None
+    return {"default_template_id": chosen.id}
 
 
 @router.get("/styles")

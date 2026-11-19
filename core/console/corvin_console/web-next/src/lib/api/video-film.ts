@@ -19,6 +19,8 @@ export function designName(fileName: string, taken: string[]): string {
 export interface JobBodyInput {
   task: string; baseJobId?: string; styleId?: string | null; sources: Array<{ name: string; text: string }>;
   film: boolean; filmMinutes: number; designs: FilmDesign[];
+  /** The video template of a NEW slide video; ignored for a film and for a revision. */
+  videoTemplate?: string | null;
 }
 
 /** The POST /video/jobs body. A film adds its keys only when it is on; a revision is always a slide video. */
@@ -27,6 +29,7 @@ export function jobBody(i: JobBodyInput): Record<string, unknown> {
     task: i.task, base_job_id: i.baseJobId, style_id: i.styleId ?? undefined,
     sources: i.sources.map(({ name, text }) => ({ name, text })),
   };
+  if (i.videoTemplate && !i.film && !i.baseJobId) body.video_template = i.videoTemplate;
   if (i.film && !i.baseJobId) {
     body.mode = "cinematic";
     body.cinematic_minutes = i.filmMinutes;
