@@ -34,8 +34,10 @@ def test_a_name_missing_from_the_baseline_fails_the_gate(tmp_path):
     # is stale (shrink-only file, not yet shrunk); dropping one of those proves nothing and made this
     # test fail on main once `A2A.google_envelope_sent` lost its emitter.
     stale_marker = "NOTE registered now, remove from the baseline (--shrink-baseline): "
-    stale = {line.split(stale_marker, 1)[1].strip()
-             for line in _run().stdout.splitlines() if stale_marker in line}
+    unseen_marker = "remove by hand only after confirming the emitter is gone): "
+    stale = {line.split(m, 1)[1].strip()
+             for line in _run().stdout.splitlines()
+             for m in (stale_marker, unseen_marker) if m in line}
     live = [n for n in names if n not in stale]
     assert live, "positive control: at least one baseline name must still be emitted unregistered"
     dropped = live[0]
@@ -49,12 +51,24 @@ def test_a_name_missing_from_the_baseline_fails_the_gate(tmp_path):
 def test_a_registered_name_is_a_note_and_shrink_never_adds(tmp_path):
     names = json.loads(BASELINE.read_text("utf-8"))
     probe = tmp_path / "baseline.json"
-    # one made-up name (stands for "registered since") and one real name left out
-    probe.write_text(json.dumps(names[1:] + ["zz.not_emitted_anywhere"]), encoding="utf-8")
+    # Review 2026-11-19 round 2 (R2-SEC-1): three kinds of entry.
+    #   * a name that HAS a severity entry now ("tool.created")  -> note, shrink drops it;
+    #   * a name the scan merely does not see ("zz.not_emitted_anywhere") -> its own note,
+    #     and shrink KEEPS it. It used to be reported as "registered now" and dropped,
+    #     so a filter that swallowed a real emitter shrank the baseline for an event
+    #     that was still written unregistered;
+    #   * a real name left out -> never added by shrink.
+    probe.write_text(json.dumps(names[1:] + ["zz.not_emitted_anywhere", "tool.created"]),
+                     encoding="utf-8")
     out = _run("--baseline", str(probe), "--shrink-baseline")
-    assert "registered now, remove from the baseline (--shrink-baseline): zz.not_emitted_anywhere" in out.stdout
+    assert "registered now, remove from the baseline (--shrink-baseline): tool.created" in out.stdout
+    assert ("not seen by the scan any more and NOT registered" in out.stdout
+            and "zz.not_emitted_anywhere" in out.stdout)
+    assert "registered now, remove from the baseline (--shrink-baseline): zz.not_emitted_anywhere" \
+        not in out.stdout
     after = json.loads(probe.read_text("utf-8"))
-    assert "zz.not_emitted_anywhere" not in after, "shrink must drop the stale entry"
+    assert "tool.created" not in after, "shrink must drop an entry that is registered now"
+    assert "zz.not_emitted_anywhere" in after, "shrink dropped a name that was never registered"
     assert names[0] not in after, "shrink must NEVER add an entry that was left out"
 
 

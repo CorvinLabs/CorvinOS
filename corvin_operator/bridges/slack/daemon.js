@@ -36,6 +36,7 @@ const { startHealthServer }     = require('../shared/js/health-server');
 const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
+const { fetchToFile, safeExt, SLACK_FILE_HOSTS } = require('../shared/js/media_fetch');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const chatToggle                = require('../shared/js/chat_toggle');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
@@ -67,7 +68,7 @@ const HTTP_PORT = parseInt(process.env.SLACK_HTTP_PORT || '7894', 10);
 const log = makeLogger('slack');
 const { loadSettings, currentSettings } = makeSettingsAccessor(SETTINGS_FILE, log);
 const settings = loadSettings(); // boot snapshot for tokens
-const { rateAllow, authOk, readOnlyOk } = makeAuth({
+const { rateAllow, authOk, readOnlyOk, isOwner: isOwnerUid } = makeAuth({
   settingsFile: SETTINGS_FILE, currentSettings, loadSettings, logger: log,
   channel: CHANNEL,
   // 2026-08-02: without this, an empty whitelist meant EVERY sender was
@@ -153,11 +154,15 @@ app.client.auth.test().then(r => {
 }).catch(e => log(`auth.test failed: ${e.message}`));
 
 // Helper: download a private Slack file via its url_private (needs Bearer).
-async function downloadSlackFile(url, dest) {
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${BOT_TOKEN}` } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  fs.writeFileSync(dest, buf);
+// The URL comes from the event payload, so the bot token goes ONLY to Slack's
+// own file hosts (checked on every redirect hop, before any header is sent),
+// and the download is size-bounded (review 2026-11-19, R3-NEW-31).
+async function downloadSlackFile(url, dest, declaredSize) {
+  await fetchToFile(url, dest, {
+    headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+    allowedHosts: SLACK_FILE_HOSTS,
+    declaredSize,
+  });
 }
 
 // Personal knowledge base (ADR-2327 item 8): the Slack client treats every message that starts with "/" as a
@@ -276,6 +281,10 @@ app.event('message', async ({ event, client }) => {
       } catch {}
       return;
     }
+    // Owner surface = whitelist membership ONLY. authOk() also admits guests
+    // of an `audience=all` chat; those must never reach /vault, /all, /debug,
+    // /invite or the /on|/off toggle (review 2026-11-19, R3-NEW-2).
+    const senderIsOwner = isOwnerUid(userId);
     // Layer-19 — EU AI Act Art. 50: proactive bot-disclosure on first encounter.
     // Shown once per (chat, uid).
     if (!inChatCmds.disclosureHasSeen({ channel: CHANNEL, chatKey: String(chatId), uid: String(userId) })) {
@@ -299,7 +308,7 @@ app.event('message', async ({ event, client }) => {
     // `enabled_chats` keeps the legacy default-on behaviour.
     {
       const tog = chatToggle.handleToggleCommand({
-        text, chatKey: String(chatId), isOwner: true,
+        text, chatKey: String(chatId), isOwner: senderIsOwner,
         settingsFile: SETTINGS_FILE,
       });
       if (tog) {
@@ -344,7 +353,7 @@ app.event('message', async ({ event, client }) => {
     {
       const cwk = inChatCmds.dispatch({
         text, channel: CHANNEL, chatKey: String(chatId),
-        isOwner: true,  // authOk checked the whitelist
+        isOwner: senderIsOwner,  // whitelist => owner; audience=all guest => false
         settingsFile: SETTINGS_FILE,
       });
       if (cwk) {
@@ -376,13 +385,13 @@ app.event('message', async ({ event, client }) => {
       const id = newMsgId();
       const dest = path.join(INBOX, `${id}_${safeName}`);
       try {
-        await downloadSlackFile(f.url_private_download || f.url_private, dest);
+        await downloadSlackFile(f.url_private_download || f.url_private, dest, Number(f.size));
       } catch (e) {
         log(`file download failed: ${e.message}`);
         return;
       }
       const mt  = (f.mimetype || '').toLowerCase();
-      const ext = (f.name || '').slice((f.name || '').lastIndexOf('.')).toLowerCase();
+      const ext = safeExt(f.name);
       if (mt.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)$/.test(ext)) {
         writeInbox({ ...base, image_path: dest, caption: text });
       } else if (mt.startsWith('audio/') || /\.(ogg|mp3|m4a|wav|opus)$/.test(ext)) {

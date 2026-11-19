@@ -74,8 +74,25 @@ if [ -f "${REPO_DIR}/scripts/corvin-watchdog-alert.sh" ]; then
     chmod +x "${REPO_DIR}/scripts/corvin-watchdog-alert.sh" 2>/dev/null || true
 fi
 
+# The setup lock the watchdog reads is the one install.sh / update.sh WRITE:
+#   ${XDG_STATE_HOME:-$HOME/.local/state}/corvinos/corvinos-setup.lock/pid
+# Until 2026-11-19 (round 2) the unit still read ${TMPDIR:-/tmp}/corvinos-setup.lock
+# after both writers had moved to the state directory, so the watchdog no
+# longer stood down during an install/update and restarted a console that was
+# still booting. A systemd user manager usually has no XDG_STATE_HOME; when the
+# operator's shell has one, it is pinned into the unit so both sides agree.
+STATE_ENV_LINE=""
+if [ -n "${XDG_STATE_HOME:-}" ]; then
+    case "$XDG_STATE_HOME" in
+        *[\"\\]*|*$'\n'*) echo "  $(_yellow '!') XDG_STATE_HOME has characters a unit file cannot carry - the watchdog reads the lock under HOME/.local/state and will not stand down for an install/update run with this XDG_STATE_HOME" ;;
+        /*) STATE_ENV_LINE="Environment=\"XDG_STATE_HOME=$(printf '%s' "$XDG_STATE_HOME" | sed 's/%/%%/g')\"" ;;
+        *) echo "  $(_yellow '!') ignoring XDG_STATE_HOME='$XDG_STATE_HOME' (not an absolute path) - install.sh and update.sh ignore it too; the lock is under HOME/.local/state" ;;
+    esac
+fi
+
 # Install watchdog.service systemd unit (waits for console to be ready)
-cat > "${SYSTEMD_DIR}/corvin-watchdog.service" <<'EOF'
+WATCHDOG_UNIT="${SYSTEMD_DIR}/corvin-watchdog.service"
+cat > "${WATCHDOG_UNIT}.tmp" <<'EOF'
 [Unit]
 Description=CorvinOS Watchdog Service
 After=corvin-webui.service
@@ -83,6 +100,7 @@ Wants=corvin-webui.service
 
 [Service]
 Type=simple
+@@STATE_ENV@@
 # Restart the console only after 3 consecutive failed probes (~60 s): a single
 # miss during a cold boot or a long first plugin scan is not a crash, and
 # restarting then just restarts the boot. Stands down while an install/update
@@ -103,7 +121,7 @@ Type=simple
 # times in one hour; each restart dropped every chat WebSocket and cost minutes of
 # boot at 100 % CPU (2026-11-07). Only no answer at all for ~90 s is a wedge.
 # NO User=: in a --user unit it fails every start with 216/GROUP.
-ExecStart=/bin/bash -c 'f=0; r=0; while true; do if curl -fs --connect-timeout 5 -m 30 http://127.0.0.1:8765/v1/console/healthz >/dev/null 2>&1 || kill -0 "$$(cat "$${TMPDIR:-/tmp}/corvinos-setup.lock/pid" 2>/dev/null || echo none)" 2>/dev/null; then f=0; r=0; else f=$$((f+1)); if [ "$$f" -ge 3 ]; then r=$$((r+1)); if [ "$$r" -gt 3 ]; then echo "<3>watchdog: console still down after 3 restarts - a crash loop? read: journalctl --user -u corvin-webui -n 100 - next attempt in 30 min"; sleep 1740; fi; echo "<4>watchdog: console unhealthy for 3 probes - restarting it (attempt $$r)"; systemctl --user reset-failed corvin-webui.service 2>/dev/null; systemctl --user restart corvin-webui.service; f=0; sleep 60; fi; fi; sleep 20; done'
+ExecStart=/bin/bash -c 'f=0; r=0; while true; do if curl -fs --connect-timeout 5 -m 30 http://127.0.0.1:8765/v1/console/healthz >/dev/null 2>&1 || kill -0 "$$(cat "$${XDG_STATE_HOME:-$$HOME/.local/state}/corvinos/corvinos-setup.lock/pid" 2>/dev/null || echo none)" 2>/dev/null; then f=0; r=0; else f=$$((f+1)); if [ "$$f" -ge 3 ]; then r=$$((r+1)); if [ "$$r" -gt 3 ]; then echo "<3>watchdog: console still down after 3 restarts - a crash loop? read: journalctl --user -u corvin-webui -n 100 - next attempt in 30 min"; sleep 1740; fi; echo "<4>watchdog: console unhealthy for 3 probes - restarting it (attempt $$r)"; systemctl --user reset-failed corvin-webui.service 2>/dev/null; systemctl --user restart corvin-webui.service; f=0; sleep 60; fi; fi; sleep 20; done'
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -112,6 +130,16 @@ StandardError=journal
 [Install]
 WantedBy=default.target
 EOF
+
+# Fill the placeholder (line by line: no sed escaping of an arbitrary path).
+while IFS= read -r _line; do
+    if [ "$_line" = "@@STATE_ENV@@" ]; then
+        if [ -n "$STATE_ENV_LINE" ]; then printf '%s\n' "$STATE_ENV_LINE"; fi
+    else
+        printf '%s\n' "$_line"
+    fi
+done < "${WATCHDOG_UNIT}.tmp" > "${WATCHDOG_UNIT}"
+rm -f "${WATCHDOG_UNIT}.tmp"
 
 chmod 0644 "${SYSTEMD_DIR}/corvin-watchdog.service"
 echo "  $(_green '✓') Watchdog service installed: ${SYSTEMD_DIR}/corvin-watchdog.service"

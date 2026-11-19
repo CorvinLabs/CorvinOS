@@ -813,6 +813,12 @@ _MARKETPLACE_FAIL_BACKOFF_S = 10 * 60
 #: A tarball larger than this is refused (a runaway or hostile response).
 _MARKETPLACE_MAX_BYTES = 300 * 1024 * 1024
 
+#: Limits on what the tarball may UNPACK to (review R3-NEW-34). The download limit
+#: above bounds the compressed bytes only: a gzip stream expands about 1000:1, so a
+#: 300 MB body could fill the disk the audit chain lives on.
+_MARKETPLACE_MAX_UNPACKED_BYTES = 1024 * 1024 * 1024
+_MARKETPLACE_MAX_MEMBERS = 100_000
+
 #: Re-check GitHub at most this often once a sync has succeeded, so a
 #: nonexistent plugin id (typo, not-yet-published) does not re-download the
 #: whole repo on every resolve call — but an operator who just published a
@@ -926,7 +932,18 @@ def _download_and_extract_marketplace(dest_root: Path) -> None:
     try:
         _fetch_marketplace_tarball(tmp_path)
         with tarfile.open(tmp_path, "r:gz") as tf:
-            for member in tf.getmembers():
+            unpacked = 0
+            for count, member in enumerate(tf.getmembers(), start=1):
+                if count > _MARKETPLACE_MAX_MEMBERS:
+                    raise ValueError("marketplace tarball has too many members")
+                # Only what a source tree consists of: no device nodes, FIFOs or other
+                # special files (``filter="data"`` refuses them too where it exists).
+                if not (member.isreg() or member.isdir() or member.issym() or member.islnk()):
+                    raise ValueError(
+                        f"Unsupported member type in marketplace tarball: {member.name!r}")
+                unpacked += max(0, int(member.size or 0))
+                if unpacked > _MARKETPLACE_MAX_UNPACKED_BYTES:
+                    raise ValueError("marketplace tarball unpacks beyond the size limit")
                 if member.name.startswith("/") or ".." in member.name.split("/"):
                     raise ValueError(f"Unsafe path in marketplace tarball: {member.name!r}")
                 if (member.issym() or member.islnk()) and member.linkname:
@@ -945,7 +962,14 @@ def _download_and_extract_marketplace(dest_root: Path) -> None:
             dest_root.parent.mkdir(parents=True, exist_ok=True)
             scratch = tempfile.mkdtemp(prefix=".sync-", dir=str(dest_root.parent))
             try:
-                tf.extractall(scratch)
+                # ``filter="data"`` (PEP 706): no absolute paths, no links leaving the
+                # destination, no device files, no setuid/setgid/sticky bits, files
+                # owned by the extracting user. The hand-written member checks above
+                # stay as the line an interpreter without the filter still has.
+                if hasattr(tarfile, "data_filter"):
+                    tf.extractall(scratch, filter="data")
+                else:  # pragma: no cover - Python < 3.11.4
+                    tf.extractall(scratch)  # noqa: S202 - members validated above
                 top = names[0].split("/")[0] if names else ""
                 extracted = Path(scratch) / top if top else Path(scratch)
                 # A truncated or wrong tarball must never replace a working cache.

@@ -44,6 +44,136 @@ path is denied, not allowed.
   a symlinked `CORVIN_HOME` or tenant directory (the target is resolved, the
   home is not), and case variants on a case-insensitive file system.
 
+## Strict stores, gate sources and the hook's own registration (review 2026-11-19)
+
+Three groups joined the protected set in the review of 2026-11-19 (rounds 1 and 2).
+Tests: `tests/security/test_path_gate_review_20261119.py` (the real hook as a
+subprocess, both directions).
+
+**Strict stores** (`_is_strict_store_path`): the session ledger class and the audit
+chain with its out-of-tree anchors — every `audit.jsonl` (and its rotation / lock
+siblings) under the corvin home, the anchor key, the `audit_mac_active` sentinel and,
+beside the key, `chain_ids/`, `chain_tails/`, `mac_active_chains/`, `chain_witness/`,
+`chain_ids_retired/` and `chain_witness_retired/`. A command that NAMES one of them
+must be a proven read, otherwise it fails closed. The key directory is wherever
+`CORVIN_AUDIT_ANCHOR_KEY` points, not only `~/.config/corvin-voice`.
+
+**What counts as a read (round 2, R2-SEC-5).** Round 1 decided "read" by a list of
+command names, so `awk '{print $1}' audit.jsonl`, `sort`, `xxd | head`, `perl -ne`,
+`tar czf /tmp/c.tgz audit.jsonl`, `gzip -c`, `python3 -m json.tool`, a `for` loop over
+the file and `cp <gate source> /tmp/x` were all refused. `_is_reader_invocation()`
+decides per INVOCATION, from its arguments:
+
+| Command | Read when | Still a write (denied) |
+|---|---|---|
+| `cat`/`head`/`tail`/`grep`/`jq`/`wc`/`sha256sum`/`diff`/`tac`/… | always | a redirect into a protected path |
+| `awk` | program text has no `print >`, `print \|`, `system(` | `-i inplace`, `-f <file>` (program not inspected) |
+| `sort` | no output option, or `-o` / `--output` (spelled out) to a path outside every protected tree | `sort -o f f`, `sort -uo f`, `--out=f` / `--outp f` (abbreviations), `--compress-program`, `-T <dir>` |
+| `uniq`, `xxd` | one file argument, or `INPUT OUTPUT` with OUTPUT outside every protected tree; no `xxd -r` | a second positional inside a protected tree |
+| `sed` | every script (`-e` / `--expression` values, else the first positional) parses as a pure print / delete / transform program | `sed -i`, `--in-place` and its abbreviations (`--in-pl`, `--i`), `-f <file>`, any `w` / `W` / `e` command (`$w f`, `1,$w f`, `0~1w f`, `1e cmd`), `s///w f`, `s///e` |
+| `perl` / `ruby` | inline `-e`/`-ne` (also glued `-e'…'`, every `-e` checked), text has no `open`/`unlink`/`>`/`system`/… outside a plain regex literal | `-i`, a script file, `-M`, any long option |
+| `gzip` & co. | `-c` / `-l` / `-t` | in-place (also `-k`: it writes a sibling into the store), `--rm`, `zstd -o`, `lz4 IN OUT` |
+| `tar` | create/list, archive outside every protected tree, only vetted options | extract, append, `--remove-files` / `--checkpoint-action` / `--to-command` and their abbreviations (`--rem`, `--checkpoint-ac`), `g` / `I` / `F` in a short cluster (`tar cfg`), archive inside the tree |
+| `zip` | archive outside every protected tree, no `-m` | `-m` |
+| `cp` | source is an audit chain FILE or a gate source FILE, destination outside every protected tree | a tree, a glob, the anchor key / marker trees / vault as source; any protected destination |
+| `python3 -m json.tool <file>` | one positional | a second positional (the output file); every other `python …` |
+| `for f in <store path>; do …` | every other segment is itself a proven read | `…; do rm "$f"` |
+
+**Options are compared as prefixes, programs are parsed (round 3, R3-SEC-1 / -9).**
+Round 2 recognised exact spellings only, and a "reader" skips the strict-store check, so
+every GNU abbreviation was a bypass: `sed --in-pl`, `sed --i`, `sort --out=`,
+`tar … --rem`. Three rules close the class instead of the instances:
+
+1. *Vetted long options only.* For `sed`, `sort`, `uniq`, `awk`, `tar`, `cp`, `zip` and the
+   compressors, a long option that is not spelled exactly like one on the per-command
+   list of harmless options (`_SED_READ_LONG`, `_SORT_READ_LONG`, `_TAR_READ_LONG`, …)
+   makes the invocation a non-read. Every abbreviation and every option the gate has not
+   looked at lands there. The write-TARGET extraction (`_inplace_write_candidates`,
+   the output-flag scan, `_target_dir_flag`) matches the dangerous options as PREFIXES
+   (`_long_opt_is`), so a protected file that is not a strict store is covered too.
+2. *sed scripts are parsed* (`_sed_script_reads_only`), not grepped. Addresses
+   (`N`, `$`, `/re/`, `a,b`, `first~step`, `!`) are consumed, then the command letter
+   decides: `p P d D q Q n N l h H g G x = z F`, `s` / `y` without the `w` / `e` flags,
+   labels, `a i c` text and `r` are reads; `w`, `W`, `e` and anything unknown are not.
+   Text inside `/…/` is a pattern, so `sed -n '/write w something/p' CHAIN` is a read.
+   For perl / ruby a plain regex literal in operand position (`if /open/`) is removed
+   before the write scan; a `/` after an operand is division and is kept
+   (`1 / unlink / 1` runs `unlink`).
+3. *A non-read is searched for store paths inside its tokens* (`_embedded_path_pieces`):
+   `sed -n 'w <chain>'`, `sed '1e unlink <ledger>'`, an awk string,
+   `--checkpoint-action='exec=rm <ledger>'`. Absolute pieces for every command but
+   `git` / `gh` (free text; they have their own write check), cwd- and `cd`-relative
+   pieces for the script-carrying commands (`sed`, `awk`, `perl`, `ruby`).
+
+`tree -o`, `rg --pre`, `less -o` and `zstdcat -o` are no longer unconditional reads.
+Known limits, stated: the segment splitter is not quote-aware, so a script containing
+`;`, `|` or a newline inside quotes is split and then refused when it names a store
+(`sed -n '/a/{p;q}' <chain>`, `awk '/a|b/' <chain>`) - conservative, use `-e` twice or
+`grep -E`. A bracket expression holding the delimiter (`s/[/]x/y/`) is also refused.
+
+Shell keywords are peeled first (`do` / `then` / `else` / `if` / `while` / `until` /
+`!`): the command a segment RUNS is what is classified. Before 2026-11-19 the segment
+`do rm -rf ~/.corvin` was keyed on `do`, extracted no target and was allowed — as was
+`if true; then rm <chain>; fi`. Consequence, stated: `mv` / `cp` inside a loop are now
+judged like `mv` / `cp` outside one (including the pre-existing rule that denies them
+for any argument inside the runtime tree, which covers a session workdir).
+
+After a `cd` into a read-only store only reads may follow, and a destination must be
+absolute (a relative name would land in the store). Anything the function cannot prove
+stays a non-read: conservative on purpose, `awk '$3 > 5'` is refused because `>` in a
+`print` position is a redirect. `python -c` / `node -e` naming a protected path stay
+fail-closed (an inline interpreter is opaque). The deny text says so
+(`_fail_closed_message`): it names the reason and the read forms that work, instead of
+the former "Bash command unparseable … use the forge MCP tools", which was wrong for a
+perfectly parseable `awk`.
+
+**Gate sources** (`_is_gate_source_path`): `corvin_operator/voice/hooks/**` (this gate,
+`with_python.sh`, `hooks.json`, the sibling gates), `forge/forge/security_events.py`,
+the three `tenant_audit_chain` mirrors (`forge/forge/paths.py`,
+`bridges/shared/paths.py`, `core/paths/{tenant,__init__}.py`) the boot tripwire
+`core/compliance/corvin_compliance_reports/tripwire.py`, and (round 3, R3-SEC-10) the
+pre-spawn gate dispatcher `bridges/shared/spawn_gates.py` and the house-rules policy
+`corvin_operator/policy/house_rules.yaml` — in the checkout the hook
+runs from AND the checkout that holds the live runtime root.
+
+*Editing a gate source — the worktree workflow.* These files are no longer editable
+in place from a gated session; that is the point (a worker that can rewrite the audit
+writer does not need to touch the chain). A legitimate change goes through git:
+
+```bash
+git -C <checkout> worktree add /tmp/gate-fix -b gate-fix   # a second checkout
+# edit /tmp/gate-fix/corvin_operator/forge/forge/security_events.py there
+# (the hook of the MAIN checkout protects only its own roots), run the tests with
+# PYTHONPATH pointing at the worktree first, commit in the worktree,
+git -C <checkout> merge gate-fix                            # the operator merges
+```
+
+Reading stays free in the main checkout (`cat`, `grep`, `git diff`, `cp <file>
+/tmp/copy.py`). The hook protects the checkout it runs from and the one holding the
+live runtime root; a session whose hook runs from the worktree itself (cwd inside it,
+or a plugin cache built from it) cannot edit the worktree's copies either — start
+that session from outside the worktree. `git checkout/restore/rm/mv -- <gate source>`
+in a protected checkout is a write and is denied; a merge is not path-gated (it lands
+COMMITTED content the operator reviewed).
+
+**The hook's own registration (round 2, R2-SEC-3).** Protected against Write/Edit and
+every Bash write form:
+
+- `settings*.json` in `~/.claude` (or `CLAUDE_CONFIG_DIR`) AND in any `.claude/`
+  directory at, below or above the worker's cwd and below the checkout root. Project
+  and local settings are merged over the user file, so `{"disableAllHooks": true}` in
+  `<cwd>/.claude/settings.local.json` removed the gate while only the user file was
+  protected. Consequence, stated: in a gated session Claude Code's own "edit the
+  project settings" flows (permission allowlists, the `update-config` skill) are
+  denied for those files — the operator edits them in an editor.
+- `~/.claude/plugins/**` — the plugin cache holds the hook copy an installed `voice`
+  plugin actually runs, plus `installed_plugins.json` / `known_marketplaces.json`.
+- **Guard roots** (`_guard_roots`, equal-or-ancestor only): `rm -rf` / `mv` / `chmod`
+  / mutating `find` of `~/.claude`, a project `.claude/`, the anchor-key directory or
+  any ancestor of one of them fails closed although no protected leaf is named. A
+  path UNDER a guard root is decided by `is_protected_path` alone, so a session's own
+  files below `~/.claude/projects/` or next to a non-default key stay writable.
+
 ## Protected-tree semantics (`_touches_corvin_tree`)
 
 A **destructive** operation (recursive/glob/root `rm`/`mv`/`chmod`/... , a
@@ -144,8 +274,9 @@ CRITICAL compliance finding on every boot while the hook is missing. Enable it
 either way:
 
 ```text
-# in Claude Code (the local marketplace is registered as claudeos-local):
-/plugin install voice@claudeos-local
+# in Claude Code (the repo's marketplace is corvin-voice-local, .claude-plugin/marketplace.json):
+/plugin marketplace add <CorvinOS checkout>
+/plugin install voice@corvin-voice-local
 ```
 
 or register the hook directly in `~/.claude/settings.json`:
@@ -182,6 +313,11 @@ The best-effort hooks (`artifact_register`,
   and so must an exception inside `check()`, and so must a missing interpreter:
   never drop `--fail-closed` from a PreToolUse gate's `hooks.json` command).
 - Don't add an env kill-switch or "path-gate off" mode.
+- Don't put a command NAME on the read list because one invocation of it reads:
+  extend `_is_reader_invocation()` with the argument test that proves it, and add
+  the vector in both directions (reader allowed, in-place writer denied).
+- Don't edit a gate source in place "just this once" by weakening
+  `_PROTECTED_REPO_FILES`; use the worktree workflow above.
 - Don't add a second entry to `_PINNED_PYTHON_TOOLS` without pinning every sibling module the tool imports, and don't
   make the exception match on a basename, a prefix, a pattern or a normalised path.
 - Don't narrow `_touches_corvin_tree` for *direct* targets (ancestor protection

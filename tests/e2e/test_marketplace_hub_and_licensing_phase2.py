@@ -92,14 +92,14 @@ class TestMemberCredential:
         expiry = (now + timedelta(days=90)).isoformat() + "Z"
 
         cred = MemberCredential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
             issued_at=now.isoformat() + "Z",
             expires_at=expiry,
             public_key_pem=keypair.public_pem().decode(),
         )
 
-        assert cred.member_id == "alice@example.com"
+        assert cred.member_id == "alice.example.com"
         assert cred.license_tier == "member"
         assert cred.credential_id  # Should be auto-generated
 
@@ -110,7 +110,7 @@ class TestMemberCredential:
 
         # Expired credential
         cred_expired = MemberCredential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
             issued_at=(now - timedelta(days=100)).isoformat() + "Z",
             expires_at=(now - timedelta(days=10)).isoformat() + "Z",
@@ -121,7 +121,7 @@ class TestMemberCredential:
 
         # Valid credential
         cred_valid = MemberCredential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
             issued_at=(now - timedelta(days=10)).isoformat() + "Z",
             expires_at=(now + timedelta(days=80)).isoformat() + "Z",
@@ -139,7 +139,7 @@ class TestMemberCredential:
 
         # Member tier can delegate
         cred_member = MemberCredential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
             issued_at=now.isoformat() + "Z",
             expires_at=(now + timedelta(days=90)).isoformat() + "Z",
@@ -150,7 +150,7 @@ class TestMemberCredential:
 
         # Free tier cannot delegate
         cred_free = MemberCredential(
-            member_id="bob@example.com",
+            member_id="bob.example.com",
             license_tier="free",
             issued_at=now.isoformat() + "Z",
             expires_at=(now + timedelta(days=90)).isoformat() + "Z",
@@ -161,7 +161,7 @@ class TestMemberCredential:
 
         # Expired credential cannot delegate
         cred_expired = MemberCredential(
-            member_id="charlie@example.com",
+            member_id="charlie.example.com",
             license_tier="member",
             issued_at=(now - timedelta(days=100)).isoformat() + "Z",
             expires_at=(now - timedelta(days=10)).isoformat() + "Z",
@@ -184,7 +184,7 @@ class TestA2AVerification:
         """Test verifying a valid signed task."""
         # Issue credential
         result = self.authority.issue_credential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
             validity_days=90,
         )
@@ -202,7 +202,7 @@ class TestA2AVerification:
         payload = {"target": "agent_123", "action": "delegate"}
         payload_json = json.dumps(payload, sort_keys=True)
         message_parts = [
-            "alice@example.com",
+            "alice.example.com",
             "delegate_task",
             payload_json,
             now.isoformat() + "Z",
@@ -213,7 +213,7 @@ class TestA2AVerification:
 
         signed_task = SignedTask(
             task_id="task_001",
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             credential_id=cred.credential_id,
             operation="delegate_task",
             payload=payload,
@@ -228,7 +228,7 @@ class TestA2AVerification:
 
         # The verification should run through all checks
         assert result.task_id == "task_001"
-        assert result.member_id == "alice@example.com"
+        assert result.member_id == "alice.example.com"
 
     def test_verify_expired_credential(self):
         """Test verification with expired credential."""
@@ -239,13 +239,16 @@ class TestA2AVerification:
         keypair = RSAKeyPair.generate()
         now = datetime.utcnow()
         expired_cred = MemberCredential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
             issued_at=(now - timedelta(days=100)).isoformat() + "Z",
             expires_at=(now - timedelta(days=10)).isoformat() + "Z",
             public_key_pem=keypair.public_pem().decode(),
             signature="test",
         )
+        # The verifier checks the authority's signature before the expiry
+        # (review 2026-11-19): an expired credential must still be a genuine one.
+        AuthorityServer(tmpdir)._sign(expired_cred)
 
         cred_store.save(expired_cred)
 
@@ -254,7 +257,7 @@ class TestA2AVerification:
 
         signed_task = SignedTask(
             task_id="task_001",
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             credential_id=expired_cred.credential_id,
             operation="delegate",
             payload={},
@@ -275,7 +278,7 @@ class TestA2AVerification:
 
         # Issue and revoke credential
         issue_result = authority.issue_credential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
         )
         cred = issue_result.credential
@@ -286,7 +289,7 @@ class TestA2AVerification:
         now = datetime.utcnow()
         signed_task = SignedTask(
             task_id="task_001",
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             credential_id=cred.credential_id,
             operation="delegate",
             payload={},
@@ -328,7 +331,7 @@ class TestAuthorityServer:
     def test_issue_credential(self):
         """Test issuing a credential."""
         result = self.authority.issue_credential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
             validity_days=90,
         )
@@ -336,14 +339,14 @@ class TestAuthorityServer:
         assert result.success
         assert result.credential is not None
         cred = result.credential
-        assert cred.member_id == "alice@example.com"
+        assert cred.member_id == "alice.example.com"
         assert cred.license_tier == "member"
         assert cred.can_delegate()
 
     def test_issue_free_tier(self):
         """Test issuing free tier (no delegation)."""
         result = self.authority.issue_credential(
-            member_id="bob@example.com",
+            member_id="bob.example.com",
             license_tier="free",
         )
 
@@ -356,7 +359,7 @@ class TestAuthorityServer:
         """Test renewing a credential."""
         # Issue initial
         result1 = self.authority.issue_credential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
             validity_days=30,
         )
@@ -377,7 +380,7 @@ class TestAuthorityServer:
         """Test downgrading license tier."""
         # Issue member tier
         result = self.authority.issue_credential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
         )
         cred1 = result.credential
@@ -398,25 +401,25 @@ class TestAuthorityServer:
         """Test listing member credentials."""
         # Issue multiple credentials
         self.authority.issue_credential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
         )
         self.authority.issue_credential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
         )
         self.authority.issue_credential(
-            member_id="bob@example.com",
+            member_id="bob.example.com",
             license_tier="free",
         )
 
         # List Alice's credentials
-        creds = self.authority.list_member_credentials("alice@example.com")
+        creds = self.authority.list_member_credentials("alice.example.com")
         assert len(creds) == 2
-        assert all(c["member_id"] == "alice@example.com" for c in creds)
+        assert all(c["member_id"] == "alice.example.com" for c in creds)
 
         # List Bob's credentials
-        creds_bob = self.authority.list_member_credentials("bob@example.com")
+        creds_bob = self.authority.list_member_credentials("bob.example.com")
         assert len(creds_bob) == 1
 
 
@@ -446,7 +449,7 @@ class TestMarketplaceAndLicensingIntegration:
         """
         # Step 1: Issue credential
         issue_result = self.authority.issue_credential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
             validity_days=30,
         )
@@ -454,7 +457,7 @@ class TestMarketplaceAndLicensingIntegration:
         cred = issue_result.credential
 
         # Verify credential properties
-        assert cred.member_id == "alice@example.com"
+        assert cred.member_id == "alice.example.com"
         assert cred.license_tier == "member"
         assert cred.can_delegate()
         assert not cred.is_expired()
@@ -464,7 +467,7 @@ class TestMarketplaceAndLicensingIntegration:
         now = datetime.utcnow()
         signed_task = SignedTask(
             task_id="delegation_task_123",
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             credential_id=cred.credential_id,
             operation="delegate_to_agent",
             payload={"target_agent": "opus", "task": "analyze_code"},
@@ -479,7 +482,7 @@ class TestMarketplaceAndLicensingIntegration:
 
         # Verify structure (even though sig check will fail)
         assert result.task_id == "delegation_task_123"
-        assert result.member_id == "alice@example.com"
+        assert result.member_id == "alice.example.com"
         assert result.credential_id == cred.credential_id
 
         # Check that credential validation ran
@@ -492,7 +495,7 @@ class TestMarketplaceAndLicensingIntegration:
         """Test that revoking a credential blocks delegation."""
         # Issue credential
         issue_result = self.authority.issue_credential(
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             license_tier="member",
         )
         cred = issue_result.credential
@@ -504,7 +507,7 @@ class TestMarketplaceAndLicensingIntegration:
         now = datetime.utcnow()
         signed_task = SignedTask(
             task_id="task_001",
-            member_id="alice@example.com",
+            member_id="alice.example.com",
             credential_id=cred.credential_id,
             operation="delegate",
             payload={},

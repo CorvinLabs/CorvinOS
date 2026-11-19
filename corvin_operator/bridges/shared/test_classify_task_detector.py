@@ -22,7 +22,7 @@ import data_classification as dc  # type: ignore  # noqa: E402
 
 C = dc.DataClassification
 MAIL = "reply to jane.doe@example.com please"
-KEY = "key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+KEY = "key sk-" "ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
 
 
 class TestUnchangedWithoutOptIn:
@@ -30,8 +30,12 @@ class TestUnchangedWithoutOptIn:
     def test_default_path_is_untouched(self, text):
         assert dc.classify_task(text) == dc.classify_task(text, detector=False)
 
-    def test_a_public_marker_still_means_public_without_opt_in(self):
-        assert dc.classify_task("[class:public] " + MAIL) is C.PUBLIC
+    def test_a_public_marker_cannot_lower_the_class_without_opt_in(self):
+        # Review 2026-11-19 (SEC-11): the marker is a floor on every path. It used to
+        # return before the personal-data step, so whoever wrote the text chose its class.
+        assert dc.classify_task("[class:public] " + MAIL) is C.CONFIDENTIAL
+        assert dc.classify_task("[class:public] write a haiku about spring") is C.PUBLIC
+        assert dc.classify_task("[class:internal] write a haiku about spring") is C.INTERNAL
 
 
 class TestOptedIn:
@@ -62,7 +66,7 @@ class TestOptedIn:
         import compliance_zone_classifier as zc  # type: ignore
         monkeypatch.setattr(zc, "classify_zone", lambda task, persona=None: {"zone": "personal_data"})
         assert dc.classify_task("[class:public] hello", detector=True) is C.CONFIDENTIAL
-        assert dc.classify_task("[class:public] hello") is C.PUBLIC       # not opted in: as today
+        assert dc.classify_task("[class:public] hello") is C.CONFIDENTIAL  # SEC-11: a floor here too
 
     def test_a_failing_zone_classifier_is_fail_closed(self, monkeypatch):
         import compliance_zone_classifier as zc  # type: ignore

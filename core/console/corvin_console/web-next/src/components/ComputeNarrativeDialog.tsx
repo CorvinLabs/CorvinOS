@@ -138,7 +138,7 @@ export function ComputeNarrativeDialog({ runId, enabled, locale = "de" }: Props)
               title="Re-generate summary"
             >
               <RotateCcw className={cn("h-3 w-3", (narrativeQ.isFetching || regenerating) && "animate-spin")} />
-              Neu
+              Regenerate
             </Button>
 
             {/* Model + locale badge */}

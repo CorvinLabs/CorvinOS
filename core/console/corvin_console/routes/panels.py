@@ -36,8 +36,22 @@ except Exception:  # noqa: BLE001 — degrade to a no-store view, never 500 the 
 
 router = APIRouter(prefix="/panels", tags=["console-panels"])
 
+#: Response headers for every route that returns stored panel HTML. The HTML is
+#: LLM-generated: PanelHost embeds it in a sandboxed iframe, but the same URL opened
+#: top-level (a link, a new tab) would otherwise run same-origin with the session
+#: cookie. ``sandbox allow-scripts`` makes the browser treat the document as an
+#: opaque origin wherever it is loaded, so it can neither read the cookie nor call
+#: the console API as the operator. Same shape as the compute artifact download.
+PANEL_HTML_HEADERS: dict[str, str] = {
+    "Content-Security-Policy": "sandbox allow-scripts",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+}
+
 #: A panel id is a directory name and a URL segment — keep it safe on both.
-_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,48}$")
+# Used with ``fullmatch``: ``$`` also matches before a trailing newline, so
+# ``match`` admitted "abc\n" as an id (and as part of a file name).
+_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,48}")
 
 
 def _panels_dir(tenant_id: str) -> Path | None:
@@ -49,7 +63,7 @@ def _panels_dir(tenant_id: str) -> Path | None:
 
 
 def _validate_id(panel_id: str) -> str:
-    if not _ID_RE.match(panel_id or ""):
+    if not _ID_RE.fullmatch(panel_id or ""):
         raise HTTPException(status_code=400, detail="invalid panel id (use a-z, 0-9, -)")
     return panel_id
 
@@ -71,6 +85,36 @@ def extract_title(html: str) -> str:
     return "Panel"
 
 
+#: A declared data path: a plain relative API path, no query, no dots.
+_DATA_PATH_RE = re.compile(r"/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*")
+MAX_DATA_PATHS = 16
+
+
+def extract_data_paths(html: str) -> list[str]:
+    """The console paths a panel declares it reads.
+
+    ``<meta name="corvin-panel-data" content="/sessions /cost/summary">`` (space-
+    or comma-separated). A sandboxed panel cannot call the API; it asks its host
+    (``corvin:panel:fetch``), and the host answers only for a path that is declared
+    here AND on its own allowlist (``PANEL_READABLE_PATHS`` in
+    ``web-next/src/panels/protocol.ts``). This is the declaration half: shape
+    only, de-duplicated, at most :data:`MAX_DATA_PATHS`. It grants nothing.
+    """
+    out: list[str] = []
+    for tag in re.findall(r"<meta\b[^>]*>", html or "", re.IGNORECASE):
+        if not re.search(r"""\bname\s*=\s*(["'])corvin-panel-data\1""", tag, re.IGNORECASE):
+            continue
+        m = re.search(r"""\bcontent\s*=\s*(["'])([^"']*)\1""", tag, re.IGNORECASE)
+        if not m:
+            continue
+        for path in re.split(r"[\s,]+", m.group(2)):
+            if path and _DATA_PATH_RE.fullmatch(path) and len(path) <= 200 and path not in out:
+                out.append(path)
+                if len(out) >= MAX_DATA_PATHS:
+                    return out
+    return out
+
+
 def store_panel(
     tenant_id: str,
     panel_id: str,
@@ -83,7 +127,7 @@ def store_panel(
 ) -> dict:
     """Write a panel to the store. SSOT used by both the POST route and the chat
     worker's post-turn install (ADR-0366). Raises ValueError on a bad id / no store."""
-    if not _ID_RE.match(panel_id or ""):
+    if not _ID_RE.fullmatch(panel_id or ""):
         raise ValueError(f"invalid panel id: {panel_id!r}")
     d = _panels_dir(tenant_id)
     if d is None:
@@ -98,6 +142,9 @@ def store_panel(
         "icon": icon,
         "created_at": time.time(),
         "created_by": created_by,
+        # The panel's manifest declaration, read from the HTML itself so the chat
+        # worker's install and the POST route record it the same way.
+        "data_paths": extract_data_paths(html),
     }
     (pdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
@@ -165,7 +212,7 @@ async def create_panel(
 
 
 @router.get("/{panel_id}/index.html", response_class=HTMLResponse)
-async def serve_panel(
+def serve_panel(
     panel_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> HTMLResponse:
@@ -175,7 +222,41 @@ async def serve_panel(
     html_file = (d / panel_id / "index.html") if d else None
     if not html_file or not html_file.is_file():
         raise HTTPException(status_code=404, detail="panel not found")
-    return HTMLResponse(html_file.read_text(encoding="utf-8"))
+    return HTMLResponse(html_file.read_text(encoding="utf-8"), headers=PANEL_HTML_HEADERS)
+
+
+@router.get("/{panel_id}/manifest")
+def panel_manifest(
+    panel_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict:
+    """A generated panel's manifest: its metadata and declared data paths.
+
+    Read by PanelHost before it answers the panel's data requests. A panel
+    installed before the declaration existed has no ``data_paths`` in its
+    ``meta.json``; it is then read from the stored HTML (nothing is written).
+    """
+    _validate_id(panel_id)
+    d = _panels_dir(rec.tenant_id)
+    pdir = (d / panel_id) if d else None
+    html_file = (pdir / "index.html") if pdir else None
+    if not html_file or not html_file.is_file():
+        raise HTTPException(status_code=404, detail="panel not found")
+    meta: dict[str, Any] = {}
+    try:
+        loaded = json.loads((pdir / "meta.json").read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            meta = loaded
+    except (OSError, ValueError):
+        pass
+    declared = meta.get("data_paths")
+    if not isinstance(declared, list):
+        declared = extract_data_paths(html_file.read_text(encoding="utf-8"))
+    return {
+        "id": panel_id,
+        "title": meta.get("title") if isinstance(meta.get("title"), str) else "Panel",
+        "data_paths": [p for p in declared if isinstance(p, str) and _DATA_PATH_RE.fullmatch(p)][:MAX_DATA_PATHS],
+    }
 
 
 @router.delete("/{panel_id}")

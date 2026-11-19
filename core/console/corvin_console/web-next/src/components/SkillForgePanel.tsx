@@ -63,6 +63,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { icon } from "@/lib/status-markers";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -97,12 +98,14 @@ import RunFeed from "@/components/forge/RunFeed";
  * also serves this order in every status payload; the local copy is only the
  * fallback for the very first render, before a run exists.
  */
+// Plain labels: a phase name is not a status, and the glyph that used to mark
+// "Validation" is the vocabulary's "investigating / finding still open".
 const PHASE_LABELS: Record<string, string> = {
-  planning: "📋 Planning",
-  validation: "🔍 Validation",
-  ldd_iteration: "🔁 LDD Iteration",
-  review: "🎯 Adversarial Review",
-  promotion: "🚀 Promotion",
+  planning: "Planning",
+  validation: "Validation",
+  ldd_iteration: "LDD Iteration",
+  review: "Adversarial Review",
+  promotion: "Promotion",
 };
 
 const DEFAULT_PHASES = ["planning", "validation", "ldd_iteration", "review", "promotion"];
@@ -532,7 +535,7 @@ export const SkillForgePanel: React.FC = () => {
                 className="space-y-1 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
                 data-testid="generation-error"
               >
-                <div>❌ {run.data.message}</div>
+                <div>{icon("failed")} {run.data.message}</div>
                 {run.data.error && run.data.error !== run.data.message && (
                   <details>
                     <summary className="cursor-pointer opacity-80">Engine detail</summary>

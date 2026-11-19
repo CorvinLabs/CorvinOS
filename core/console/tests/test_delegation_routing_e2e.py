@@ -119,7 +119,7 @@ class _StreamTurnE2EBase(unittest.TestCase):
         _orig = getattr(_hr, "_house_rules_classifier", None)
         self.addCleanup(setattr, _hr, "_house_rules_classifier", _orig)
         _hr._house_rules_classifier = (  # type: ignore[assignment]
-            lambda task, rules, auth, **kw: ("", 0.0, "test clear")
+            lambda task, rules, auth, **kw: ("", 0.99, "test clear")
         )
 
     def _inject_license_ok(self):

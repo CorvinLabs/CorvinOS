@@ -9,17 +9,19 @@ Audits all decisions via audit-backend (GDPR Art. 30, 32).
 """
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from .. import feature_flags
+from core.paths import tenant_audit_chain
+
+from .. import auth as session_auth
+from ..chain_tail import DEFAULT_MAX_SCAN_BYTES, iter_chain_tail, scan_window
 from ..deps import require_session
 
 log = logging.getLogger(__name__)
@@ -60,91 +62,160 @@ class Phase3PerformanceResponse(BaseModel):
     )
     error_rate: float = Field(default=0.0, description="Error rate (0.0-1.0)")
     latency_p95_ms: float = Field(default=0.0, description="P95 latency in milliseconds")
+    scan: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "What the audit-chain tail scan covered: truncated (the requested "
+            "window reaches further back than the scanned part), scanned_bytes, "
+            "total_bytes, covers_since"
+        ),
+    )
+    coverage_note: str | None = Field(
+        default=None,
+        description="Plain-text statement when the result is partial; null when complete",
+    )
 
 
-def _read_audit_trail_metrics(hours: int = 24) -> dict[str, Any]:
-    """Query audit trail for Phase 3 decision metrics.
+_ROUTING_EVENTS = ("routing_decision_made", "routing_decision_error")
 
-    Reads ~/.corvin/audit.jsonl for routing_decision_made events
-    and aggregates confidence/model/complexity statistics.
+
+def _record_time(event: dict[str, Any]) -> datetime | None:
+    """A chain record's time: epoch ``ts`` (what the audit writer stamps) or an
+    ISO ``timestamp_utc`` (older shape). None when neither parses."""
+    ts = event.get("ts")
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+        try:
+            return datetime.fromtimestamp(float(ts), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    raw = event.get("timestamp_utc")
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _num(value: Any, default: float = 0.0) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
+
+
+def _coverage_note(scan: dict[str, Any], window: str) -> str | None:
+    """Plain-text statement for a partial result, None when it is complete."""
+    if not scan.get("truncated"):
+        return None
+    since = scan.get("covers_since") or "an unknown time"
+    return (
+        f"Partial result: the audit chain is larger than the scanned window, so the "
+        f"figures cover records since {since}, not the full {window}."
+    )
+
+
+def _names_other_tenant(event: dict[str, Any], tenant_id: str) -> bool:
+    """True when the record names a tenant other than *tenant_id*.
+
+    A chain record carries the tenant in ``details.tenant_id``; the top-level
+    key is the older flat shape. Only the top level was checked, so a record
+    that named another tenant where chain records actually name it was counted.
+    Both places are checked; either one naming another tenant drops the record.
     """
-    audit_path = Path.home() / ".corvin" / "audit.jsonl"
-    if not audit_path.exists():
-        return {
-            "decisions_made": 0,
-            "avg_confidence": 0.0,
-            "error_count": 0,
-            "by_complexity": {},
-            "by_model": {},
-            "latencies_ms": [],
-        }
+    details = event.get("details")
+    candidates = [event.get("tenant_id")]
+    if isinstance(details, dict):
+        candidates.append(details.get("tenant_id"))
+    return any(
+        isinstance(value, str) and value and value != tenant_id for value in candidates
+    )
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    metrics = {
+
+def _read_audit_trail_metrics(
+    tenant_id: str, hours: int = 24, *,
+    max_scan_bytes: int = DEFAULT_MAX_SCAN_BYTES,
+) -> dict[str, Any]:
+    """Aggregate Phase 3 routing-decision records of ONE tenant.
+
+    Reads the tenant's own chain (``tenant_audit_chain(tenant_id)``). It used
+    to read ``~/.corvin/audit.jsonl`` — a path that ignores ``CORVIN_HOME`` and
+    the tenant, so every session saw the same (usually absent) file.
+
+    BLOCKING: streams the last ``max_scan_bytes`` of the chain line by line;
+    the async handler awaits it through ``asyncio.to_thread``. A record that
+    names a different tenant is dropped.
+    """
+    metrics: dict[str, Any] = {
         "decisions_made": 0,
         "confidence_scores": [],
         "error_count": 0,
         "by_complexity": defaultdict(lambda: {"count": 0, "confidence": [], "latency": []}),
         "by_model": defaultdict(lambda: {"count": 0}),
         "latencies_ms": [],
+        # What the tail scan covered; ``truncated`` = the requested time
+        # window reaches further back than the scanned part of the chain.
+        "scan": {"truncated": False, "scanned_bytes": 0, "total_bytes": 0, "covers_since": None},
     }
-
     try:
-        with open(audit_path, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    event = json.loads(line.strip())
-                    if not event.get("timestamp_utc"):
-                        continue
+        audit_path = tenant_audit_chain(tenant_id)
+    except Exception:  # noqa: BLE001 - invalid tenant id: nothing to read
+        return metrics
 
-                    # Parse timestamp
-                    try:
-                        event_time = datetime.fromisoformat(
-                            event["timestamp_utc"].replace("Z", "+00:00")
-                        )
-                    except:
-                        continue
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    try:
+        scan = scan_window(audit_path, max_scan_bytes=max_scan_bytes)
+        if scan["truncated"]:
+            first = next(iter_chain_tail(audit_path, max_scan_bytes=max_scan_bytes), None)
+            first_time = _record_time(first) if first is not None else None
+            # Only a window that starts AFTER the cutoff hides records.
+            scan["truncated"] = first_time is None or first_time > cutoff
+        metrics["scan"] = scan
+    except Exception as e:  # noqa: BLE001
+        log.warning("Error measuring the scan window: %s", type(e).__name__)
+    try:
+        for event in iter_chain_tail(
+            audit_path, max_scan_bytes=max_scan_bytes,
+            needles=tuple(f'"{name}"' for name in _ROUTING_EVENTS),
+        ):
+            event_type = event.get("event_type")
+            if event_type not in _ROUTING_EVENTS:
+                continue
+            if _names_other_tenant(event, tenant_id):
+                continue
+            event_time = _record_time(event)
+            if event_time is None or event_time < cutoff:
+                continue
 
-                    # Only recent events
-                    if event_time < cutoff:
-                        continue
+            if event_type == "routing_decision_error":
+                metrics["error_count"] += 1
+                continue
 
-                    # Routing decision events
-                    if event.get("event_type") == "routing_decision_made":
-                        metrics["decisions_made"] += 1
+            # Fields live in ``details`` on a chain record; top level is the
+            # older flat shape.
+            details = event.get("details")
+            src = details if isinstance(details, dict) else event
+            confidence = _num(src.get("confidence", event.get("confidence")))
+            latency = _num(src.get("latency_ms", event.get("latency_ms")))
+            complexity = str(src.get("complexity_level") or event.get("complexity_level") or "unknown")
+            model = str(src.get("model_routed") or event.get("model_routed") or "unknown")
 
-                        # Confidence
-                        confidence = event.get("confidence", 0.0)
-                        metrics["confidence_scores"].append(confidence)
-
-                        # Complexity level
-                        complexity = event.get("complexity_level", "unknown")
-                        metrics["by_complexity"][complexity]["count"] += 1
-                        metrics["by_complexity"][complexity]["confidence"].append(confidence)
-
-                        # Model routed
-                        model = event.get("model_routed", "unknown")
-                        metrics["by_model"][model]["count"] += 1
-
-                        # Latency
-                        latency = event.get("latency_ms", 0)
-                        metrics["latencies_ms"].append(latency)
-                        metrics["by_complexity"][complexity]["latency"].append(latency)
-
-                    elif event.get("event_type") == "routing_decision_error":
-                        metrics["error_count"] += 1
-
-                except json.JSONDecodeError:
-                    continue
-    except Exception as e:
-        log.warning(f"Error reading audit trail: {e}")
+            metrics["decisions_made"] += 1
+            metrics["confidence_scores"].append(confidence)
+            metrics["by_complexity"][complexity]["count"] += 1
+            metrics["by_complexity"][complexity]["confidence"].append(confidence)
+            metrics["by_complexity"][complexity]["latency"].append(latency)
+            metrics["by_model"][model]["count"] += 1
+            metrics["latencies_ms"].append(latency)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Error reading audit trail: %s", e)
 
     return metrics
 
 
 @router.get("/monitor/phase3-performance", response_model=Phase3PerformanceResponse)
 async def get_phase3_performance(
-    _: Any = Depends(require_session),
+    rec: session_auth.SessionRecord = Depends(require_session),
     window: str = "24h",
 ) -> Phase3PerformanceResponse:
     """Get Phase 3 Complexity Classifier performance metrics.
@@ -169,7 +240,10 @@ async def get_phase3_performance(
     window_hours = {"24h": 24, "7d": 7 * 24, "30d": 30 * 24}.get(window, 24)
 
     # Read audit trail metrics
-    audit_data = _read_audit_trail_metrics(hours=window_hours)
+    # Tenant from the authenticated session; blocking scan awaited off the loop.
+    audit_data = await asyncio.to_thread(
+        _read_audit_trail_metrics, rec.tenant_id, window_hours,
+    )
 
     # Calculate aggregates
     decisions = audit_data["decisions_made"]
@@ -184,8 +258,8 @@ async def get_phase3_performance(
 
     # Latency percentiles
     latencies = sorted(audit_data["latencies_ms"])
-    latency_p95 = latencies[int(len(latencies) * 0.95)] if latencies else 0.0
-    latency_p99 = latencies[int(len(latencies) * 0.99)] if latencies else 0.0
+    latency_p95 = latencies[min(len(latencies) - 1, int(len(latencies) * 0.95))] if latencies else 0.0
+    latency_p99 = latencies[min(len(latencies) - 1, int(len(latencies) * 0.99))] if latencies else 0.0
 
     # Build response
     by_complexity = {}
@@ -229,4 +303,6 @@ async def get_phase3_performance(
         by_model=by_model,
         error_rate=round(error_rate, 4),
         latency_p95_ms=round(latency_p95, 1),
+        scan=audit_data.get("scan") or {},
+        coverage_note=_coverage_note(audit_data.get("scan") or {}, window),
     )

@@ -130,7 +130,7 @@ class _DelegatedTurnBase(unittest.TestCase):
         orig_rules = getattr(_hr, "_house_rules_classifier", None)
         self.addCleanup(setattr, _hr, "_house_rules_classifier", orig_rules)
         _hr._house_rules_classifier = (  # type: ignore[assignment]
-            lambda task, rules, auth, **kw: ("", 0.0, "test clear"))
+            lambda task, rules, auth, **kw: ("", 0.99, "test clear"))
 
         limits_mod = types.ModuleType("license.limits")
 

@@ -173,7 +173,7 @@ class TestInviteOidIsAFilenameSafeIdentifier(unittest.TestCase):
     def _token(self, oid: str) -> str:
         p = {"v": 1, "iid": "someone-else", "oid": oid, "url": "http://10.1.1.1:8765",
              "rp": "/v1/a2a/receive", "hk": secrets.token_hex(32), "rk": secrets.token_hex(32),
-             "pa": ["assistant"], "mt": 300, "iat": 1.0}
+             "pa": ["assistant"], "mt": 300, "iat": 1.0, "exp": 86401.0}
         pb = json.dumps(p, sort_keys=True, separators=(",", ":")).encode()
         return inv.TOKEN_PREFIX + inv._b64_enc(pb) + "." + inv._b64_enc(b"\x00" * 32)
 

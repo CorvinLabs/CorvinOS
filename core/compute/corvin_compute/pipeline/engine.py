@@ -18,10 +18,11 @@ No ``anthropic`` import anywhere in this file.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from ..engine_protocol import (
     ComputeEngine,
@@ -32,7 +33,7 @@ from ..engine_protocol import (
     UnknownJobId,
 )
 from .coordinator import PipelineCoordinator
-from .manifest import PipelineManifest, StageSpec, new_pipeline_id
+from .manifest import PipelineManifest, StageSpec, new_pipeline_id, require_unique_stage_ids
 
 
 class PipelineEngine:
@@ -62,6 +63,9 @@ class PipelineEngine:
 
         self._coordinators: dict[str, PipelineCoordinator] = {}
         self._gate_queues: dict[str, asyncio.Queue] = {}
+        # job id -> the concurrent Future of its coordinator coroutine, so a
+        # stopping worker can wait for the terminal record (see wait_stopped).
+        self._futures: dict[str, Any] = {}
         self._lock = threading.Lock()
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -86,6 +90,9 @@ class PipelineEngine:
         pipeline_id = new_pipeline_id()
         stage_dicts = spec.extra.get("stages", [])
         stages = [StageSpec.from_dict(s) for s in stage_dicts]
+        # R3-BR-5: refused HERE, before an id is handed out - a pipeline whose stages
+        # share an id would overwrite its own results and artifact directories.
+        require_unique_stage_ids(stages)
         manifest = PipelineManifest(
             pipeline_id=pipeline_id,
             tenant_id=spec.tenant_id,
@@ -118,7 +125,9 @@ class PipelineEngine:
             self._gate_queues[pipeline_id] = gate_q
 
         # Schedule the coordinator coroutine in the engine's event loop
-        asyncio.run_coroutine_threadsafe(coordinator.run(), self._loop)
+        fut = asyncio.run_coroutine_threadsafe(coordinator.run(), self._loop)
+        with self._lock:
+            self._futures[pipeline_id] = fut
         return pipeline_id
 
     def status(self, job_id: str) -> ComputeStatus:
@@ -180,6 +189,30 @@ class PipelineEngine:
             raise UnknownJobId(f"no pipeline job: {job_id!r}")
         coord.request_abort()
 
+    def interrupt_all(self) -> int:
+        """Worker shutdown: stop every non-terminal pipeline. Returns the count."""
+        with self._lock:
+            coords = list(self._coordinators.values())
+        n = 0
+        for coord in coords:
+            if coord._state not in ("converged", "failed", "aborted"):
+                coord.request_interrupt()
+                n += 1
+        return n
+
+    async def wait_stopped(self, timeout_s: float) -> int:
+        """Worker shutdown, after ``interrupt_all``: make every pipeline terminal.
+
+        ``interrupt_all`` only sets flags. The coordinator coroutine writes the
+        terminal record once its running tool iteration returns - and a worker
+        that stopped without waiting was torn down first: in memory ``aborted``,
+        on disk an empty summary, in the chain no ``compute.pipeline_terminal``.
+        This waits up to *timeout_s* for the coroutines; a pipeline still not
+        terminal then gets its ``aborted`` record written synchronously. Returns
+        how many needed that fallback. Must be awaited on the engine's loop.
+        """
+        return await _drain(self, timeout_s)
+
     # -- internals ----------------------------------------------------------------
 
     def _get_coordinator(self, job_id: str) -> PipelineCoordinator:
@@ -187,6 +220,30 @@ class PipelineEngine:
         if coord is None:
             raise UnknownJobId(f"no pipeline job: {job_id!r}")
         return coord
+
+
+async def _drain(engine: Any, timeout_s: float) -> int:
+    """Shared shutdown drain for the pipeline and HAC engines (same fields)."""
+    with engine._lock:
+        futures = dict(engine._futures)
+        coords = dict(engine._coordinators)
+    pending = [asyncio.wrap_future(f) for f in futures.values() if not f.done()]
+    if pending:
+        # asyncio.wait never raises on timeout and does not cancel the waited
+        # coroutines; a coordinator still running keeps its own cancel handler.
+        await asyncio.wait(pending, timeout=max(0.0, float(timeout_s)))
+    forced = 0
+    for coord in coords.values():
+        if coord.is_terminal():
+            continue
+        try:
+            coord.finish_aborted()
+            forced += 1
+        except Exception:  # noqa: BLE001 — shutdown must proceed
+            logging.getLogger(__name__).exception(
+                "terminal record for %s not written at shutdown",
+                getattr(coord, "pipeline_id", None) or getattr(coord, "hac_id", "?"))
+    return forced
 
 
 # -- convenience factory ---------------------------------------------------------

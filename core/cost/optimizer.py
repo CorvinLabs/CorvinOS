@@ -92,7 +92,7 @@ class CostOptimizer:
         daily_spend: Decimal,
         daily_call_count: int,
         model_distribution: dict[str, int],
-        cache_hit_rate: float,
+        cache_hit_rate: Optional[float],
     ) -> list[OptimizationRecommendation]:
         """Generate cost optimization recommendations (Story 7).
 
@@ -100,7 +100,8 @@ class CostOptimizer:
             daily_spend: Average daily spend (EUR)
             daily_call_count: Average daily LLM calls
             model_distribution: {model_id: call_count}
-            cache_hit_rate: Current cache hit rate (0.0-1.0)
+            cache_hit_rate: MEASURED cache hit rate (0.0-1.0), or ``None``
+                when it is not known - no caching advice is given then
 
         Returns:
             List of recommendations ranked by impact
@@ -113,7 +114,7 @@ class CostOptimizer:
             recommendations.append(rec)
 
         # Recommendation 2: Prompt caching
-        if cache_hit_rate < 0.5:
+        if cache_hit_rate is not None and cache_hit_rate < 0.5:
             rec = self._recommend_prompt_cache(daily_spend, cache_hit_rate)
             recommendations.append(rec)
 
@@ -301,7 +302,10 @@ class CostOptimizer:
 
         # Assume 30% of Opus calls could use Sonnet instead (2x cheaper)
         monthly_spend = daily_spend * Decimal("30")
-        opus_monthly = monthly_spend * (Decimal(opus_calls) / Decimal(total_calls))
+        opus_share = (
+            Decimal(opus_calls) / Decimal(total_calls) if total_calls > 0 else Decimal("0")
+        )
+        opus_monthly = monthly_spend * opus_share
         estimated_savings = opus_monthly * Decimal("0.30") * Decimal("0.50")
 
         return OptimizationRecommendation(

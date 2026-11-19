@@ -31,6 +31,107 @@ def _default_memory_dir() -> Path:
     return Path.home() / ".claude" / "projects" / escaped / "memory"
 
 
+def tenant_memory_dir(tenant_id: str) -> Path:
+    """``<tenant_home>/memory`` — the memory directory a tenant owns.
+
+    The tenant is always explicit (``forge.paths.tenant_home`` validates it and never
+    falls back to the process environment)."""
+    from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
+    return Path(tenant_home(tenant_id)) / "memory"
+
+
+def _boot_tenant() -> str:
+    import os  # noqa: PLC0415
+    return os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+
+def _is_owner_session(tenant_id: str, session: object) -> bool:
+    """True when ``session`` is provably the operator's own turn. Unknown is False.
+
+    * ``session.host_memory`` — an explicit caller statement wins (True/False).
+    * a bridge session (``adapter._cel_session``: ``sid = "<channel>:<chat>[#n]"`` plus the
+      turn's ``sender``) is the operator's when the sender is on the channel's whitelist
+      (``roles.is_intrinsic_owner``). A group observer, a granted user and a chat with no
+      sender are not.
+    * a console session (it carries the authenticated record's ``tenant_id`` and no
+      ``sender``) is the operator's when that tenant is the one this turn runs for: the
+      console's only login is the local one.
+    * no session (ACS manager brief, library callers): nobody is named.
+    """
+    if session is None:
+        return False
+    explicit = getattr(session, "host_memory", None)
+    if explicit is not None:
+        return explicit is True
+    if hasattr(session, "sender"):
+        sender = str(getattr(session, "sender", "") or "")
+        sid = str(getattr(session, "sid", "") or "")
+        channel = sid.split(":", 1)[0] if ":" in sid else ""
+        if not sender or not channel:
+            return False
+        try:
+            try:
+                import roles as _roles  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                from corvin_operator.bridges.shared import roles as _roles  # noqa: PLC0415
+            return bool(_roles.is_intrinsic_owner(channel, sender))
+        except Exception:  # noqa: BLE001 — an unanswerable owner question is "no"
+            return False
+    sess_tenant = getattr(session, "tenant_id", None)
+    return isinstance(sess_tenant, str) and bool(sess_tenant) and sess_tenant == tenant_id
+
+
+def _host_memory_passes_l34(tenant_id: str, session: object) -> bool:
+    """The host memory is the operator's working notes: class INTERNAL at least. It is
+    injected only when the tenant's L34 policy lets that class reach the engine of the
+    turn (no policy = the documented opt-in default, allowed). Any error is a no."""
+    try:
+        try:
+            import spawn_gates as _sg  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from corvin_operator.bridges.shared import spawn_gates as _sg  # noqa: PLC0415
+        sid = str(getattr(session, "sid", "") or "")
+        channel, _, chat = sid.partition(":") if hasattr(session, "sender") else ("web", "", sid)
+        engine = str(getattr(session, "engine_id", "") or "claude_code")
+        return _sg.check_l34(engine, tenant_id, classification="INTERNAL",
+                             channel=channel, chat_key=chat.split("#", 1)[0]) is None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory source: L34 check for the host memory failed (%s) — withheld",
+                       type(exc).__name__)
+        return False
+
+
+def resolve_memory_source(tenant_id: str, session: object = None) -> "Tuple[Path, str]":
+    """Which memory directory the CEL memory stage may read for this turn: ``(dir, source)``.
+
+    The HOST source (``~/.claude/projects/<repo>/memory``) is the Claude Code auto-memory of
+    the operator's own account on this machine. It used to be read for every tenant and
+    every bridge chat, so a stranger's Discord message or a second tenant's console chat
+    got the operator's notes in its brief. It is now read only when ALL of these hold:
+
+    * the turn runs for the BOOT tenant (the process tenant, ``CORVIN_TENANT_ID`` or
+      ``_default``) — never for another tenant of a multi-tenant host;
+    * the session is provably the operator's own (:func:`_is_owner_session`);
+    * class INTERNAL passes the tenant's L34 policy for the turn's engine.
+
+    Every other turn reads the tenant's own ``<tenant_home>/memory`` (absent on most
+    installs: no matches). ``source`` is ``"host"`` or ``"tenant"``. Never raises.
+    """
+    try:
+        tenant = str(tenant_id or "")
+        if (tenant and tenant == _boot_tenant() and _is_owner_session(tenant, session)
+                and _host_memory_passes_l34(tenant, session)):
+            return _default_memory_dir(), "host"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory source: owner check failed (%s) — tenant memory only",
+                       type(exc).__name__)
+    try:
+        return tenant_memory_dir(tenant_id), "tenant"
+    except Exception as exc:  # noqa: BLE001 — an invalid tenant has no memory at all
+        logger.warning("memory source: no tenant memory directory (%s)", type(exc).__name__)
+        return Path("/nonexistent/corvin-no-memory"), "tenant"
+
+
 class MemoryLookup:
     """Search and rank memory files by relevance.
 
@@ -46,7 +147,9 @@ class MemoryLookup:
 
         Args:
             memory_dir: Path to memory files directory.
-                        Default: ~/.claude/projects/CorvinOS/memory/
+                        Default: the host auto-memory (``_default_memory_dir``). The
+                        CEL memory stage never relies on that default — it passes the
+                        directory ``resolve_memory_source`` cleared for the turn.
             cache_ttl_minutes: Cache time-to-live in minutes (default: 30).
         """
         if memory_dir is None:
@@ -105,7 +208,7 @@ class MemoryLookup:
 
         # Scan memory directory
         if not self.memory_dir.exists():
-            logger.warning(f"Memory directory not found: {self.memory_dir}")
+            logger.debug(f"Memory directory not found: {self.memory_dir}")
             return []
 
         md_files = list(self.memory_dir.glob("*.md"))

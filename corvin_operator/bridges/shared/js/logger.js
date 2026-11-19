@@ -181,8 +181,25 @@ function isDebugEnabled() {
   return resolveLevel() === "debug";
 }
 
+// Stable, non-reversible fingerprint of a sender id (phone number, JID,
+// e-mail address) for log lines written BEFORE the sender is authorised.
+// A daemon sees every chat of the account, third parties included; their
+// identifiers and message text do not belong in the log (GDPR Art. 5).
+function senderFp(id) {
+  return require("crypto").createHash("sha256")
+    .update(String(id || "").toLowerCase()).digest("hex").slice(0, 12);
+}
+
+// Content-free description of one inbound message: sender fingerprint, kind
+// and text LENGTH — never the text.
+function inboundLogLine({ from, kind, text }) {
+  return `upsert: from=${senderFp(from)} kind=${kind} text_len=${String(text || "").length}`;
+}
+
 module.exports = {
   makeLogger,
+  senderFp,
+  inboundLogLine,
   redact,
   bodyExcerpt,
   describe,

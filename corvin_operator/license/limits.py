@@ -55,6 +55,25 @@ class LicenseLimitError(Exception):
         super().__init__(msg)
 
 
+# ── Free-tier Forge unlock: ONE switch ───────────────────────────────────────
+# Operator decision 2026-11-18 (temporary): Tool Forge and Skill Forge are
+# unlimited on the Free tier. This is the ONLY place that decision lives. The
+# three values it controls are derived below and must never be edited apart:
+#
+#   FREE_TIER["tool_forge_per_day"]            None (unlimited)  |  3 per UTC day
+#   FREE_TIER["skill_forge_per_day"]           None (unlimited)  |  5 per UTC day (ADR-2095)
+#   CAPABILITIES["forge.create"]["free"]       limit None        |  limit 0 (member-only, ADR-0701)
+#
+# To restore the Member-only model set FORGE_FREE_UNLOCK = False - nothing else.
+# (Before 2026-11-19 the unlock was three separately edited literals; flipping
+# one or two of them left Tool Forge and Skill Forge disagreeing.)
+FORGE_FREE_UNLOCK: bool = True
+
+_FREE_TOOL_FORGE_PER_DAY = None if FORGE_FREE_UNLOCK else 3
+_FREE_SKILL_FORGE_PER_DAY = None if FORGE_FREE_UNLOCK else 5
+_FREE_FORGE_CREATE_LIMIT = None if FORGE_FREE_UNLOCK else 0
+
+
 # ── Free-tier defaults ────────────────────────────────────────────────────────
 # These are the limits that apply when NO valid licence key is present.
 # Every field must have a value here — there is no "unknown" state.
@@ -134,16 +153,17 @@ FREE_TIER: dict[str, Any] = {
 
     # Tool Forge (ADR-0365)
     # Daily limit for Tool Forge tool generations (L30, Forge compute_run).
-    # TEMPORARY: Free unlocked (None = unlimited). Restore Free to 3/day for the Member-only model.
-    "tool_forge_per_day":       None,
+    # Derived from FORGE_FREE_UNLOCK above: unlimited while unlocked, else 3/day.
+    "tool_forge_per_day":       _FREE_TOOL_FORGE_PER_DAY,
 
     # Skill Forge (ADR-0365, re-activated by ADR-2095)
-    # Daily skill-authoring writes on the free tier — every surface counts the
+    # Daily skill-authoring writes on the free tier - every surface counts the
     # same (Skill-Creator, manual editor, MCP skill_create, canary fork), charged
-    # by SkillRegistry.create. Member: unlimited. Tool Forge stays member-only
-    # (forge.create).
-    # TEMPORARY: Free unlocked (None = unlimited). Restore Free to 5/day for the ADR-2095 model.
-    "skill_forge_per_day":      None,
+    # by SkillRegistry.create. Member: unlimited.
+    # Derived from FORGE_FREE_UNLOCK above: unlimited while unlocked, else 5/day.
+    # Tool Forge is gated by ``forge.create`` (CAPABILITIES below), which follows
+    # the same switch: open to Free while unlocked, member-only otherwise.
+    "skill_forge_per_day":      _FREE_SKILL_FORGE_PER_DAY,
 
     # Plugin Limit (ADR-0365)
     # Maximum number of simultaneously loaded custom plugins.
@@ -302,7 +322,9 @@ CAPABILITIES: dict[str, dict[str, Any]] = {
     },
     "forge.create": {
         "class": "L",
-        "free": {"limit": None},      # TEMPORARY: Free unlocked (None = unlimited); Member-only again = limit 0
+        # Derived from FORGE_FREE_UNLOCK: None (unlimited) while unlocked,
+        # 0 (member-only) otherwise.
+        "free": {"limit": _FREE_FORGE_CREATE_LIMIT},
         "member": {"limit": None},
     },
     # Automatic model downgrading (ADR-2259, PLAN-0955). Free has an ALLOWANCE,

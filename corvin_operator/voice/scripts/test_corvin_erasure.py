@@ -84,16 +84,41 @@ class TestRunBasics(unittest.TestCase):
             self.assertFalse(trail_dir.exists(),
                              "dry-run wrote trail unexpectedly")
 
-    def test_run_rejects_pii_subject_id(self):
+    def test_run_rejects_path_shaped_subject_id(self):
         with _Sandbox() as sb:
             with redirect_stderr(io.StringIO()) as err:
                 rc = corvin_erasure.main([
                     "--home", str(sb.root),
-                    "run", "alice@example.com",  # PII shape
+                    "run", "../alice",  # a path separator is never an identifier
                     "--requester", "dpo",
                 ])
             self.assertEqual(rc, 2)
             self.assertIn("subject_id", err.getvalue())
+
+    def test_run_accepts_a_channel_id_and_persists_only_its_pseudonym(self):
+        # Review 2026-11-19 (SEC-5 / R2-SEC-7). The bridges key a person by the id
+        # the channel hands them - an e-mail chat key, a WhatsApp JID - so such a
+        # subject must be nameable in an Art. 17 request (this test used to assert
+        # the opposite: rc 2 for "alice@example.com"). What must NOT happen is the
+        # address surviving in the records OF the erasure.
+        import hashlib
+        for subject in ("alice@example.com", "4915112345678@s.whatsapp.net"):
+            with _Sandbox() as sb:
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    rc = corvin_erasure.main([
+                        "--home", str(sb.root),
+                        "run", subject,
+                        "--requester", "dpo",
+                    ])
+                self.assertEqual(rc, 0, subject)
+                trail_dir = sb.root / "tenants" / sb.tenant_id / "global" / "erasure"
+                trails = sorted(trail_dir.glob("er-*.json"))
+                self.assertEqual(len(trails), 1, subject)
+                text = trails[0].read_text(encoding="utf-8")
+                self.assertNotIn(subject, text)
+                self.assertNotIn(subject.split("@")[0], text)
+                fp = hashlib.sha256(subject.encode()).hexdigest()[:8]
+                self.assertEqual(json.loads(text)["request"]["subject_id"], fp)
 
     def test_run_requires_requester(self):
         with _Sandbox() as sb:

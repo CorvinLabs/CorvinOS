@@ -212,8 +212,103 @@ text as typed.
 - The chat path into the panel store (a turn writes `corvin-panel*.html`) applies the SAME
   `forge.create` capability gate as `POST /panels` and records `console.panel_created`; a refusal is
   `console.action_denied {action: panel.install, reason: forge-create-denied}` and consumes the file.
-- The iframe sandbox tokens of AI panels (`allow-same-origin`) are an open operator decision
-  (ADR-2189 proposes trust-derived, default-closed tokens) and are unchanged.
+- AI panels and backend-manifest iframes are mounted with `PANEL_SANDBOX` (`allow-scripts` only,
+  `web-next/src/panels/PanelHost.tsx`); `allow-same-origin` is never added for them. Trust-derived
+  tokens (ADR-2189) remain a proposal.
+
+## Panel HTML is served as an opaque-origin document (`routes/panels.py`, 2026-11-19)
+
+- The HTML of a generated panel is LLM output. The iframe sandbox only protects the embedded case:
+  the same URL (`GET /v1/console/panels/<id>/index.html`) opened top-level - a link, a new tab -
+  used to render same-origin with the operator's session cookie and could call every console API.
+- Every response that carries stored panel HTML now sends `PANEL_HTML_HEADERS`:
+  `Content-Security-Policy: sandbox allow-scripts`, `X-Content-Type-Options: nosniff`,
+  `Cache-Control: no-store`. With the `sandbox` directive (no `allow-same-origin`) the browser gives
+  the document an opaque origin wherever it is loaded: no cookie, no storage, no credentialed call.
+  The same shape as the compute artifact downloads (`sandbox`).
+- A new route that returns panel HTML must pass `headers=PANEL_HTML_HEADERS`;
+  `core/console/tests/test_review_r2_console_backend.py` fails on an `HTMLResponse` in `panels.py`
+  without it, and proves the header over HTTP against the real console router.
+- Consequence, unchanged from the iframe sandbox: a panel cannot call the console API with the
+  operator's credentials (it asks the host instead - see "Panel data requests" below). The host hands it a context by `postMessage`; to an opaque-origin frame that
+  message has to use `targetOrigin "*"` and therefore carries no tenant id
+  (`PanelHost.contextForTarget`). A frame that keeps its origin (`allow-same-origin`, e.g. an external
+  https panel) is addressed with the origin of its `src`, never `"*"`.
+
+## Panel data requests (`web-next/src/panels/protocol.ts`, `PanelHost.tsx`, 2026-11-19)
+
+A sandboxed panel has an opaque origin, so `fetch(ctx.baseUrl + ...)` with
+`credentials: "include"` cannot work - and `allow-same-origin` is not given back to make it work.
+The panel asks its host:
+
+```
+panel -> host   { type: "corvin:panel:fetch", id: "1", path: "/sessions?limit=20" }
+host  -> panel  { type: "corvin:host:data", id: "1", ok: true, status: 200, data: ... }
+                { type: "corvin:host:data", id: "1", ok: false, status: 403, error: "..." }
+```
+
+- The host performs the read itself: `GET` only, its own API base, its own session (the tenant is the
+  host's; a `tenant`/`tenant_id`/`tid` query key is refused), `redirect: "error"`, no header or body
+  from the panel.
+- A path is answered only when it is (1) well-formed (`normalisePanelDataPath`: no scheme or host, no
+  `..`, `//`, backslash, percent-encoding, fragment or control character), (2) on the console-wide
+  `PANEL_READABLE_PATHS` and (3) declared by that panel. Everything else is `ok: false, status: 403`
+  and never reaches the API.
+- Declaration = the panel manifest: `<meta name="corvin-panel-data" content="/sessions /cost/summary">`.
+  `routes/panels.py::extract_data_paths` records it in `meta.json` at install (both the POST route and
+  the chat worker go through `store_panel`); `GET /v1/console/panels/<id>/manifest` serves it and
+  `PanelHost` reads it for a generated panel. An in-editor preview (`srcDoc`) is read from the document.
+  An external https panel has no manifest here and gets no data.
+- Limits: `PANEL_DATA_MAX_BYTES` (1 MiB, measured in bytes) per answer, JSON only, the body of a failed
+  call is never forwarded, `PANEL_DATA_MAX_IN_FLIGHT` / `PANEL_DATA_MAX_PER_MINUTE` per mounted panel.
+- The granted paths ride in `host:hello` as `ctx.dataPaths`.
+
+**Boundary.** `PANEL_READABLE_PATHS` is the perimeter. The panel document is served with
+`Content-Security-Policy: sandbox allow-scripts` only - no `connect-src` restriction - so whatever a
+panel may read, any script it loads can send elsewhere. Keep settings, credentials, keys and the raw
+audit trail off the list; `tests/unit/panel-data-requests.test.tsx` fails on a path that looks like one.
+
+Tests: `web-next/tests/unit/panel-data-requests.test.tsx` (protocol, allowlist incl. refusals, size
+limit, host dispatch), `core/console/tests/test_review_r3_console_backend.py` (declaration, manifest
+route).
+
+## Third review round, backend (2026-11-19)
+
+- **`/metrics?since=`** reads the chain TAIL (`audit_metrics._iter_window_events`): it steps back from
+  the end until it finds a record older than the window, bounded by
+  `CORVIN_METRICS_WINDOW_MAX_BYTES` (default 64 MiB); a window cut by the bound is reported as
+  `corvin_metrics_window_truncated 1`. `render()` is single-flight per cache key. It used to walk the
+  file from byte 0 on every cache miss - and the 60 s window grid against the 15 s TTL made a 15 s
+  scraper miss on every request. Proof counts walks and parsed lines:
+  `core/gateway/tests/test_metrics_window_tail.py`.
+- **Phase 3 monitor** drops a record naming another tenant in `details.tenant_id` (where chain records
+  carry it) as well as at the top level.
+- **Cost routes** report measured values only: `/cost/breakdown` has `compute_cost`/`storage_cost`
+  `null` with `components_available`; `/cost/recommendations` derives its inputs from the cost files
+  (`CostCalculator.usage_stats`) and is `available: false` below 50 measured calls in 7 days;
+  an unreadable budget `config.json` is `available: false, config_state: "invalid"` (the spend cap then
+  denies) instead of the 100 EUR default; a defective `calls_*.jsonl` line is skipped and counted in
+  `skipped_records` instead of turning every route into a 500.
+- **Panel ids** are checked with `fullmatch` (`"abc\n"` passed `match` with `$`).
+- **Audit graph** applies `since`/`until` before `limit`, and reports `scan.limit_reached`.
+- **`controlPlaneFetch`** treats a 404 as "not available on this build" only for a read; a mutation's
+  404 carries the server's reason.
+
+## Updater and installer (third review round, 2026-11-19)
+
+- **A signal stops the running step.** `update.sh` (`_quiet`) and `install.sh` (`_await`) run long
+  steps in the background; a step started with `&` from a non-interactive `sh` ignores SIGINT, and a
+  TERM sent to the script alone never reaches it. `_on_signal` now ends the step and its descendants
+  (`_kill_tree`: TERM, then KILL after 10 s) before the script exits and releases the lock.
+- **One lock directory for every starter.** The watchdog unit (`scripts/setup.sh`) pins the installing
+  shell's `XDG_STATE_HOME`; an update started from the console ran under `systemd-run` without it and
+  locked somewhere else. `update_manager.lock_state_home()` takes the value from the watchdog unit
+  (the reader that has to agree) and passes it with `--setenv` / in the child's environment. A relative
+  `XDG_STATE_HOME` is ignored, with a note, by `install.sh`, `update.sh` and `setup.sh`.
+- **The autostash keeps its index state.** `_apply_autostash` tries `git stash apply --index` first and
+  falls back to a plain apply (with a note) when the staged part no longer applies.
+
+Tests: `tests/test_update_sh_stash_restore.py`, `tests/test_setup_lock_path_agreement.py`.
 
 ## Proofs (where each rule is tested, and over which interface)
 

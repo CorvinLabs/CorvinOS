@@ -79,7 +79,7 @@ class ActiveBrainConsoleWiring(unittest.TestCase):
     def _pin_house_rules_allowed(self):
         import house_rules as _hr  # type: ignore
         _hr._house_rules_classifier = (  # type: ignore[assignment]
-            lambda task, rules, auth, **kw: ("", 0.0, "test clear"))
+            lambda task, rules, auth, **kw: ("", 0.99, "test clear"))
 
     def _no_spawn_guard(self):
         async def _fake_spawn(*a, **k):

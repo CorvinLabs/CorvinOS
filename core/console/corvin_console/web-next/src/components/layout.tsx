@@ -286,7 +286,6 @@ const NAV_GROUPS: NavGroup[] = [
       // Layer Forge (ADR-2222) is no longer its own nav entry (2026-10-06):
       // it's now the "Layers" tab inside Forge (/app/forge?tab=layers,
       // see pages/forge.tsx). /app/layer-forge still redirects there.
-      { to: "/app/sync-monitor",   label: "Sync Monitor",       icon: Activity },
       { to: "/app/settings",       label: "Settings",           icon: Settings },
     ],
   },

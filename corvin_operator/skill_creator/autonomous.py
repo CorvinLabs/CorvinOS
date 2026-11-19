@@ -42,6 +42,40 @@ TICK_INTERVAL_S = 600
 _forks_in_flight: set[str] = set()
 _forks_lock = threading.Lock()
 
+#: ``sid_fingerprint`` of the audit records a scheduler-started fork writes: there is no
+#: operator session behind the autopilot.
+AUTOPILOT_ACTOR = "autopilot"
+
+
+class ForkRefused(RuntimeError):
+    """The pre-spawn gates (L44 house rules, capability, L34 data flow, L35 egress) refused
+    the text a fork would send to the engine - or could not run. Nothing was spawned, no
+    quota was charged, the live skill is untouched."""
+
+
+def console_spawn_gate(tenant_id: str, sid_fingerprint: str, *, kind: str = "skill") -> Callable[[str], None]:
+    """The gate every fork runs before its engine spawn (review PLS-2d): the SAME four
+    console pre-spawn gates a manual skill generation passes
+    (``forge_runs.check_spawn_gates``, as in ``skill_creator_api``). Until 2026-11-19 a fork -
+    operator-started or autopilot - sent the refine instruction and the live skill body to
+    the engine with no gate at all.
+
+    Fail-closed: a gate module that cannot be imported is a refusal. The refusal is audited
+    by the gate itself (``forge.generation_refused`` on the tenant's chain)."""
+    def _gate(text: str) -> None:
+        try:
+            from corvin_console import forge_runs  # noqa: PLC0415
+        except Exception as exc:  # noqa: BLE001
+            raise ForkRefused(
+                f"Generation refused: the safety gates are unavailable ({type(exc).__name__})."
+            ) from exc
+        try:
+            forge_runs.check_spawn_gates(text, tenant_id=tenant_id,
+                                         sid_fingerprint=sid_fingerprint, kind=kind)
+        except forge_runs.GenerationRefused as refused:
+            raise ForkRefused(str(refused)) from refused
+    return _gate
+
 
 def _canary_module():
     """``<registry package>.canary`` — the same package the registry module
@@ -165,10 +199,22 @@ def refine_instruction(skill_id: str, trigger: dict) -> str:
 
 def fork(root: Path, skill_id: str, *, source: str, trigger: Optional[dict] = None,
          instruction: str = "", progress_cb: Optional[Callable] = None,
-         orchestrator_factory: Optional[Callable[..., Any]] = None) -> dict:
+         orchestrator_factory: Optional[Callable[..., Any]] = None,
+         spawn_gate: Optional[Callable[[str], None]] = None) -> dict:
     """Refine ``skill_id`` into a candidate and start its canary.
 
     Blocking (minutes on the Claude Code engine). One fork per skill at a time.
+
+    ``spawn_gate(text)`` runs on the exact text the engine will receive (the refine
+    instruction plus the live body) before anything is spawned or charged, and raises
+    :class:`ForkRefused` to stop the fork. None = :func:`console_spawn_gate` for the root's
+    tenant with the autopilot as actor; a console caller passes one carrying its session.
+    There is no way to fork without a gate.
+
+    The same gate then runs before EVERY engine call the candidate build makes (plan,
+    repair, LDD iterations, reviewers - about a dozen), on the text of that call: only the
+    first call's text exists before the build starts. One refusal ends the build - nothing
+    further is spawned, nothing is staged, no quota is charged (review R2-BR-9).
     """
     root = Path(root)
     key = f"{root}::{skill_id}"
@@ -195,12 +241,31 @@ def fork(root: Path, skill_id: str, *, source: str, trigger: Optional[dict] = No
         if quota.get("remaining") == 0:
             raise reg_mod.SkillQuotaExceeded(tenant_id=tenant_id, limit=quota["limit"],
                                              used=quota["used"])
+        request = instruction or refine_instruction(skill_id, trigger)
+        # PLS-2d: gate the request AND the body that travels with it, after the free quota
+        # check (no gate records for a fork that cannot run) and before the engine.
+        from .llm_client import LatchedSpawnGate, gated_client  # noqa: PLC0415
+        gate = LatchedSpawnGate(spawn_gate or console_spawn_gate(tenant_id, AUTOPILOT_ACTOR))
+        gate(request + "\n\n" + base["body"])
         if orchestrator_factory is None:
             from .skill_creator import SkillCreatorOrchestrator  # noqa: PLC0415
             orchestrator_factory = SkillCreatorOrchestrator
-        orchestrator = orchestrator_factory(progress_cb=progress_cb, registry_root=str(root))
-        candidate = asyncio.run(orchestrator.create_candidate(
-            instruction or refine_instruction(skill_id, trigger), base))
+        orchestrator = _build_gated_orchestrator(
+            orchestrator_factory, gate, gated_client,
+            progress_cb=progress_cb, registry_root=str(root))
+        try:
+            candidate = asyncio.run(orchestrator.create_candidate(request, base))
+        except ForkRefused:
+            raise
+        except Exception as exc:
+            # A phase wrapped the refusal in its own error (PlanningError, ...).
+            if gate.refusal is not None:
+                raise _as_fork_refused(gate.refusal) from exc
+            raise
+        if gate.refusal is not None:
+            # A phase swallowed it (a dropped reviewer): the candidate was built on a call
+            # the gates refused, so it is not staged.
+            raise _as_fork_refused(gate.refusal)
         reg_mod.charge_skill_quota(tenant_id, corvin_home)
         return store.start(
             name=skill_id, candidate_body=candidate["body"], live_body=base["body"],
@@ -210,6 +275,49 @@ def fork(root: Path, skill_id: str, *, source: str, trigger: Optional[dict] = No
     finally:
         with _forks_lock:
             _forks_in_flight.discard(key)
+
+
+def _as_fork_refused(refusal: BaseException) -> "ForkRefused":
+    if isinstance(refusal, ForkRefused):
+        return refusal
+    out = ForkRefused(f"Generation refused by the pre-spawn gate ({type(refusal).__name__}).")
+    out.__cause__ = refusal
+    return out
+
+
+def _build_gated_orchestrator(factory: Callable[..., Any], gate: Callable[[str], None],
+                              gated_client: Callable[[Any, Any], Any], **kwargs: Any) -> Any:
+    """Build the orchestrator with ``gate`` in front of every engine call it will make.
+
+    A factory that takes ``spawn_gate`` (the real orchestrator) gates its client before any
+    phase object receives it. One that does not is only accepted when the result has no
+    engine client at all, or one whose every holder can be re-pointed here; otherwise the
+    fork is refused - an ungated engine is not a fallback."""
+    import inspect  # noqa: PLC0415
+    try:
+        params = inspect.signature(factory).parameters
+        takes_gate = "spawn_gate" in params or any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    except (TypeError, ValueError):
+        takes_gate = False
+    if takes_gate:
+        return factory(spawn_gate=gate, **kwargs)
+    orchestrator = factory(**kwargs)
+    client = getattr(orchestrator, "client", None)
+    if client is None:
+        return orchestrator
+    wrapped = gated_client(client, gate)
+    holders = [orchestrator] + [getattr(orchestrator, n, None)
+                                for n in ("planner", "tester", "reviewer")]
+    for holder in holders:
+        if holder is not None and getattr(holder, "client", None) is client:
+            try:
+                holder.client = wrapped
+            except Exception as exc:  # noqa: BLE001
+                raise ForkRefused(
+                    "Generation refused: the engine client could not be put behind the "
+                    f"safety gates ({type(exc).__name__}).") from exc
+    return orchestrator
 
 
 def forks_in_flight(root: Path) -> list[str]:
@@ -259,16 +367,33 @@ def tick(root: Path, *, fork_fn: Callable[..., dict] = fork) -> dict:
         signals = []
     else:
         signals = loss_signals(root)
+    # A skill whose fork the gates refused is not asked again for COOLDOWN_S: the refusal is
+    # about its text, which the next pass would send unchanged - with one more deny record on
+    # the audit chain every TICK_INTERVAL_S.
+    refused_at = dict(settings.get("fork_refused") or {})
+    now = result["ts"]
+    refused_at = {k: v for k, v in refused_at.items()
+                  if isinstance(v, (int, float)) and now - float(v) < COOLDOWN_S}
+    signals = [s for s in signals if s["skill_id"] not in refused_at]
     if signals and not forks_in_flight(root):
         sig = signals[0]
         try:
+            # No spawn_gate argument: fork() applies console_spawn_gate for the root's tenant
+            # with the autopilot as actor (PLS-2d). A fork_fn without gates cannot be reached
+            # from here by leaving something out.
             fork_fn(root, sig["skill_id"], source="autopilot", trigger=sig)
             result["actions"].append({"skill_id": sig["skill_id"], "action": "forked"})
+        except ForkRefused as exc:
+            logger.warning("autopilot: fork of %s refused by the pre-spawn gates: %s",
+                           sig["skill_id"], str(exc)[:200])
+            refused_at[sig["skill_id"]] = now
+            result["actions"].append({"skill_id": sig["skill_id"], "action": "fork_refused"})
         except Exception as exc:  # noqa: BLE001
             logger.warning("autopilot: fork of %s failed: %s", sig["skill_id"], exc)
             result["actions"].append({"skill_id": sig["skill_id"], "action": "fork_failed",
                                       "error": type(exc).__name__})
     settings = autopilot_settings(root)
+    settings["fork_refused"] = refused_at
     settings["last_tick"] = result["ts"]
     settings["last_actions"] = result["actions"][-10:]
     _write_settings(root, settings)

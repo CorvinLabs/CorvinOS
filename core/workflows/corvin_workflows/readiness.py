@@ -267,6 +267,13 @@ def _reachability(doc: WorkflowDoc, run: RunResult | None, timed_out: bool, stub
             bad.append(nid)
     if bad:
         return Signal("reachability", "fail", _clip(f"node never reached or failed: {', '.join(repr(b) for b in bad[:5])}"), len(bad))
+    # A delegation loop that ended on its budget is a "success" node with an unfinished
+    # result: the run reads `complete`, yet nothing downstream got what the loop was for.
+    partial = list(getattr(run, "partial_nodes", None) or [])
+    if partial:
+        return Signal("reachability", "fail", _clip(
+            "delegation loop ended on its budget without COMPLETE: "
+            f"{', '.join(repr(b) for b in partial[:5])}"), len(partial))
     done = sum(1 for r in run.nodes.values() if r.status == "success")
     skipped = sum(1 for r in run.nodes.values() if r.status == "skipped")
     return Signal("reachability", "pass", f"{done} node(s) ran, {skipped} skipped by a branch", done)

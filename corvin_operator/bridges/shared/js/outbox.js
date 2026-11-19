@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { sanitizeAttachmentPaths } = require('./outbox_paths');
 
 /**
  * @param {object} cfg
@@ -53,6 +54,7 @@ function startOutboxPoller({
   outboxDir, channel, sendFn, preCheck, logger, intervalMs = 500,
   deadLetterDir = null, isPermanent = null, maxAttempts = 10,
   sendTimeoutMs = 120_000, stallWarnMs = 300_000, stallResetMs = 900_000,
+  attachmentRoots = null,
 }) {
   let running = false;
   // Wall-clock start of the currently running tick (0 = idle). Load-bearing
@@ -265,6 +267,10 @@ function startOutboxPoller({
         continue;
       }
       if (payload.channel !== channel) continue;
+      // Attachment paths outside the outbox / session workdirs are removed
+      // before any sendFn sees them (outbox_paths.js, R3-NEW-41); the text of
+      // the envelope is still delivered.
+      sanitizeAttachmentPaths(payload, outboxDir, { logger, extraRoots: attachmentRoots });
       try {
         const _t0 = Date.now();
         await sendWithTimeout(payload, fpath);

@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { api, ApiError, getLicenseInfo, listRAGProviders } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
+import { icon } from "@/lib/status-markers";
 
 type Step = "basic" | "api" | "mapping" | "compliance";
 
@@ -724,7 +725,7 @@ function Step4Compliance({ form, updateForm }: StepBaseProps) {
 
       <div className="p-3 rounded-lg bg-accent/10 border border-accent/30">
         <p className="text-sm text-accent">
-          ✅ Your provider will be created with secure defaults (circuit breaker, retries, health checks).
+          {icon("note")} Your provider will be created with secure defaults (circuit breaker, retries, health checks).
         </p>
       </div>
     </div>

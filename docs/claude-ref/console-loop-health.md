@@ -71,6 +71,96 @@ counter. The frontend showed this as a constant "reconnecting". Only ~90 s witho
 answer restarts the console now. `scripts/setup.sh` is the source of the unit; the test
 above pins the probe line.
 
+**The watchdog stands down during an install or update** - while the owner PID of the setup
+lock is alive. Reader and writers must name the SAME lock:
+`${XDG_STATE_HOME:-$HOME/.local/state}/corvinos/corvinos-setup.lock/pid`. `install.sh` and
+`update.sh` moved the lock there from `${TMPDIR:-/tmp}` (a world-writable directory) on
+2026-11-19 while the unit kept reading the old path, so the watchdog restarted a console that
+was still booting under an update. The unit reads the state-directory path now; a systemd user
+manager normally has no `XDG_STATE_HOME`, so when the installing shell has one, `setup.sh` pins
+it into the unit (`Environment="XDG_STATE_HOME=..."`). `update.sh` re-runs `setup.sh` on every
+update and `restart_all` restarts the enabled watchdog, which is how an existing install gets
+the corrected unit. `tests/test_setup_lock_path_agreement.py` evaluates the writers' and the
+unit's path expressions under both environments and runs the unit's own liveness probe against
+a real lock. Windows uses `%TEMP%\corvinos-setup.lock` on both sides (`install.ps1`,
+`update.ps1` writer and the scheduled-task probe) and was not affected.
+
+A signal ends an install/update run: `INT`/`TERM` exit (130/143) and the `EXIT` trap releases
+the lock. The handler used to remove the lock and return, so the script carried on without it.
+
+## Panels that read the chain tail say how much they read
+
+`chain_tail.iter_chain_tail` reads the last 32 MiB of the chain. On a 500 MB chain that is a
+partial view, and a panel that shows it as "the" result is wrong without looking wrong. Every
+route built on it reports `chain_tail.scan_window()` as `scan` in its response:
+`truncated`, `scanned_bytes`, `total_bytes`, `covers_since` (time of the first record inside
+the window).
+
+| Route | Where | `truncated` means |
+|---|---|---|
+| `GET /vibe-engineering/audit`, `/traces` | `scan` (and `hasMore` on `/audit`) | chain larger than the window and fewer than `limit` records found |
+| `GET /vibe/graph`, `/vibe/tasks/list`, task context layers | `scan`; the context response also says `source: "audit" \| "example"` | as above; a task older than the window yields the labelled placeholder |
+| `GET /monitor/phase3-performance` | `scan` + `coverage_note` (plain text) | the requested time window reaches further back than the scanned tail |
+| `GET /talent/*` | `scan` | chain larger than the window: figures are "since `covers_since`" |
+| `GET /license/audit-tail` | headers `X-Corvin-Scan-Truncated`, `-Bytes`, `-Total-Bytes`, `-Covers-Since` (the body stays a list) | fewer than `limit` licence events found within the widest scan |
+
+`license.*` events are rare, so that route repeats the scan over 512 MiB
+(`LICENSE_AUDIT_MAX_SCAN_BYTES`) when the default tail holds fewer than `limit` of them -
+on demand, owner-only, needle-prefiltered and off the event loop; it is not a periodic job.
+The probes are blocking (a stat plus one short read) and are awaited through
+`asyncio.to_thread` like the scans. The console UI does not render `scan` yet.
+
+## Chain readers that carry a cursor (review 2026-11-19, round 3)
+
+A tail window is right for "the recent records". Four readers need more than that and now
+keep a byte cursor instead of re-reading; each stops at the last line that ends in a newline,
+so a record the writer is still appending is read whole on the next pass.
+
+| Reader | Before | Now |
+|---|---|---|
+| `GET /audit/stream` (`routes/streams.py`) | `read()` of the whole chain inside the async generator on subscribe; the live tail advanced its cursor by the full chunk, so a line cut at the chunk end was dropped | `_backfill` scans the last 8 MiB, `_read_new` reads at most 4 MiB per poll and advances to the last newline; both run through `asyncio.to_thread`. The `audit.checkpoint` frame carries `history_truncated` |
+| `GET /vibe/maturity/*` (`routes/maturity_live.py`) | the whole chain plus its seam-linked history parsed twice per measurement and four times per anomaly request, from `async def` handlers | one per-tenant index `{hour -> {event_type -> count}}`, advanced by a cursor per chain file; a request reads only appended bytes. A window edge is resolved to the hour. A replaced or shrunken file rebuilds the index. The handlers await `asyncio.to_thread` |
+| `GET /dashboard` (`routes/dashboard.py`) | the whole chain per page load (the docstring said "the last 4 KiB") | per-tenant cursor for today's severity counts; the first scan of a day covers the last 32 MiB. The payload carries `today_counts_window` (`truncated`, `since_ts`) |
+| `GET /control-plane/overrides/audit` (`core/control_plane/override_authority.py::read_audit_log`) | whole chain on the event loop; the first unparseable line ended the loop inside `except: pass` and the partial list was returned as complete | last 32 MiB on a worker thread; the response carries `corrupt_lines`, `complete` and `window` |
+
+`GET /chat/sessions/{sid}/chain-dual-track` (`routes/chain_dual_track.py`) used to scan three
+chain files in full and run a full `verify_chain` on every request. It now reads the 32 MiB
+tail through `chain_tail` and reports `window` (`truncated`, `scanned_bytes`, `total_bytes`,
+`covers_since`), and verifies with `verify_chain_incremental` (same verdict, the proven prefix
+is re-hashed, not re-parsed). A session older than the window is shown partially and says so.
+
+The first maturity request after a console start still folds the whole chain once (seconds on
+a 500 MB chain) - on a worker thread, never on the loop, and only once per process.
+
+## Routes that are plain `def` on purpose
+
+`routes/a2a_licensing_gate_routes.py` and `routes/cost_insights_routes.py` declare every handler
+as `def`, so FastAPI runs them on the worker threadpool. As `async def` they wrote the audit
+chain (flock + fsync), read a 4 MiB chain tail, generated RSA keys and read the cost files on
+the event loop. `tests/unit/licensing/test_review_r2_licensing.py` fails on an `async def`
+handler in either file and proves at run time that issuance and the audit read run off the loop.
+
+`routes/multi_instance.py` is `def` throughout as well: `POST /api/multi-instance/sync` runs git
+and GPG subprocesses for seconds, the read routes parse JSON files
+(`core/console/tests/test_review_r3_console_routes.py::TestMultiInstance`).
+
+## Audit writes from `async def` handlers
+
+`console_audit.*` takes the chain lock and fsyncs. From an `async def` handler it is called as
+`await asyncio.to_thread(console_audit.action_performed, ...)` - awaited, so the order of the
+record and the response is unchanged. Converted so far: `settings.py`, `license.py`,
+`control_plane_overrides.py`, `rag_hub.py`, `voice_summary.py`, `files.py` (upload),
+`webhooks.py` (inbound), `voice.py` (transcribe), `packages.py` (install). The AST tests in
+`test_review_2026_11_19_console_backend.py` and `test_review_r3_console_routes.py` fail on a
+direct call in those modules. Other route modules still write directly from async handlers
+(`routes/chat.py`, `integration_api.py`, `method_discovery_api.py`, `skill_creator_api.py`,
+`workflows.py` and about twenty more with one to four call sites each); they are not covered
+by a test yet.
+
+`core/control_plane/override_authority.py` keeps its `async def` API, but each method is a thin
+`await asyncio.to_thread(self.<name>_sync, ...)`; the synchronous cores hold the authority's
+lock, because they now run on worker threads.
+
 ## Supervisor
 
 `<CORVIN_HOME>/bin/corvin-ensure-console.ps1` (generated by `update.ps1`) never starts a

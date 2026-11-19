@@ -12,8 +12,11 @@ Architecture (ADR-0596):
 @phase Phase 2a: Type-Aware Summary Detection
 """
 
+import asyncio
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Annotated, Optional, Dict, Any, List, Tuple
 import logging
@@ -27,10 +30,7 @@ from corvin_console.services.type_detector import (
     get_summary_strategy_for_type,
     MessageType,
 )
-from corvin_console.services.stt_engine import (
-    get_stt_engine,
-    is_stt_available,
-)
+from corvin_console.services.stt_engine import is_stt_available
 from corvin_console.services.voice_feedback_loop import (
     get_feedback_store,
     get_collision_detector,
@@ -66,15 +66,25 @@ class MessageContentType(BaseModel):
     metadata: Dict[str, Any] = {}
 
 
+#: Bounds on what one voice session may hold in memory (R3-NEW-30).
+_MAX_TRANSCRIPT_CHARS = 200_000
+_MAX_MESSAGES = 500
+
+
 class VoiceStopRequest(BaseModel):
     tenant_id: str = "_default"
-    transcript: str = ""
-    messages: Optional[List[Dict[str, str]]] = None  # Phase 2a: message stream for type detection
+    transcript: str = Field(default="", max_length=_MAX_TRANSCRIPT_CHARS)
+    # Phase 2a: message stream for type detection
+    messages: Optional[List[Dict[str, str]]] = Field(default=None, max_length=_MAX_MESSAGES)
 
 
 class VoiceHealthResponse(BaseModel):
     status: str  # "healthy" | "degraded"
+    #: A real speech-to-text provider reports ready (never a mock).
     stt_available: bool
+    #: Whether summaries are generated. False on this build: no summariser
+    #: is wired, ``/voice/stop`` returns ``summary: null``.
+    summary_available: bool = False
     timestamp: str
     message: str
 
@@ -96,6 +106,25 @@ class VoiceSummaryResponse(BaseModel):
 
 _voice_sessions: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
+#: The store is process memory and used to grow by one entry per
+#: (tenant, sid) forever. It now holds at most ``_MAX_VOICE_SESSIONS`` entries
+#: and none older than ``_VOICE_SESSION_TTL_S``; the oldest are dropped first.
+_MAX_VOICE_SESSIONS = 500
+_VOICE_SESSION_TTL_S = 24 * 3600.0
+
+
+def _store_session(key: Tuple[str, str], session: Dict[str, Any]) -> None:
+    """Insert ``session`` and enforce the store's age and size bounds."""
+    now = time.time()
+    session["_created_ts"] = now
+    _voice_sessions.pop(key, None)  # re-insert at the end (newest)
+    for k in [k for k, v in _voice_sessions.items()
+              if now - float(v.get("_created_ts", now)) > _VOICE_SESSION_TTL_S]:
+        _voice_sessions.pop(k, None)
+    while len(_voice_sessions) >= _MAX_VOICE_SESSIONS:
+        _voice_sessions.pop(next(iter(_voice_sessions)), None)
+    _voice_sessions[key] = session
+
 
 def _key(rec: session_auth.SessionRecord, sid: str) -> Tuple[str, str]:
     """Voice state is keyed by (tenant, sid): a sid alone crossed tenants."""
@@ -108,10 +137,10 @@ def _scoped(rec: session_auth.SessionRecord, sid: str) -> str:
 
 
 def _get_stt_available() -> bool:
-    """
-    Check if STT (Speech-To-Text) is available (Phase 2b: via STT Engine).
-    Graceful Fallback: Chat works even if STT is unavailable.
-    """
+    """Whether a REAL speech-to-text provider is ready, from the platform's
+    ``stt.provider_status()`` (cached ~30 s). BLOCKING on a cache miss -
+    handlers call it through ``asyncio.to_thread``. It used to ask a mock
+    engine that always said yes."""
     return is_stt_available()
 
 
@@ -141,8 +170,8 @@ async def start_voice_recording(sid: str, req: VoiceStartRequest, rec: Session):
     Opt-In: User explicitly clicks "Start Recording" button.
     Graceful Fallback: Returns error if STT unavailable, but chat continues.
     """
-    if not _get_stt_available():
-        logger.warning(f"STT unavailable for session {sid} - Graceful Fallback")
+    if not await asyncio.to_thread(_get_stt_available):
+        logger.warning("STT unavailable for a voice session - graceful fallback")
         raise HTTPException(
             status_code=503,
             detail={
@@ -153,15 +182,15 @@ async def start_voice_recording(sid: str, req: VoiceStartRequest, rec: Session):
             },
         )
 
-    _voice_sessions[_key(rec, sid)] = {
+    _store_session(_key(rec, sid), {
         "status": "recording",
         "started_at": datetime.utcnow().isoformat(),
         "transcript": "",
         "summary": None,
         "events": [],
-    }
+    })
 
-    _record_audit_event("recording_started", rec, sid)
+    await asyncio.to_thread(_record_audit_event, "recording_started", rec, sid)
 
     return {
         "status": "recording_started",
@@ -242,7 +271,7 @@ async def stop_voice_recording(sid: str, req: VoiceStopRequest, rec: Session):
     session["summary_strategy"] = dominant_strategy
     session["content_types"] = content_types
 
-    _record_audit_event("recording_stopped", rec, sid)
+    await asyncio.to_thread(_record_audit_event, "recording_stopped", rec, sid)
 
     return {
         "status": "recording_stopped",
@@ -289,15 +318,23 @@ async def get_voice_summary(sid: str, rec: Session):
 @router.get("/voice/health", response_model=VoiceHealthResponse)
 async def voice_summary_health():
     """
-    Health check for Voice Summary subsystem.
-    Returns STT availability (for Graceful Degradation).
+    Health check for the Voice Summary subsystem.
+
+    ``stt_available`` is the platform's real provider status. ``status`` is
+    "healthy" only when a provider is ready; the message never claims more
+    than exists (summaries are not generated on this build).
     """
-    stt_available = _get_stt_available()
+    stt_available = await asyncio.to_thread(_get_stt_available)
     return VoiceHealthResponse(
         status="healthy" if stt_available else "degraded",
         stt_available=stt_available,
+        summary_available=False,
         timestamp=datetime.utcnow().isoformat(),
-        message="Voice Summary available" if stt_available else "STT unavailable (Graceful Fallback active)",
+        message=(
+            "Speech-to-text is ready. Summaries are not generated on this build."
+            if stt_available else
+            "Speech-to-text is not available on this install. Chat works without it."
+        ),
     )
 
 
@@ -342,7 +379,7 @@ async def record_summary_feedback(sid: str, req: FeedbackRequest, rec: Session):
     _voice_sessions[_key(rec, sid)]["feedback_score"] = req.score
     _voice_sessions[_key(rec, sid)]["feedback_provided_at"] = datetime.utcnow().isoformat()
 
-    _record_audit_event("feedback_provided", rec, sid)
+    await asyncio.to_thread(_record_audit_event, "feedback_provided", rec, sid)
 
     return {
         "status": "feedback_recorded",

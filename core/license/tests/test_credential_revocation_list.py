@@ -32,9 +32,12 @@ def crl(audit_chain):
 class TestCredentialValidity:
     """Test credential validity checking."""
 
-    def test_unknown_credential_valid(self, crl):
+    def test_unknown_credential_invalid(self, crl, temp_audit_path):
+        # Fail-closed: an id that was never registered is not a valid
+        # credential. This test used to pin the opposite (review 2026-11-19).
         result = crl.check_credential_valid("unknown_cred")
-        assert result is True
+        assert result is False
+        assert "credential_unknown" in Path(temp_audit_path).read_text(encoding="utf-8")
 
     def test_registered_credential_valid(self, crl):
         expires = datetime.utcnow() + timedelta(days=30)

@@ -1,11 +1,16 @@
 /**
  * Generic Plugin Inspector (ADR-0560 Phase 1)
  *
- * Standard panel for all plugins: config editor + audit trail + enable/disable.
- * Replaces custom UI for 90% of plugins; custom bundle (iframe) is optional.
+ * Standard panel for a plugin: enable/disable, configuration, audit trail.
+ *
+ * Every piece of state is OPTIONAL and nothing is defaulted: a section whose
+ * state was not loaded says "not available on this build" instead of rendering
+ * an empty-but-plausible value ("No configuration options", "Audit Trail (0)",
+ * a Disable button that does nothing). The manifest route passes no state today.
  */
 
 import React from "react"
+import { Link } from "react-router-dom"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -14,12 +19,18 @@ interface GenericPluginInspectorProps {
   pluginId: string
   title: string
   version: string
-  enabled: boolean
-  onToggleEnabled: (enabled: boolean) => void
+  /** Real enabled state. Omit when it was not loaded. */
+  enabled?: boolean
+  /** Real toggle. The button renders only when both this and `enabled` are given. */
+  onToggleEnabled?: (enabled: boolean) => void
+  /** Real configuration. Omit when it was not loaded. */
   config?: Record<string, unknown>
   onConfigChange?: (delta: Record<string, unknown>) => void
+  /** Real audit events. Omit when they were not loaded. */
   auditEvents?: Record<string, unknown>[]
 }
+
+const NOT_AVAILABLE = "Not available on this build."
 
 export function GenericPluginInspector({
   pluginId,
@@ -27,29 +38,43 @@ export function GenericPluginInspector({
   version,
   enabled,
   onToggleEnabled,
-  config = {},
+  config,
   onConfigChange,
-  auditEvents = [],
+  auditEvents,
 }: GenericPluginInspectorProps) {
   const [activeTab, setActiveTab] = React.useState<"config" | "audit">("config")
+  const canToggle = typeof enabled === "boolean" && typeof onToggleEnabled === "function"
 
   return (
     <div className="flex flex-col gap-4 p-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">{title}</h1>
           <p className="text-muted-foreground text-sm">
             Plugin: {pluginId} <Badge variant="secondary" className="ml-2">{version}</Badge>
           </p>
         </div>
-        <Button
-          variant={enabled ? "default" : "outline"}
-          onClick={() => onToggleEnabled(!enabled)}
-        >
-          {enabled ? "Disable" : "Enable"}
-        </Button>
+        {canToggle ? (
+          <Button
+            variant={enabled ? "default" : "outline"}
+            onClick={() => onToggleEnabled(!enabled)}
+          >
+            {enabled ? "Disable" : "Enable"}
+          </Button>
+        ) : (
+          <Button asChild variant="outline">
+            <Link to="/app/marketplace?tab=installed">Manage in Marketplace</Link>
+          </Button>
+        )}
       </div>
+
+      {!canToggle && (
+        <p className="text-sm text-muted-foreground" role="status">
+          Enabling or disabling this plugin from here is not available on this build.
+          The Marketplace shows its real state.
+        </p>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 border-b">
@@ -71,7 +96,7 @@ export function GenericPluginInspector({
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          Audit Trail ({auditEvents.length})
+          {auditEvents ? `Audit Trail (${auditEvents.length})` : "Audit Trail"}
         </button>
       </div>
 
@@ -85,7 +110,9 @@ export function GenericPluginInspector({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {Object.keys(config).length === 0 ? (
+            {config === undefined ? (
+              <p className="text-muted-foreground text-sm">{NOT_AVAILABLE}</p>
+            ) : Object.keys(config).length === 0 ? (
               <p className="text-muted-foreground text-sm">No configuration options</p>
             ) : (
               <div className="space-y-4">
@@ -95,6 +122,7 @@ export function GenericPluginInspector({
                     <input
                       type="text"
                       value={String(value)}
+                      readOnly={!onConfigChange}
                       onChange={(e) => onConfigChange?.({ [key]: e.target.value })}
                       className="rounded-md border border-border px-2 py-1 text-sm"
                     />
@@ -115,7 +143,9 @@ export function GenericPluginInspector({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {auditEvents.length === 0 ? (
+            {auditEvents === undefined ? (
+              <p className="text-muted-foreground text-sm">{NOT_AVAILABLE}</p>
+            ) : auditEvents.length === 0 ? (
               <p className="text-muted-foreground text-sm">No audit events</p>
             ) : (
               <div className="space-y-2 max-h-96 overflow-y-auto">

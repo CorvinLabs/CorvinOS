@@ -86,6 +86,7 @@ class OpenCodeEngine:
     name = "opencode"
 
     capabilities: dict[str, Any] = {
+        "argv_prefix": True,              # L29.5: launcher argv (bwrap) is prepended
         "mid_stream_inject": "buffered",  # M2: buffered /btw queue for next turn
         "hooks": "teb_brokered",  # M4: synthetic hooks via TEB
         "skills": "append_system_prompt",  # M3: skill compilation
@@ -200,6 +201,7 @@ class OpenCodeEngine:
         extra_args: list[str] | None = None,
         env: dict[str, str] | None = None,
         session_dir: Path | None = None,  # M2: for buffered /btw dequeue
+        argv_prefix: list[str] | None = None,
     ) -> Iterator[StreamEvent]:
         # M2: Check for buffered /btw injections from prior turns
         user_prompt = prompt
@@ -230,6 +232,12 @@ class OpenCodeEngine:
             permission_mode=permission_mode,
             extra_args=extra_args,
         )
+        # Layer 29.5 (delegate sandbox): ``argv_prefix`` is a launcher argv
+        # (bwrap ...) the caller wants in FRONT of the engine command. Declared
+        # as capability "argv_prefix"; a caller that requires the sandbox checks
+        # the capability before it passes the prefix.
+        if argv_prefix:
+            args = [*[str(a) for a in argv_prefix], *args]
 
         spawn_env = os.environ.copy()
         if env:

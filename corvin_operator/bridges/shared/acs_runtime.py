@@ -29,6 +29,7 @@ import json
 import math
 import logging
 import os
+import signal
 import re
 import secrets
 import shutil
@@ -1774,6 +1775,14 @@ _WORKER_SECRET_ENV_STRIP = (
     "DISCORD_WEBHOOK_URL", "SLACK_WEBHOOK_URL", "CORVIN_SLACK_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL_MARKETPLACE_SLO", "SENTRY_DSN",
     "DATABASE_URL", "GPG_PASSPHRASE",
+    # Review 2026-11-19 (A2A-9): signing / pseudonymisation material inside the
+    # CORVIN_ namespace of rule (b) whose NAMES match no secret pattern.
+    # CORVIN_MAINTAINER_PRIV is the maintainer's Ed25519 private key,
+    # CORVIN_MAINTAINER_CAP the signed maintainer capability (a bearer grant),
+    # CORVIN_PSEUDO_SEED the seed every pseudonym of this install derives from.
+    # Listed by name on purpose: `_SECRET_NAME_RE` stays a narrow NAME rule
+    # (ADR-0759) and is not widened for them.
+    "CORVIN_MAINTAINER_PRIV", "CORVIN_MAINTAINER_CAP", "CORVIN_PSEUDO_SEED",
 )
 
 # The VALUE rule — the second line over every admitted name, whatever its suffix (RD-1).
@@ -2119,6 +2128,48 @@ def _write_system_prompt_tmp_file(system: str, tenant_id: str) -> str | None:
         return None
 
 
+def _kill_process_tree(proc: "subprocess.Popen | None") -> None:
+    """Kill an engine subprocess AND everything it started. Best-effort, never raises.
+
+    ``proc.kill()`` reaches the CLI only. Its children — a tool's shell, a
+    background job, an MCP server — survive it, keep the stdout/stderr pipes
+    open (so the reader threads never see EOF) and keep running, and billing,
+    after the run was reported as timed out or cancelled. Every engine spawn
+    here uses ``start_new_session=True`` (:func:`_new_session_kwargs`), so on
+    POSIX the child is the leader of its own process group and one ``killpg``
+    reaches the whole tree. The group is only signalled when it is provably the
+    child's OWN (pgid == pid) — never this process's group. Windows has no
+    process groups of this kind: ``taskkill /T`` walks the tree instead.
+    """
+    if proc is None:
+        return
+    pid = getattr(proc, "pid", None)
+    if os.name == "posix" and isinstance(pid, int) and pid > 1:
+        try:
+            if os.getpgid(pid) == pid and pid != os.getpgrp():
+                os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # leader already reaped / not ours — fall through to kill()
+    elif os.name == "nt" and isinstance(pid, int):
+        try:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=10, check=False)
+        except Exception:  # noqa: BLE001 — fall through to kill()
+            pass
+    try:
+        if proc.poll() is None:
+            proc.kill()
+    except Exception:  # noqa: BLE001 — cleanup never raises
+        pass
+
+
+def _new_session_kwargs() -> dict:
+    """Popen kwargs that make the child its own session / process-group leader
+    (POSIX), which is what lets :func:`_kill_process_tree` reach its children."""
+    return {"start_new_session": True} if os.name == "posix" else {}
+
+
 def _communicate_capped(
     proc: subprocess.Popen, *, input_text: str, timeout: float, cap_chars: int,
     stdout_tail: "list[str] | None" = None, tail_chars: int = 0,
@@ -2206,10 +2257,19 @@ def _communicate_capped(
         # Killing closes the pipes from the child's side, so the reader
         # threads (already blocked in stream.read()) unblock and exit almost
         # immediately — 5s is generous headroom, not an expected wait.
-        proc.kill()
+        # The whole process GROUP is killed: a grandchild that inherited the
+        # pipes would otherwise hold them open and keep running (A2A-10).
+        _kill_process_tree(proc)
         proc.wait()
         out_thread.join(timeout=5.0)
         err_thread.join(timeout=5.0)
+        # What the engine wrote before the deadline travels on the exception
+        # (``TimeoutExpired.output``, as ``subprocess.run`` does it): a frame
+        # naming the model or the usage so far is the only thing that lets a
+        # timed-out run be priced instead of reading $0.00 (R2-A2A-11).
+        _exc = sys.exc_info()[1]
+        if isinstance(_exc, subprocess.TimeoutExpired):
+            _exc.output = "".join(out_chunks)
         raise
     out_thread.join(timeout=5.0)
     err_thread.join(timeout=5.0)
@@ -2294,6 +2354,7 @@ def _call_manager_sync(
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", env=env,
         creationflags=no_console_window_flags(),
+        **_new_session_kwargs(),
     )
     if proc_holder is not None:
         with proc_holder.lock:
@@ -2540,10 +2601,8 @@ class _WorkerProcessHolder:
         with self.lock:
             proc = self.popen
         if proc is not None and proc.poll() is None:
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001 — best-effort, never raise from cleanup
-                pass
+            # The process group, not just the CLI (A2A-10).
+            _kill_process_tree(proc)
 
 
 def _reported_model(frame: dict) -> str:
@@ -2562,6 +2621,62 @@ def _reported_model(frame: dict) -> str:
         return _attested_model(result)
     except Exception:  # noqa: BLE001
         return ""
+
+
+_PARTIAL_SCAN_CHARS = 262_144
+
+
+def _partial_attestation(stdout: "str | None") -> dict:
+    """Model + usage an engine REPORTED before it was killed at its deadline.
+
+    The worker CLI prints one JSON envelope at the end (``--output-format
+    json``); other engines / modes print JSON frames line by line. Whatever
+    arrived is scanned newest-first for a frame that names a model and for one
+    that carries a usage object. Nothing is estimated: no frame, empty result.
+    Keys match the ok-path attestation, so ``engine_span.usage_split`` reads
+    both the same way.
+    """
+    out: dict = {}
+    text = (stdout or "")[-_PARTIAL_SCAN_CHARS:].strip()
+    if not text:
+        return out
+    frames: list[dict] = []
+    try:
+        whole = json.loads(text)
+        if isinstance(whole, dict):
+            frames.append(whole)
+        elif isinstance(whole, list):
+            frames.extend(f for f in whole if isinstance(f, dict))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                frame = json.loads(line)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue  # the frame the kill cut in half
+            if isinstance(frame, dict):
+                frames.append(frame)
+    for frame in reversed(frames):
+        if "reported_model" not in out:
+            model = _reported_model(frame)
+            if model:
+                out["reported_model"] = model
+        if "usage" not in out:
+            usage = frame.get("usage")
+            if not isinstance(usage, dict):
+                msg = frame.get("message")
+                usage = msg.get("usage") if isinstance(msg, dict) else None
+            if isinstance(usage, dict) and any(
+                    isinstance(v, (int, float)) and not isinstance(v, bool) and v
+                    for v in usage.values()):
+                out["usage"] = usage
+    usage = out.pop("usage", None)
+    if usage:
+        out.update({k: v for k, v in usage.items()
+                    if isinstance(v, (int, float)) and not isinstance(v, bool)})
+    return out
 
 
 def _call_worker_sync(
@@ -2652,14 +2767,25 @@ def _call_worker_sync(
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", env=env,
         creationflags=no_console_window_flags(),
+        **_new_session_kwargs(),
     )
     if proc_holder is not None:
         with proc_holder.lock:
             proc_holder.popen = proc
     try:
-        stdout, _stderr, truncated = _communicate_capped(
-            proc, input_text=prompt, timeout=timeout, cap_chars=_WORKER_OUTPUT_CAP,
-        )
+        try:
+            stdout, _stderr, truncated = _communicate_capped(
+                proc, input_text=prompt, timeout=timeout, cap_chars=_WORKER_OUTPUT_CAP,
+            )
+        except subprocess.TimeoutExpired as _texc:
+            # R2-A2A-11: what the engine reported before the deadline rides on
+            # the exception to the span emitter in _dispatch_workers.
+            try:
+                _texc.acs_attestation = _partial_attestation(  # type: ignore[attr-defined]
+                    _texc.output if isinstance(_texc.output, str) else "")
+            except Exception:  # noqa: BLE001 — never mask the timeout itself
+                pass
+            raise
         if truncated:
             log.warning("[acs] worker output truncated at %d chars (tenant=%s) "
                         "— a legitimately larger response was cut short",
@@ -3130,14 +3256,23 @@ async def _dispatch_workers(
                 })
                 # ADR-0171 — engine-span end (error) so a failed engine is STILL
                 # a complete, paired span in the audit (no silent un-audited run).
+                # R2-A2A-11: a run killed at its deadline was billed for what it
+                # consumed. When the engine reported a model / usage before the
+                # kill (carried on the exception by _call_worker_sync), the
+                # error span closes on THAT - through the shared usage_split.
+                # Nothing reported: model "" and no tokens, unpriced as before.
+                _partial = getattr(exc, "acs_attestation", None)
+                _partial = _partial if isinstance(_partial, dict) else {}
                 if _espan is not None:
                     _write_audit(ctx.tenant_id, _espan.ENGINE_SPAN_END,
                                  _espan.end_details(
                                      span_id=_worker_span_id, role="worker",
-                                     engine_id=_engine_id, model_id="",  # ADR-0759: unpriced — nothing reported
+                                     engine_id=_engine_id,
+                                     model_id=str(_partial.get("reported_model") or ""),
                                      parent_span_id=f"spn-{ctx.run_id}-mgr",
                                      run_id=ctx.run_id, status="error",
-                                     duration_ms=int((time.monotonic() - _spawn_start) * 1000)))
+                                     duration_ms=int((time.monotonic() - _spawn_start) * 1000),
+                                     **_espan.usage_split(_partial)))
                 _write_audit(ctx.tenant_id, "acs.worker_error", {
                     "run_id": ctx.run_id, "worker_id": wid, "reason": str(exc)[:200],
                 })
@@ -3175,14 +3310,18 @@ async def _dispatch_workers(
                     _engine_locality(attestation.get("engine_id", "claude_code")),
                 ),  # M9: default matches engine_id (claude_code → us_cloud)
                 "duration_ms": int((time.monotonic() - _spawn_start) * 1000),
+                # Display total only — the console's run graph shows it
+                # (routes/chat.py engine timing). It cannot be priced and no
+                # cost reader uses it.
                 "tokens_used": tok,
-                # Real in/out split, when the worker call captured one (see
-                # _call_worker_sync above) — additive alongside tokens_used,
-                # needed for per-model $ pricing (input/output rates differ).
-                "input_tokens": attestation.get("input_tokens", 0),
-                "output_tokens": attestation.get("output_tokens", 0),
-                "cache_creation_input_tokens": attestation.get("cache_creation_input_tokens", 0),
-                "cache_read_input_tokens": attestation.get("cache_read_input_tokens", 0),
+                # NO priceable token split here (review 2026-11-19, A2A-8). The
+                # four-way split is carried by ONE record per worker run, the
+                # engine.span.end written right below (ADR-0759). Both records
+                # used to carry it and model_selection_learner reads both
+                # (_read_acs_completions + _read_worker_spans), so every ACS
+                # worker run was priced twice. ``span_id`` names the span that
+                # holds the tokens, so a reader can join the two.
+                "span_id":     _worker_span_id,
                 "exit_code":   0,
             })
             # ADR-0172 M1 — post-run trace extraction (zero hot-path overhead:

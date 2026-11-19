@@ -115,6 +115,43 @@ class _E2EAgentEngine:
         yield StreamEvent(type="turn_completed", usage={})
 
 
+def _is_throwaway_home() -> bool:
+    """True when ``CORVIN_HOME`` names a throwaway instance: set, inside the
+    system temp directory, and NOT part of the user's own home tree.
+
+    Round 2 (R2-SEC-10): "under /tmp" alone is not "throwaway". In a container
+    or CI image whose ``HOME`` itself lives under the temp directory
+    (``HOME=/tmp/home``, ``TMPDIR=$HOME/tmp``) the real, long-lived install -
+    ``$HOME/.corvin`` - is under /tmp too, and ``E2E_SKIP_L44=1`` would have been
+    honoured on it. A runtime root at or below the user's home, the default
+    ``~/.corvin``, or a checkout's own ``.corvin`` is never throwaway, wherever
+    the home happens to be mounted."""
+    import tempfile  # noqa: PLC0415
+    raw = os.environ.get("CORVIN_HOME", "").strip()
+    if not raw:
+        return False
+    try:
+        home = Path(raw).expanduser().resolve()
+        roots = {Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve(),
+                 Path("/var/tmp").resolve()}
+    except OSError:
+        return False
+    if not any(r in home.parents for r in roots):
+        return False  # the temp root itself is not an instance directory either
+    try:
+        user_home = Path(os.path.expanduser("~")).resolve()
+    except (OSError, RuntimeError):
+        return False
+    if home == user_home or user_home in home.parents:
+        return False
+    try:
+        if (home.parent / ".corvin_repo").exists():
+            return False  # a checkout's own runtime root
+    except OSError:
+        return False
+    return True
+
+
 def main() -> int:
     ap_ = argparse.ArgumentParser()
     ap_.add_argument("--control-port", type=int, required=True)
@@ -139,8 +176,24 @@ def main() -> int:
     if os.environ.get("E2E_SKIP_L44") == "1":
         # Harness-only: the lifecycle E2E drives a scripted agent, not the live L44
         # classifier (which spawns the real `claude` CLI per task).
+        #
+        # Review 2026-11-19 (SEC-17): this replaced ``check_l44`` process-wide
+        # with ``lambda: None`` - an environment variable that switched the
+        # acceptable-use gate OFF in a module shipped in the production tree
+        # (CLAUDE.md: no house-rules disable switch, no env kill-flag). Two
+        # changes: (1) the variable is honoured ONLY for a throwaway instance -
+        # ``CORVIN_HOME`` set and inside the system temp directory - and the
+        # host refuses to start otherwise; (2) the replacement is the real
+        # deterministic Tier-0 floor (``check_l44_floor``: same policy, same
+        # audit record, prohibited-class patterns still BLOCK), so only the
+        # cloud classifier spawn is skipped - never the gate.
+        if not _is_throwaway_home():
+            sys.stderr.write(
+                "a2a_e2e_host: E2E_SKIP_L44=1 is refused - CORVIN_HOME is unset or not under "
+                "the system temp directory. The L44 gate has no off switch on a real install.\n")
+            return 2
         import spawn_gates  # noqa: PLC0415
-        spawn_gates.check_l44 = lambda *a, **kw: None  # type: ignore[assignment]
+        spawn_gates.check_l44 = spawn_gates.check_l44_floor  # type: ignore[assignment]
 
     agent = os.environ.get("E2E_AGENT_NAME", "")
     if os.environ.get("E2E_AGENT_MODE") == "echo" and agent:

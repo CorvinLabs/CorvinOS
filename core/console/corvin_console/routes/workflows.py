@@ -858,7 +858,11 @@ def _run_delegation_loop_node(
     Round-4 finding #1: each manager + worker spawn is a distinct `claude -p`
     process driven by LLM-derived text, so each is gated fail-closed +
     audit-first via the shared console chokepoint BEFORE it spawns. A deny
-    aborts the loop with a refusal string (surfaced as the node output)."""
+    raises ``NodeExecutionError``.
+
+    PLS-4: the loop returns a string ONLY for a manager COMPLETE that carries a result. A
+    manager FAIL, an answer that is no decision, a DELEGATE naming no worker and the end of
+    the budget all raise ``NodeExecutionError``, so the node ends ``node_failed``."""
     cfg = node.get("config") or {}
     budget = cfg.get("budget") or {}
     max_loops = int(budget.get("max_loops", 3))
@@ -909,6 +913,9 @@ If you need more work done:
 
 If the task is complete:
 {{"decision": "COMPLETE", "result": "your final answer"}}
+
+If the task cannot be done:
+{{"decision": "FAIL", "reason": "why it cannot be done"}}
 """
         _mgr_refusal = _spawn_gates.check_console_spawn_or_refusal(
             manager_prompt, tenant_id=tenant_id, persona="assistant",
@@ -926,41 +933,45 @@ If the task is complete:
         finally:
             _add_usage(stats, _mgr_meta)
 
-        # Parse manager JSON
-        decision_json: dict[str, Any] = {}
-        for line in manager_raw.splitlines():
-            line = line.strip()
-            if line.startswith("{") and "decision" in line:
-                try:
-                    decision_json = json.loads(line)
-                    break
-                except Exception:
-                    pass
-        if not decision_json:
-            # Try full response as JSON
-            try:
-                decision_json = json.loads(manager_raw.strip())
-            except Exception:
-                # Heuristic: treat response as COMPLETE
-                decision_json = {"decision": "COMPLETE", "result": manager_raw}
+        decision_json = _parse_manager_decision(manager_raw)
+        if decision_json is None:
+            # PLS-4: an answer that is not a decision is a node failure. Until 2026-11-19 the
+            # raw text was treated as COMPLETE, so a refusal, an apology or half a sentence
+            # became the node's "result" and the run reported success.
+            raise NodeExecutionError(
+                f"delegation loop: the manager's answer is not a decision "
+                f"(no JSON object with a \"decision\" field) at iteration {it}"
+            )
 
-        decision = decision_json.get("decision", "COMPLETE")
+        decision = decision_json.get("decision")
 
         if decision == "COMPLETE":
-            result = str(decision_json.get("result", manager_raw))
-            return result
+            if "result" not in decision_json:
+                raise NodeExecutionError(
+                    f"delegation loop: the manager said COMPLETE without a result at iteration {it}"
+                )
+            return str(decision_json["result"])
 
-        elif decision == "DELEGATE":
-            workers_def = decision_json.get("workers", [])
-            if not workers_def:
-                # Nothing to delegate — treat as COMPLETE
-                return str(decision_json.get("result", "Task completed."))
+        if decision == "FAIL":
+            reason = str(decision_json.get("reason") or "no reason given")[:500]
+            raise NodeExecutionError(
+                f"delegation loop: the manager reported FAIL at iteration {it}: {reason}"
+            )
+
+        if decision == "DELEGATE":
+            workers_def = decision_json.get("workers")
+            if not isinstance(workers_def, list) or not workers_def:
+                # PLS-4: an empty DELEGATE is not a completion. It used to return the invented
+                # text "Task completed." for a task nothing had worked on.
+                raise NodeExecutionError(
+                    f"delegation loop: the manager delegated to no worker at iteration {it}"
+                )
 
             worker_results = []
             for wd in workers_def[:max(1, max_workers - workers_spawned)]:
                 if workers_spawned >= max_workers:
                     break
-                worker_instructions = str(wd.get("instructions", ""))
+                worker_instructions = str(wd.get("instructions", "")) if isinstance(wd, dict) else ""
                 worker_prompt = f"""Execute this task:
 {worker_instructions}
 
@@ -991,15 +1002,43 @@ Context:
             })
         else:
             # Unknown decision — abort
-            raise NodeExecutionError(f"delegation loop: the manager returned an unknown decision ({decision!r})")
+            raise NodeExecutionError(
+                f"delegation loop: the manager returned an unknown decision ({str(decision)[:80]!r})")
 
-    # Budget exhausted
-    all_worker_outputs = [
-        wr.get("output", "")
-        for it_data in iterations
-        for wr in it_data.get("workers", [])
-    ]
-    return "\n\n".join(filter(None, all_worker_outputs)) or "[delegation_loop: budget exhausted]"
+    # PLS-4: the budget ended and the manager never said COMPLETE. The legacy executor's node
+    # output is one string with no status channel, so there is no honest way to hand the
+    # concatenated worker outputs downstream as "the result" - the node fails and says why.
+    raise NodeExecutionError(
+        f"delegation loop: budget exhausted without a COMPLETE "
+        f"(iterations={len(iterations)}/{max_loops}, workers={workers_spawned}/{max_workers})"
+    )
+
+
+def _parse_manager_decision(raw: str) -> dict[str, Any] | None:
+    """The manager's decision object, or None when its answer holds none.
+
+    Accepted: a line that is a JSON object, the whole answer as JSON, or the outermost
+    ``{...}`` of the answer (a fenced or prose-wrapped object). Only an object carrying a
+    ``decision`` key counts - nothing is inferred from prose."""
+    text = str(raw or "")
+    candidates: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("{") and "decision" in line:
+            candidates.append(line)
+    candidates.append(text.strip())
+    first, last = text.find("{"), text.rfind("}")
+    if 0 <= first < last:
+        candidates.append(text[first:last + 1])
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except Exception:  # noqa: BLE001 - not JSON, try the next shape
+            continue
+        if isinstance(obj, dict) and "decision" in obj:
+            return obj
+    return None
+
 
 def _run_fan_out_node(
     node: dict[str, Any],

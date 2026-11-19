@@ -15,6 +15,7 @@ import { useState } from 'react'
 import { CheckCircle, AlertCircle, ExternalLink, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { icon } from '@/lib/status-markers'
 
 interface ValidateTelegramTokenResponse {
   valid: boolean
@@ -65,7 +66,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
 
   const handleValidate = async () => {
     if (!token.trim()) {
-      setError('Token erforderlich')
+      setError('Token required')
       return
     }
 
@@ -143,7 +144,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
         <div className="sticky top-0 bg-sky-600 dark:bg-sky-700 text-white px-6 py-4 flex items-start justify-between">
           <div>
             <h2 className="text-xl font-bold">🤖 Telegram Bot Activation</h2>
-            <p className="text-sm text-sky-100 mt-1">Nur 2 Schritte bis der Bot einsatzbereit ist</p>
+            <p className="text-sm text-sky-100 mt-1">Two steps until the bot is ready</p>
           </div>
           {onClose && (
             <button
@@ -164,7 +165,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
             <>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-2">
-                  Bot Token von @BotFather
+                  Bot token from @BotFather
                 </label>
                 <Textarea
                   value={token}
@@ -188,7 +189,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
           {step === 'validating' && (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-8 h-8 animate-spin text-accent mr-3" />
-              <span className="text-foreground">Validiere Token...</span>
+              <span className="text-foreground">Validating token…</span>
             </div>
           )}
 
@@ -198,7 +199,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
               <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-md p-4">
                 <div className="flex items-center">
                   <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400 mr-2" />
-                  <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Token validiert ✓</span>
+                  <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Token validated</span>
                 </div>
                 <p className="text-sm text-emerald-700 dark:text-emerald-400 mt-2">
                   Bot: <strong>{validationResult.botName}</strong>{' '}
@@ -208,7 +209,7 @@ export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupD
 
               <div className="bg-muted/40 border border-border rounded-md p-3">
                 <p className="text-xs text-muted-foreground">
-                  💡 Telegram bots need no extra authorisation: once saved you can
+                  {icon("suggestion")} Telegram bots need no extra authorisation: once saved you can
                   message the bot directly (@{validationResult.botUsername}).
                 </p>
               </div>

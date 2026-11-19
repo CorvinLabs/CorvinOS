@@ -400,6 +400,12 @@ for s in $SRC_DIRS; do
     info "developer checkout kept: $s (only its .corvin/ state was removed)"
 done
 rm -f "${TMPDIR:-/tmp}"/corvinos-install.log "${TMPDIR:-/tmp}"/corvinos-update.log 2>/dev/null || true
+# Since 2026-11-19 install.sh / update.sh keep their log and lock in a per-user
+# state directory instead of /tmp. Only the two known log files are removed and
+# the directory only when that leaves it empty (a live setup lock keeps it).
+_state_dir="${XDG_STATE_HOME:-${HOME:-}/.local/state}/corvinos"
+rm -f "$_state_dir/corvinos-install.log" "$_state_dir/corvinos-update.log" 2>/dev/null || true
+rmdir "$_state_dir" 2>/dev/null || true
 
 # ── 5. Verify ────────────────────────────────────────────────────────────────
 printf '\n%s\n' "$(_b '[5/5] Verifying')"

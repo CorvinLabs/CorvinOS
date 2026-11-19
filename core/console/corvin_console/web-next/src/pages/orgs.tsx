@@ -29,7 +29,6 @@ import {
   listOrgs,
   removeOrgMember,
   revokeOrgGrant,
-  updateOrgMemberRole,
   type Grant,
   type OrgEndorsement,
   type OrgMember,
@@ -55,6 +54,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { toast } from "@/hooks/use-toast";
+
+/** A failed mutation must be visible: without this the dialog just stays open. */
+function mutationFailed(title: string) {
+  return (err: unknown) =>
+    toast({
+      title,
+      description: err instanceof Error && err.message ? err.message : "Unknown error",
+      variant: "destructive",
+    });
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -278,13 +288,12 @@ function MembersTab({
       onRefresh();
       setRemoveConfirm(null);
     },
+    onError: mutationFailed("Member was not removed"),
   });
 
-  const roleMut = useMutation({
-    mutationFn: ({ actor_id, role }: { actor_id: string; role: OrgRole }) =>
-      updateOrgMemberRole(handle, actor_id, role, csrf),
-    onSuccess: () => onRefresh(),
-  });
+  // No role-change control: the backend serves POST and DELETE on
+  // /orgs/{handle}/members and nothing else, so the select that used to sit
+  // on each row sent a PATCH that could only answer 405 — and showed nothing.
 
   const ROLE_HINT: Record<OrgRole, string> = {
     owner: "Full access including deleting the org.",
@@ -331,22 +340,7 @@ function MembersTab({
               <div className="min-w-0 flex-1">
                 <ActorIdChip id={m.actor_id} />
               </div>
-              {m.role === "owner" ? (
-                <RoleBadge role={m.role} />
-              ) : (
-                <Select
-                  value={m.role}
-                  className="h-7 w-[6.5rem] text-xs py-0"
-                  disabled={roleMut.isPending}
-                  onChange={(e) =>
-                    roleMut.mutate({ actor_id: m.actor_id, role: e.target.value as OrgRole })
-                  }
-                >
-                  <option value="admin">Admin</option>
-                  <option value="editor">Editor</option>
-                  <option value="agent">Agent</option>
-                </Select>
-              )}
+              <RoleBadge role={m.role} />
               {m.role !== "owner" && (
                 <Button
                   variant="ghost"
@@ -359,6 +353,10 @@ function MembersTab({
               )}
             </div>
           ))}
+          <p className="px-3 pt-2 text-xs text-muted-foreground">
+            Changing a member's role is not available on this build. To change it, remove the
+            member and add them again with the new role.
+          </p>
         </div>
       )}
 
@@ -469,6 +467,7 @@ function AgentsTab({
       onRefresh();
       setRevokeConfirm(null);
     },
+    onError: mutationFailed("Agent affiliation was not revoked"),
   });
 
   return (
@@ -636,6 +635,7 @@ function OrgGrantsTab({
       onRefresh();
       setRevokeConfirm(null);
     },
+    onError: mutationFailed("Grant was not revoked"),
   });
 
   const active = grants.filter((g) => !g.revoked_at);
@@ -1023,6 +1023,7 @@ function OrgDetailPanel({ handle, csrf }: { handle: string; csrf: string }) {
       void qc.invalidateQueries({ queryKey: ["orgs"] });
       void qc.removeQueries({ queryKey: ["org-detail", handle] });
     },
+    onError: mutationFailed("Organisation was not dissolved"),
   });
 
   function refresh() {

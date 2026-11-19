@@ -381,18 +381,14 @@ class TestClassifierOrdering:
         self._write_spec(tmp_path, "_default", "spec:\n  default_engine: hermes\n")
         assert adp._house_rules_resolve_order("_default") == "cloud_only"
 
-    def test_egress_config_read_exception_fails_open_to_cloud_KNOWN_BUG(
+    def test_egress_config_read_exception_fails_closed_to_floor_only(
         self, adp, monkeypatch, hr, tmp_path
     ):
-        """KNOWN BUG (documented, not yet fixed): ``_house_rules_cloud_egress_allowed``
-        wraps the ENTIRE tenant.corvin.yaml read+parse+EgressGate-eval in a bare
-        ``except Exception: return True``. For a tenant with an explicit residency
-        deny, a *transient* read/parse failure flips the resolved order from
-        ``floor_only`` to ``cloud_only`` -- i.e. the classifier then transmits the
-        raw task text via ``claude -p`` to ``api.anthropic.com``. The cloud
-        classifier subprocess has no L35 gate of its own, so this ordering IS the
-        enforcement for that call site. Locked in so any change is a conscious
-        decision; a fail-closed default needs a human design decision."""
+        """Review 2026-11-19 (SEC-14) - was the KNOWN_BUG pin. The cloud classifier
+        subprocess has no L35 gate of its own, so the resolved order IS the
+        enforcement for that call site: a tenant config that exists but cannot be
+        read or parsed must resolve ``floor_only`` (no task text leaves the host),
+        never ``cloud_only``."""
         self._wire(adp, monkeypatch, hr)
         self._write_spec(tmp_path, "_default", self._DENY)
         assert adp._house_rules_resolve_order("_default") == "floor_only"
@@ -402,13 +398,13 @@ class TestClassifierOrdering:
             raise ValueError("simulated corrupt/partial yaml read")
 
         monkeypatch.setattr(_yaml, "safe_load", _raise)
-        assert adp._house_rules_cloud_egress_allowed("_default") is True
-        assert adp._house_rules_resolve_order("_default") == "cloud_only"
+        assert adp._house_rules_cloud_egress_allowed("_default") is False
+        assert adp._house_rules_resolve_order("_default") == "floor_only"
 
-    def test_egress_config_corrupted_yaml_on_disk_fails_open_to_cloud_KNOWN_BUG(
+    def test_egress_config_corrupted_yaml_on_disk_fails_closed_to_floor_only(
         self, adp, monkeypatch, hr, tmp_path
     ):
-        """Same bug with a genuinely malformed YAML file on disk."""
+        """Same with a genuinely malformed YAML file on disk."""
         self._wire(adp, monkeypatch, hr)
         self._write_spec(
             tmp_path, "_default",
@@ -419,6 +415,14 @@ class TestClassifierOrdering:
         with pytest.raises(_yaml.YAMLError):
             _yaml.safe_load((tmp_path / "tenants" / "_default" / "global"
                              / "tenant.corvin.yaml").read_text("utf-8"))
+        assert adp._house_rules_cloud_egress_allowed("_default") is False
+        assert adp._house_rules_resolve_order("_default") == "floor_only"
+
+    def test_no_tenant_config_at_all_still_resolves_cloud_only(
+        self, adp, monkeypatch, hr, tmp_path
+    ):
+        """A zero-config install has no policy: that is not a parse failure."""
+        self._wire(adp, monkeypatch, hr)
         assert adp._house_rules_cloud_egress_allowed("_default") is True
         assert adp._house_rules_resolve_order("_default") == "cloud_only"
 

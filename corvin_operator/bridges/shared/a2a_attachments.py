@@ -78,6 +78,9 @@ _WINDOWS_RESERVED = frozenset(
 
 # ── Exceptions ────────────────────────────────────────────────────────────
 
+_SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
 class AttachmentError(Exception):
     """Raised on any attachment-validation failure.
 
@@ -136,10 +139,17 @@ class Attachment:
                     raise AttachmentError(
                         f"attachment_bad_classification:{raw_cls}"
                     )
+            # The digest is the peer's claim and its prefix is written to the
+            # audit chain (attachments_audit_details): exactly 64 hex chars, a
+            # string — never ``str()`` of whatever arrived (review 2026-11-19,
+            # A2A-14: a 16-char free-text "digest" reached the chain).
+            digest = d["sha256"]
+            if not isinstance(digest, str) or not _SHA256_HEX_RE.fullmatch(digest):
+                raise AttachmentError("attachment_bad_digest")
             return cls(
                 name=str(d["name"]),
                 mime=str(d["mime"]),
-                sha256=str(d["sha256"]),
+                sha256=digest.lower(),
                 content_b64=str(d["content_b64"]),
                 classification=raw_cls,
             )
@@ -155,6 +165,11 @@ class Attachment:
         except Exception as exc:
             raise AttachmentError(f"attachment_bad_b64:{exc}") from exc
         actual = hashlib.sha256(raw).hexdigest()
+        # A directly constructed Attachment is held to the same digest form as
+        # a parsed one (a non-ASCII "digest" would also raise TypeError in
+        # compare_digest instead of a clean mismatch).
+        if not isinstance(self.sha256, str) or not _SHA256_HEX_RE.fullmatch(self.sha256):
+            raise AttachmentError("attachment_bad_digest")
         # Constant-time comparison prevents timing oracle on digest values
         # (ADR-0099 iter-2 finding HIGH-A2A-ATTACH-01).
         if not _hmac.compare_digest(actual, self.sha256.lower()):
@@ -287,7 +302,8 @@ def attachments_audit_details(attachments: list[Attachment]) -> dict[str, Any]:
         # cheaply from the b64 length (lower bound) to avoid re-decoding.
         # Use 3/4 of b64 length as a sufficient upper estimate.
         total += (len(att.content_b64) * 3) // 4
-        digests.append(att.sha256[:16])
+        _d = att.sha256 if isinstance(att.sha256, str) else ""
+        digests.append(_d[:16].lower() if _SHA256_HEX_RE.fullmatch(_d) else "invalid")
     return {
         "attachments_count":       len(attachments),
         "attachments_total_bytes": total,

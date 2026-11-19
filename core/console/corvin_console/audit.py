@@ -7,6 +7,7 @@ console is single-tenant by construction.
 """
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ if str(_FORGE_PATH) not in sys.path:
 
 from forge import paths as _forge_paths  # noqa: E402
 from forge import security_events as _security_events  # noqa: E402
+
+_log = logging.getLogger("corvin.console.audit")
 
 
 # L16 compliance: metadata-only allowlist blocks secrets, tokens, PII, exception details, paths
@@ -259,9 +262,14 @@ def _emit(
     severity: str | None = None,
     strict: bool = False,
 ) -> None:
-    """Write one record. ``strict=True`` is for audit-FIRST callers: a chain write that does
-    not commit raises :class:`AuditWriteFailed` so the caller can refuse the action instead of
-    performing it unrecorded. The default stays best-effort for informational records."""
+    """Write one record. ``strict=True``: a chain write that does not commit raises
+    :class:`AuditWriteFailed` (HTTP 503), so the request is refused instead of answered as a
+    success with no record. The audit-first emitters pass it (round 3, R3-NEW-8):
+    ``panel_created`` / ``panel_deleted``,
+    ``workflow_attachment_uploaded`` / ``_deleted``, ``workflow_ready_overridden``. The
+    default stays best-effort for informational records (sessions, denials, failures,
+    read contexts, run-finished) and for ``action_performed`` (see there), where raising
+    would only hide the original outcome or report failure for an action that already ran."""
     bad = _FORBIDDEN_FIELDS.intersection(details.keys())
     if bad:
         raise AuditFieldNotAllowed(
@@ -281,12 +289,64 @@ def _emit(
             chain, event_type, details=details, severity=severity,
         )
     except Exception as exc:  # chain unreachable / refused
+        # Review 2026-11-19 (SEC-9): the best-effort branch used to drop the
+        # record without a trace. The one refusal that matters most is
+        # ``AuditTenantMismatch`` - a console record for tenant X written from
+        # a process bound to tenant Y is refused by the chain writer, so every
+        # console action of every non-process tenant went unrecorded and
+        # nothing said so. A lost record is now an ERROR line (event type,
+        # tenant and exception class only - never the details).
+        mismatch = isinstance(exc, getattr(_security_events, "AuditTenantMismatch", ()))
+        _log.error(
+            "console audit record LOST: event=%s tenant=%s cause=%s%s",
+            event_type, tenant_id if tenant_id else "_default", type(exc).__name__,
+            " (record tenant differs from the process tenant; the chain writer refused it)"
+            if mismatch else "",
+        )
         if strict:
             raise AuditWriteFailed(f"{event_type}: chain write did not commit ({type(exc).__name__})") from exc
 
 
-class AuditWriteFailed(RuntimeError):
-    """An audit-first write did not commit; the guarded action must not run."""
+try:  # the console always has FastAPI; a bare import of this module may not
+    from fastapi import HTTPException as _HTTPException
+except Exception:  # noqa: BLE001  # pragma: no cover
+    _HTTPException = None  # type: ignore[assignment]
+
+#: What the operator is told. A mutation emitter is called after the change in
+#: most routes, so this must not claim that nothing happened.
+_AUDIT_REFUSAL_DETAIL = (
+    "The action could not be recorded in the audit log, so the request was refused. "
+    "Check the audit chain of this tenant before retrying."
+)
+
+if _HTTPException is not None:
+    class AuditWriteFailed(_HTTPException, RuntimeError):  # type: ignore[misc,valid-type]
+        """A required audit write did not commit.
+
+        Round 3 (R3-NEW-8): it is an ``HTTPException`` with status 503, so a
+        route that does not handle it answers 503 instead of 200 - the mutation
+        emitters are strict by default and there are ~270 call sites, none of
+        which had to change. It stays a ``RuntimeError`` for the callers that
+        catch it as one.
+        """
+
+        def __init__(self, reason: str = "") -> None:
+            _HTTPException.__init__(self, status_code=503, detail=_AUDIT_REFUSAL_DETAIL)
+            self.reason = reason
+            self.args = (reason,)
+
+        def __str__(self) -> str:
+            return self.reason
+else:  # pragma: no cover
+    class AuditWriteFailed(RuntimeError):  # type: ignore[no-redef]
+        """A required audit write did not commit."""
+
+        status_code = 503
+        detail = _AUDIT_REFUSAL_DETAIL
+
+        def __init__(self, reason: str = "") -> None:
+            super().__init__(reason)
+            self.reason = reason
 
 
 def session_started(
@@ -341,8 +401,15 @@ def action_performed(
 ) -> None:
     """One emit per successful mutation. Audit details are curated;
     NEVER include the cleartext memory body, persona JSON or tool
-    impl source. ``strict=True``: raise :class:`AuditWriteFailed` when the
-    record does not commit (audit-first callers)."""
+    impl source.
+
+    Best-effort by default (R3-NEW-8 decision): most routes call this AFTER the
+    change, so a 503 on a failed write would report failure for an action that
+    already ran, and ~270 call sites would turn any chain hiccup into one. A lost
+    record is not silent, though: ``_emit`` logs it at ERROR level with the cause
+    (``AuditTenantMismatch`` for a session whose tenant differs from the process
+    tenant). The real fix is a tenant context on the chain writer (needs an ADR).
+    ``strict=True`` is for audit-FIRST callers that refuse the action instead."""
     details: dict[str, Any] = {
         "action":          action,
         "target_kind":     target_kind,
@@ -462,14 +529,16 @@ def workflow_attachment_uploaded(*, tenant_id: str, wid: str, att_id: str, size_
     hash prefix only - never the file name or any content."""
     _emit("workflow.attachment_uploaded", tenant_id=tenant_id,
           details={"tenant_id": tenant_id, "wid": wid, "att_id": att_id, "size_bytes": int(size_bytes),
-                   "mime": mime, "sha256_prefix": sha256_prefix, "sid_fingerprint": sid_fingerprint})
+                   "mime": mime, "sha256_prefix": sha256_prefix, "sid_fingerprint": sid_fingerprint},
+          strict=True)
 
 
 def workflow_attachment_deleted(*, tenant_id: str, wid: str, att_id: str, sid_fingerprint: str,
                                 reason_code: str = "operator") -> None:
     _emit("workflow.attachment_deleted", tenant_id=tenant_id,
           details={"tenant_id": tenant_id, "wid": wid, "att_id": att_id,
-                   "sid_fingerprint": sid_fingerprint, "reason_code": reason_code})
+                   "sid_fingerprint": sid_fingerprint, "reason_code": reason_code},
+          strict=True)
 
 
 def workflow_attachment_snapshot(*, tenant_id: str, wid: str, rid: str, att_id: str, size_bytes: int,
@@ -516,7 +585,8 @@ def workflow_ready_overridden(*, tenant_id: str, wid: str, reason_len: int, fail
     LENGTH is recorded, never its text."""
     _emit("workflow.ready_overridden", tenant_id=tenant_id,
           details={"tenant_id": tenant_id, "wid": wid, "reason_len": int(reason_len),
-                   "failing": int(failing), "sid_fingerprint": sid_fingerprint}, severity="WARNING")
+                   "failing": int(failing), "sid_fingerprint": sid_fingerprint}, severity="WARNING",
+          strict=True)
 
 
 def session_denied(
@@ -656,6 +726,7 @@ def panel_created(
             "created_by": created_by,
         },
         severity="INFO",
+        strict=True,
     )
 
 
@@ -677,6 +748,7 @@ def panel_deleted(
             "deleted_by": deleted_by,
         },
         severity="INFO",
+        strict=True,
     )
 
 

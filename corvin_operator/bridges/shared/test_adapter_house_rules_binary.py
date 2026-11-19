@@ -186,8 +186,14 @@ def test_escalate_message_soft_for_transient_and_clean(monkeypatch) -> None:
     """classifier_error must NOT tell the user their request "touches a restricted
     area" — it's a technical failure, not a finding against their content. It gets
     the neutral try-again message and the request is STILL blocked.
-    clear_low_confidence (classifier ran fine, just uncertain, did not flag) is
-    allowed through silently — blocking normal questions on confidence noise is bad UX."""
+
+    R3-SEC-7 (2026-11-19): the adapter no longer evaluates the decision itself — it
+    delegates to ``spawn_gates.check_l44`` like the console. An ESCALATE therefore
+    blocks whatever its reason code: the legacy ``clear_low_confidence`` escalate used
+    to be waved through here (``house_rules.allowed_after_lowconf``) while the console
+    blocked it. An unsure clear that Tier-0 does not contradict never reaches this
+    function as an escalate — the gate returns it as an ALLOW
+    (``clear_low_confidence_no_tier0_hit``, see test_lowconf_without_tier0_runs)."""
     adapter = _fresh_adapter()
 
     # classifier_error: technical failure → still blocked, neutral wording
@@ -196,13 +202,88 @@ def test_escalate_message_soft_for_transient_and_clean(monkeypatch) -> None:
     assert "couldn't be safety-checked" in msg, f"classifier_error → {msg!r}"
     assert "needs operator approval" not in msg, "classifier_error leaked firm wording"
 
-    # clear_low_confidence: classifier ran fine, did NOT flag the request, merely
-    # uncertain → allow through silently (return None)
-    msg = _run_escalate_message(adapter, monkeypatch, "clear_low_confidence", "")
-    assert msg is None, (
-        "clear_low_confidence must pass through — classifier did not flag the request, "
-        "blocking on confidence noise causes false positives on normal questions"
-    )
+    for reason in ("clear_low_confidence", "clear_unsure_tier0_flagged"):
+        msg = _run_escalate_message(adapter, monkeypatch, reason, "")
+        assert msg is not None, f"an escalate ({reason}) must block on the bridge too"
+        assert "couldn't be safety-checked" in msg, f"{reason} → {msg!r}"
+        assert "needs operator approval" not in msg
+
+    msg = _run_escalate_message(adapter, monkeypatch, "prompt_over_classifier_cap", "")
+    assert msg is not None and "too long to be safety-checked" in msg
+    assert "needs operator approval" not in msg
+
+    msg = _run_escalate_message(adapter, monkeypatch, "floor_only_policy_unreadable", "")
+    assert msg is not None and "tenant.corvin.yaml" in msg
+
+
+def test_adapter_and_console_give_the_same_l44_answer(monkeypatch) -> None:
+    """One decision, one wording: the adapter's answer IS ``spawn_gates.check_l44``'s
+    (what ``corvin_console._spawn_gates._check_house_rules_or_fail`` returns) for every
+    reason code, allow included."""
+    import egress_gate  # type: ignore
+    import house_rules as hr  # type: ignore
+    import spawn_gates  # type: ignore
+
+    adapter = _fresh_adapter()
+    cases = [
+        ("allow", "", "clear", 0.99),
+        ("allow", "", "clear_low_confidence_no_tier0_hit", 0.4),
+        ("warn", "r", "warn_rule", 0.9),
+        ("escalate", "", "classifier_error", 0.1),
+        ("escalate", "", "clear_low_confidence", 0.1),
+        ("escalate", "", "clear_unsure_tier0_flagged", 0.4),
+        ("escalate", "", "prompt_over_classifier_cap", 0.0),
+        ("escalate", "", "floor_only_policy_unreadable", 0.0),
+        ("escalate", "no-offensive-cyber", "classifier_violation_low_confidence", 0.5),
+        ("deny", "no-military", "classifier_violation", 0.95),
+    ]
+    monkeypatch.setattr(hr, "_house_rules_track_degradation", lambda **_kw: None)
+    monkeypatch.setattr(hr, "load_tenant_overlay", lambda *_a, **_k: None, raising=False)
+    monkeypatch.setattr(egress_gate, "make_forge_audit_writer",
+                        lambda *_a, **_k: (lambda *a, **k: None), raising=False)
+    for action, rid, reason, conf in cases:
+        dec = hr.HouseRulesDecision(action, rid, reason, conf)
+
+        class _Gate:
+            @classmethod
+            def from_repo(cls, **kw):  # noqa: ANN001
+                return cls()
+
+            def classify(self, *a, **kw):  # noqa: ANN001
+                return dec
+
+        monkeypatch.setattr(hr, "HouseRulesGate", _Gate)
+        bridge = adapter._check_house_rules_or_fail(
+            prompt="please do a thing", persona="assistant",
+            channel="discord", chat_key="123", engine_id="claude_code")
+        console = spawn_gates.check_l44(
+            "please do a thing", "_default", persona="assistant",
+            channel="discord", chat_key="123", engine_id="claude_code")
+        assert bridge == console, (action, reason, bridge, console)
+        assert (bridge is None) == dec.allowed, (action, reason, bridge)
+
+
+def test_lowconf_without_tier0_runs_and_is_recorded_allowed(monkeypatch, tmp_path) -> None:
+    """The REAL gate behind the adapter: an unsure clear with no Tier-0 keyword hit runs,
+    recorded once as ``house_rules.allowed`` — never as an escalate that is overridden."""
+    import egress_gate  # type: ignore
+
+    adapter = _fresh_adapter()
+    writes: list[tuple] = []
+    monkeypatch.setattr(egress_gate, "make_forge_audit_writer",
+                        lambda *_a, **_k: (lambda *a, **k: writes.append(a)), raising=False)
+    adapter._house_rules_classifier = lambda task, rules, auth, **_kw: ("", 0.4, "unsure")
+    msg = adapter._check_house_rules_or_fail(
+        prompt="what is the capital of France", persona="assistant",
+        channel="discord", chat_key="123", engine_id="claude_code")
+    assert msg is None, msg
+    types = [w[0] for w in writes]
+    assert "house_rules.allowed" in types, types
+    assert "house_rules.escalated" not in types, types
+    assert "house_rules.allowed_after_lowconf" not in types, types
+    import house_rules as hr  # type: ignore
+    assert hr._house_rules_classifier is not adapter._house_rules_classifier, \
+        "the adapter's classifier binding must not stay installed in house_rules"
 
 
 def test_escalate_message_firm_for_genuine_borderline(monkeypatch) -> None:
@@ -250,25 +331,14 @@ def _run_escalate_capturing_audit(adapter, monkeypatch, reason: str, rule_id: st
     return msg, writes
 
 
-def test_lowconf_allow_is_recorded_in_the_audit_chain(monkeypatch) -> None:
-    """F-B4 (2026-09-07): house_rules.py writes `house_rules.escalated` for a
-    clear_low_confidence verdict, and the adapter then ALLOWS the request. Without
-    a matching record the chain claimed "escalated/blocked" for a request that
-    actually ran. The override must be audited — metadata only, never the prompt."""
+def test_escalate_is_never_overridden_into_an_allow(monkeypatch) -> None:
+    """F-B4 (2026-09-07) recorded the adapter's override of a ``clear_low_confidence``
+    escalate as ``house_rules.allowed_after_lowconf``. R3-SEC-7 removes the override
+    itself: an escalate the gate recorded blocks, so no overriding record exists."""
     adapter = _fresh_adapter()
-    msg, writes = _run_escalate_capturing_audit(adapter, monkeypatch, "clear_low_confidence", "")
-    assert msg is None, "clear_low_confidence still passes through"
-    evts = [w for w in writes if w[0] and w[0][0] == "house_rules.allowed_after_lowconf"]
-    assert len(evts) == 1, f"expected exactly one allowed_after_lowconf write, got {writes!r}"
-    event_type, severity, details = evts[0][0]
-    assert severity == "WARNING"
-    assert details["reason_code"] == "clear_low_confidence"
-    assert details["confidence"] == 0.42
-    assert details["overrides"] == "house_rules.escalated"
-    assert "please do a thing" not in repr(details), "prompt text leaked into the audit record"
-    assert details["chat_key"] != "123", "raw chat key must be fingerprinted"
-
-    # A blocked classifier_error must NOT claim an allow.
-    msg2, writes2 = _run_escalate_capturing_audit(adapter, monkeypatch, "classifier_error", "")
-    assert msg2 is not None
-    assert not [w for w in writes2 if w[0] and w[0][0] == "house_rules.allowed_after_lowconf"]
+    monkeypatch.setattr(_house_rules_mod, "_house_rules_track_degradation", lambda **_kw: None)
+    for reason in ("clear_low_confidence", "classifier_error", "clear_unsure_tier0_flagged"):
+        msg, writes = _run_escalate_capturing_audit(adapter, monkeypatch, reason, "")
+        assert msg is not None, reason
+        assert "please do a thing" not in repr(writes)
+        assert not [w for w in writes if w[0] and w[0][0] == "house_rules.allowed_after_lowconf"]

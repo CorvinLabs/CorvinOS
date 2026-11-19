@@ -118,7 +118,7 @@ def console(tmp_path: Path, engine, *, tier: str | None = "member", tenant: str 
     from skill_creator import skill_creator as sc
 
     orig_resolve = sc.resolve_llm_client
-    sc.resolve_llm_client = lambda explicit=None: engine
+    sc.resolve_llm_client = lambda explicit=None, **_kw: engine
     orig_license = _validator._ACTIVE_LICENSE
     _validator._set_active_license({"tier": tier} if tier else None)
     app = FastAPI()

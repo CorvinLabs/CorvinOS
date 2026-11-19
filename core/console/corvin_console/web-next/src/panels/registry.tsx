@@ -12,7 +12,8 @@ import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import { Route } from "react-router-dom";
 import type { ConsolePanel } from "./types";
-import PanelHost from "./PanelHost";
+import PanelHost, { PANEL_SANDBOX } from "./PanelHost";
+import { safePanelSrc } from "@/lib/safe-url";
 import {
   DashboardPage, SettingsPage,
   ComputePage, BridgesPage, VoicePage, VoiceSummariesPage, ForgePage,
@@ -314,6 +315,18 @@ export function panelRoutes(panels: readonly ConsolePanel[] = PANELS) {
   });
 }
 
+/** Shown in place of a manifest iframe whose src is not on the allowlist. */
+export function PanelNotAvailable({ title }: { title: string }) {
+  return (
+    <div className="p-6" role="status">
+      <h1 className="text-xl font-semibold">{title}</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
+        This panel is not available on this build: its address is not one the console can embed.
+      </p>
+    </div>
+  );
+}
+
 /**
  * Render manifest-driven panels as <Route> elements (ADR-0561, Phase 2-3).
  *
@@ -348,9 +361,17 @@ export function manifestPanelRoutes(panels: readonly PanelDescriptor[]) {
       return null;
     }
     if (p.element.kind === "iframe") {
+      // The src comes from the backend manifest, not from this bundle: frame it only
+      // when it is a generated-panel path or an https URL, and never with
+      // allow-same-origin (that would hand the frame the operator's session).
+      const src = safePanelSrc(p.element.src);
       return (
         <Route key={p.id} path={p.route}
-          element={<PanelHost src={p.element.src} sandbox="allow-scripts allow-same-origin" />} />
+          element={
+            src === null
+              ? <PanelNotAvailable title={p.title} />
+              : <PanelHost src={src} sandbox={PANEL_SANDBOX} />
+          } />
       );
     }
     if (p.element.kind === "plugin-inspector") {
@@ -359,12 +380,13 @@ export function manifestPanelRoutes(panels: readonly PanelDescriptor[]) {
       return (
         <Route key={p.id} path={p.route}
           element={
+            // No state is loaded for this panel yet (no enabled flag, config or
+            // audit feed), so none is passed: the inspector says so instead of
+            // showing an invented "enabled" plugin with a no-op button.
             <GenericPluginInspector
               pluginId={pluginElement.plugin_id}
               title={p.title}
               version={p.version}
-              enabled={true}
-              onToggleEnabled={() => {}}
             />
           } />
       );

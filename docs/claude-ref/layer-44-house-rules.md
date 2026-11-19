@@ -49,7 +49,9 @@ This adds the LIP integrity pin on top of the committed-anchor check.
 
 - `adapter._check_house_rules_or_fail()` runs in the ClaudeCode OS-turn path
   (after the Tier-3 capability gate) and in `_run_pre_dispatch_gates()` (after
-  L35) — every engine, every spawn.
+  L35) — every engine, every spawn. It is a thin delegate to
+  `spawn_gates.check_l44` (see "Bridge consistency" below); the decision, the
+  wording and the audit record are that function's.
 - **Owner-console web-chat (second enforcement surface):**
   `core/console/corvin_console/chat_runtime.py::_check_house_rules_or_fail()`
   mirrors the adapter's gate one-for-one and runs in `stream_turn()` BEFORE
@@ -60,8 +62,9 @@ This adds the LIP integrity pin on top of the committed-anchor check.
   `house_rules.*` event lands on the *per-tenant* L16 chain
   `<tenant_home>/global/forge/audit.jsonl` inside `gate.classify()` before the
   refusal is yielded), same metadata-only floor, and the same two-way escalate
-  wording (neutral try-again for `classifier_error`/`clear_low_confidence`,
-  operator-approval for a genuine borderline/violation). A blocked turn reuses
+  wording (neutral for `classifier_error` / `clear_unsure_tier0_flagged` /
+  `prompt_over_classifier_cap`, operator-approval for a genuine
+  borderline/violation; every escalate blocks). A blocked turn reuses
   the existing engine-unavailable bookkeeping (`os_turn.started` +
   `task.failed` + `web.turn.completed(rc=1)`). The console-chat
   `_check_capabilities_or_fail()` also runs the ADR-0141 Tier-3 presence assert
@@ -165,27 +168,90 @@ This adds the LIP integrity pin on top of the committed-anchor check.
     on legitimate work (CSV analysis, debugging, security engineering), confidence
     thresholds are raised and made rule-specific:
       * **Global violation floor:** 0.85+ (was 0.8) — hard action only with 85%+ confidence
-      * **Global clear floor:** 0.75+ (was 0.7) — escalate on keyword hit if < 75% sure
+      * **Global clear floor:** 0.85 (`_CLEAR_MIN_CONFIDENCE`; this line said 0.75 until
+        2026-11-19, the code has been 0.85) — escalate when MORE than one Tier-0 keyword hit
+        and the clear is below it; one hit escalates only below 50 %
       * **Per-rule floor (dual-use):** `no-offensive-cyber` requires 0.90+. This preserves
         fail-closed escalation while avoiding false blocks on legitimate security work
       * **No-keyword clear:** low-confidence clear with NO Tier-0 keyword hit → ALLOW
         (benign case). The dominant source of false-positives (0.4 confidence "analyse logs.csv")
-        is now allowed instead of escalated.
-  - **Audit truth for the low-confidence allow (2026-09-07, F-B4):** the gate
-    itself writes `house_rules.escalated` for a `clear_low_confidence` verdict,
-    and the bridge adapter then lets the turn run. The adapter now records that
-    override as `house_rules.allowed_after_lowconf` (WARNING; `rule_id`,
-    `reason_code`, `confidence`, `channel`, fingerprinted `chat_key`,
-    `overrides: house_rules.escalated`) so the chain never says "blocked" for a
-    request that executed. Regression:
-    `test_adapter_house_rules_binary.py::test_lowconf_allow_is_recorded_in_the_audit_chain`.
+        is allowed instead of escalated.
+  - **A doubtful clear is decided ONCE, in `HouseRulesGate.classify` (review 2026-11-19,
+    rounds 1+2).** The classifier named no rule; what happens next depends on two facts the
+    gate has and no caller should re-derive:
+
+    | Situation | Verdict | Reason code | Chain record |
+    |---|---|---|---|
+    | task longer than the classifier window (`_HOUSE_RULES_WINDOW` = step × (`_HOUSE_RULES_MAX_CHUNKS` − 1) + `_HOUSE_RULES_CHUNK_CHARS` = 10 000 × 15 + 12 000 = 162 000 chars) | **escalate — blocks** | `prompt_over_classifier_cap` | `house_rules.escalated` |
+    | clear below 50 % AND ≥ 1 Tier-0 keyword hit, or below the clear floor (0.85) AND > 1 hit | **escalate — blocks** | `clear_unsure_tier0_flagged` | `house_rules.escalated` |
+    | clear below 50 %, NO Tier-0 hit | **allow** (policy default) | `clear_low_confidence_no_tier0_hit` | `house_rules.allowed`, with the low `confidence` |
+    | clear ≥ 50 % (one hit at most below the floor) | allow (policy default) | `classifier_cleared` | `house_rules.allowed` |
+    | confidence missing / not a number / a bool / non-finite / outside 0.0–1.0 | `bad_json` in the parser (retry, then Tier-0 floor); from an injected classifier: escalate | `classifier_error` | `house_rules.escalated` |
+
+    **One window constant (round 3, 2026-11-19).** `_HOUSE_RULES_WINDOW` is the only
+    statement of how much text the classifier reads. The chunker
+    (`_house_rules_chunks`), the gate's cap and the chunker's zero-confidence fallback
+    all read it. Until round 3 the cap was the product 12 000 × 16 = 192 000 while the
+    overlapping windows (step 10 000) end at 162 000, so a task of 162 001–192 000 chars
+    cleared as `classifier_cleared` with its tail never read. Never recompute the window
+    at a call site; a change to chunk size, overlap or chunk count moves the cap with it.
+    A confidence that is a bool (`True` reads as 1.0), negative or above 1.0 is not a
+    probability: from an injected classifier the gate escalates with `classifier_error`
+    (it used to be accepted as a confident clear).
+
+    History, because two rounds went in opposite directions. Until 2026-11-19 the gate
+    returned `escalate / clear_low_confidence` for EVERY clear below 50 % and wrote
+    `house_rules.escalated`; the bridge adapter then let the turn run (and, since
+    2026-09-07, recorded the override as `house_rules.allowed_after_lowconf`), while
+    `spawn_gates.check_l44` — the console — also let it run and the reference text said
+    "both still block". Round 1 made `check_l44` block it, which contradicted this
+    document and blocked benign console requests the bridge still ran. Round 2 moved the
+    decision into the gate: the verdict a caller receives is final, an `escalate` blocks
+    on every surface, and an allow is recorded as an allow. Measured with the review's
+    method (real `house_rules.yaml`, real gate, a classifier stubbed to clear at 0.3):
+    10 of 10 benign German/English requests are allowed with
+    `clear_low_confidence_no_tier0_hit`; a request that trips a Tier-0 pattern escalates.
+    **Residual, stated:** with a classifier that clears at low confidence, a harmful
+    request that matches NO Tier-0 pattern is allowed — the semantic classifier is the
+    authority and it named no rule; the Tier-0 list is a cheap pre-filter, not a second
+    opinion. Live data at the time of the review: 0 of 1 968 recorded decisions were a
+    low-confidence clear.
+  - **Bridge consistency (round 3, R3-SEC-7).** `adapter._check_house_rules_or_fail` no
+    longer evaluates anything itself: it resolves the tenant (the bridge is a
+    single-tenant process: the caller's tenant, else `CORVIN_TENANT_ID`, else `_default`)
+    and returns `spawn_gates.check_l44(...)` — exactly what
+    `corvin_console/_spawn_gates.py::_check_house_rules_or_fail` returns. Its own copy of
+    the evaluation is gone, and with it the branch that returned "allowed" for
+    `escalate / clear_low_confidence` and wrote `house_rules.allowed_after_lowconf`
+    (no code path emits that event any more; its registry entry stays). Consequences on
+    the bridge: every `escalate` blocks; `prompt_over_classifier_cap`,
+    `clear_unsure_tier0_flagged` and `floor_only_policy_unreadable` get the specific
+    wording of `check_l44` instead of the generic "needs operator approval"; an unsure
+    clear with no Tier-0 hit runs, recorded once as `house_rules.allowed`; and the
+    `house_rules.*` record lands on the TENANT chain
+    (`<tenant>/global/forge/audit.jsonl`, `VOICE_AUDIT_PATH` wins) — the adapter's copy
+    wrote to `<corvin_home>/global/forge/audit.jsonl`, a file the boot tripwire and
+    `audit_query` never read. `check_l44` looks the classifier up as
+    `house_rules._house_rules_classifier`; the adapter re-exports that function under
+    the same name and, where a caller replaced the adapter's binding (the adapter
+    suites, to run without a model), installs it for the duration of that one call
+    under a lock. In production both names are one object and it is a plain call.
+    Pinned by `shared/test_adapter_house_rules_binary.py`
+    (`test_adapter_and_console_give_the_same_l44_answer`: every reason code, bridge
+    answer == `check_l44` answer).
   - **User-facing message split:** an `escalate` caused by a non-finding —
-    `classifier_error` (transient) or `clear_low_confidence` (classifier judged the
-    task clean but unsure) — returns a neutral "couldn't be safety-checked just now,
-    please resend" message instead of the alarming "touches a restricted or uncertain
-    area / needs operator approval" wording, which is reserved for a genuine
-    borderline/violation verdict. Both still **block** the spawn (fail-closed
-    preserved) — only the wording differs.
+    `classifier_error` (transient), `clear_unsure_tier0_flagged`,
+    `prompt_over_classifier_cap` — returns neutral wording instead of the alarming
+    "touches a restricted or uncertain area / needs operator approval" text, which is
+    reserved for a genuine borderline/violation verdict. Every escalate **blocks** the
+    spawn — only the wording differs.
+  - **`floor_only` names its cause (round 2).** A tenant whose `tenant.corvin.yaml` exists
+    but cannot be read or evaluated runs `floor_only` (fail-closed, SEC-14). That used to
+    look exactly like an operator's egress policy: every unmatched request "needs operator
+    approval". Now the probe logs once per tenant (`[house-rules] tenant config … could
+    not be evaluated (<where>: <ExceptionClass>)`), the decision carries
+    `floor_only_policy_unreadable`, and the refusal says that the tenant configuration
+    could not be read and that the operator has to fix the file.
 - Operator CLI: `python -m house_rules show|status` (read-only; no disable command).
 - `escalate` currently blocks with an "operator approval required" message; the
   approval routing through the L21 proposal channel is ADR-0143 M3.
@@ -282,7 +348,8 @@ NOT mean allow — that was the original M2 bug, review R-1).
   (prompt-injection defence, review R-2). Large tasks are split into **overlapping** 12000-
   char windows (overlap 2000) so the classifier sees the whole task and a forbidden phrase
   cannot hide past a cap or in a chunk seam (review R-2-trunc + round-4); a task exceeding
-  the ~192K coverage that clears is downgraded to confidence 0.0 → escalate.
+  the 162 000-char coverage (`_HOUSE_RULES_WINDOW`) escalates with
+  `prompt_over_classifier_cap`, whatever confidence came back.
 - **Confidence (operator decision 2026-06-25 — less false-positive blocking):** a
   low-confidence clear (below `_CLEAR_MIN_CONFIDENCE`, 0.7) that named NO rule
   escalates **only when a Tier-0 keyword also hit** (keyword present AND the model

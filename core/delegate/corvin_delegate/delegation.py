@@ -570,7 +570,180 @@ def _clamp_budget(budget_s: Any, ceiling_s: int = BUDGET_MAX_S) -> int:
     return b
 
 
-def _validate_working_dir(working_dir: Any) -> Path | None:
+#: Operator-declared extra workspace roots (``os.pathsep``-separated absolute
+#: paths). Operator environment only - never a tool argument.
+WORKSPACE_ROOTS_ENV = "CORVIN_DELEGATE_WORKSPACE_ROOTS"
+
+# Directories directly under the user's home that hold credentials or the
+# configuration of this very toolchain. A working dir inside one of them - or
+# one that CONTAINS one of them - is refused.
+#
+# This list is the "contains" half only. For the "inside" half a list can never
+# be complete (review R3-BR-4: ``~/.local/bin``, ``~/.password-store``,
+# ``~/.cargo``, ``~/.mozilla``, ``~/.cache`` and ``~/.local/share/uv`` were all
+# accepted): EVERY first-level dot directory of the home is refused, see
+# ``_home_dot_dir``.
+_HOME_PROTECTED = (
+    ".ssh", ".claude", ".config", ".aws", ".azure", ".gnupg", ".kube", ".docker",
+    ".codex", ".local/share/keyrings", ".netrc", ".npmrc", ".pypirc",
+    ".git-credentials", ".corvin", ".password-store", ".mozilla", ".cargo",
+    ".local/bin", ".local/share/uv", ".cache", ".thunderbird", ".kube",
+)
+_SYSTEM_DIRS_POSIX = (
+    "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/boot", "/dev",
+    "/proc", "/sys", "/root", "/run", "/var", "/opt", "/srv", "/snap",
+    "/System", "/Library", "/Applications", "/private/etc", "/private/var",
+)
+
+
+def _resolved(path: "str | Path") -> "Path | None":
+    try:
+        return Path(os.path.expandvars(str(path))).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _delegate_corvin_home() -> "Path | None":
+    """The runtime root, by the canonical resolver (``forge.paths``), else the
+    documented rule ``$CORVIN_HOME`` / ``~/.corvin``."""
+    try:
+        from .audit import _forge_modules
+        _sec, _fpaths = _forge_modules()
+        return _resolved(_fpaths.corvin_home())
+    except Exception:  # noqa: BLE001 — fall back to the documented rule
+        raw = os.environ.get("CORVIN_HOME", "").strip()
+        return _resolved(raw) if raw else _resolved(Path.home() / ".corvin")
+
+
+def _corvin_home_workspace(resolved: Path, home: Path, tenant_id: str = "_default") -> bool:
+    """True for the two worker workspaces that live INSIDE the runtime root, of
+    THIS delegation's tenant only: a session directory
+    (``tenants/<tid>/sessions/<...>``; legacy ``sessions/<...>`` for the default
+    tenant) and an ACS run directory (``tenants/<tid>/global/acs/runs/<run>/...``).
+
+    Until 2026-11-19 only the ``sessions`` / ``global/acs/runs`` components were
+    compared, so a delegation of tenant ``_default`` was admitted into
+    ``tenants/other/sessions/c1`` (review R3-BR-4)."""
+    try:
+        parts = resolved.relative_to(home).parts
+    except ValueError:
+        return False
+    if len(parts) >= 2 and parts[0] == "sessions":
+        return tenant_id == "_default"
+    if len(parts) < 4 or parts[0] != "tenants" or parts[1] != tenant_id:
+        return False
+    if parts[2] == "sessions":
+        return True
+    return len(parts) >= 6 and parts[2:5] == ("global", "acs", "runs")
+
+
+def _home_dot_dir(resolved: Path, user_home: "Path | None") -> bool:
+    """True when *resolved* lies in a first-level dot directory of the user's home
+    (``~/.ssh``, ``~/.local/...``, ``~/.cache/...``, any other ``~/.<name>``).
+    Those hold credentials, toolchain configuration, executables on ``PATH`` and
+    package caches that later runs execute; none is a project workspace."""
+    if user_home is None:
+        return False
+    try:
+        parts = resolved.relative_to(user_home).parts
+    except ValueError:
+        return False
+    return bool(parts) and parts[0].startswith(".")
+
+
+def _protected_dirs() -> "tuple[list[Path], set[Path]]":
+    """``(protected, system)`` - every directory a delegated worker must never
+    get as (part of) its writable root: the runtime root with its audit chain,
+    credential and toolchain-config directories, and the system directories
+    (the second value names which of them are system directories)."""
+    out: list[Path] = []
+    system: set[Path] = set()
+
+    def _add(p: "str | Path | None", *, is_system: bool = False) -> None:
+        r = _resolved(p) if p else None
+        if r is None or r == Path(r.anchor):
+            return
+        if r not in out:
+            out.append(r)
+        if is_system:
+            system.add(r)
+
+    _add(_delegate_corvin_home())
+    try:
+        user_home = Path.home()
+    except (RuntimeError, OSError):
+        user_home = None
+    if user_home is not None:
+        for name in _HOME_PROTECTED:
+            _add(user_home / name)
+    _add(os.environ.get("XDG_CONFIG_HOME", "").strip() or None)
+    _add(os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or None)
+    _add(os.environ.get("CODEX_HOME", "").strip() or None)
+    if os.name == "nt":
+        for var in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData",
+                    "APPDATA", "LOCALAPPDATA"):
+            _add(os.environ.get(var, "").strip() or None, is_system=True)
+    else:
+        for d in _SYSTEM_DIRS_POSIX:
+            # Resolved like the candidate: /var -> /private/var on macOS,
+            # /bin -> /usr/bin on merged-usr hosts.
+            _add(d, is_system=True)
+    return out, system
+
+
+def _workspace_roots() -> "tuple[list[Path], list[Path], list[Path]]":
+    """``(operator_roots, session_roots, temp_roots)`` a working dir may live
+    under. A temp root admits only directories strictly BELOW it: the shared
+    temp directory itself as a worker's writable root would hand it every
+    other process's temp files."""
+    operator: list[Path] = []
+    for raw in os.environ.get(WORKSPACE_ROOTS_ENV, "").split(os.pathsep):
+        raw = raw.strip()
+        r = _resolved(raw) if raw and os.path.isabs(os.path.expanduser(raw)) else None
+        if r is not None and r != Path(r.anchor):
+            operator.append(r)
+    session: list[Path] = []
+    raw = os.environ.get("CORVIN_SESSION_DIR", "").strip()
+    r = _resolved(raw) if raw and os.path.isabs(raw) else None
+    if r is not None and r != Path(r.anchor):
+        session.append(r)
+    temp: list[Path] = []
+    for raw in (tempfile.gettempdir(),) + (("/var/tmp",) if os.name != "nt" else ()):
+        r = _resolved(raw)
+        if r is not None and r not in temp:
+            temp.append(r)
+    return operator, session, temp
+
+
+def _validate_working_dir(working_dir: Any, tenant_id: "str | None" = None) -> Path | None:
+    """Validate a caller-supplied worker workspace and return it RESOLVED.
+
+    The working dir is the worker's writable root: the sandbox binds it
+    read-write and an unsandboxed engine takes it as its cwd / workspace. Until
+    2026-11-19 only a filesystem root was refused, so ``/home``, ``/etc``, the
+    user's home, ``~/.ssh``, the runtime root and the audit-chain directory were
+    all accepted (review R2-A2A-7). The rule is positive now, with a deny list
+    as second line:
+
+    * it must resolve under a workspace root - a session or ACS run directory
+      of the runtime root THAT BELONGS TO ``tenant_id``, ``CORVIN_SESSION_DIR``,
+      a directory below the temp directory, a directory below the user's home
+      that is not in one of its first-level dot directories, or a root the
+      OPERATOR declared in ``CORVIN_DELEGATE_WORKSPACE_ROOTS``;
+    * it must not be, or lie inside, a protected directory (the runtime root,
+      credential / toolchain-config directories, system directories);
+    * it must not CONTAIN a protected directory (``/home/<user>`` contains
+      ``~/.ssh``; a checkout contains its repo-local runtime root) - unless the
+      operator declared that very tree as a workspace root.
+
+    The RESOLVED path is returned and used for the spawn: handing back the
+    caller's spelling let a symlink be re-pointed between this check and the
+    spawn.
+    """
     if working_dir is None:
         return None
     if not isinstance(working_dir, (str, Path)):
@@ -578,7 +751,71 @@ def _validate_working_dir(working_dir: Any) -> Path | None:
     p = Path(working_dir)
     if not p.is_absolute():
         raise DelegateError(f"working_dir must be absolute: {working_dir!r}")
-    return p
+    try:
+        resolved = p.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise DelegateError(f"working_dir cannot be resolved: {working_dir!r}") from exc
+    if resolved == Path(resolved.anchor) or resolved.parent == resolved:
+        raise DelegateError("working_dir must not be a filesystem root")
+
+    operator_roots, session_roots, temp_roots = _workspace_roots()
+    corvin_home = _delegate_corvin_home()
+    tenant = _resolve_tenant_id(tenant_id)
+    in_home_workspace = (corvin_home is not None
+                         and _corvin_home_workspace(resolved, corvin_home, tenant))
+    try:
+        user_home = Path.home().resolve()
+    except (RuntimeError, OSError):
+        user_home = None
+
+    # The roots that ADMIT this path (positive rule).
+    in_operator_root = any(_within(resolved, r) for r in operator_roots)
+    admitting: list[Path] = [r for r in operator_roots if _within(resolved, r)]
+    admitting += [r for r in session_roots if _within(resolved, r)]
+    admitting += [r for r in temp_roots if r in resolved.parents]
+    if in_home_workspace and corvin_home is not None:
+        admitting.append(corvin_home)
+    # R3-BR-4: the home admits a path only outside its first-level dot directories.
+    # A dot directory is reachable through an explicit root alone (operator root,
+    # the session directory, a workspace of the runtime root, the temp directory).
+    in_dot_dir = _home_dot_dir(resolved, user_home)
+    if user_home is not None and user_home in resolved.parents and not in_dot_dir:
+        admitting.append(user_home)
+    if in_dot_dir and not admitting:
+        raise DelegateError(
+            "working_dir is inside a dot directory of the user's home (credentials, "
+            f"toolchain configuration, caches); declare it in {WORKSPACE_ROOTS_ENV} "
+            "if this tree is meant to be a worker workspace")
+
+    protected, system = _protected_dirs()
+    for prot in protected:
+        if not _within(resolved, prot):
+            continue
+        # A protected directory that merely CONTAINS an admitting root does not
+        # apply inside that root: the temp dir lives under /var on macOS, a
+        # root-run install has its home at /root, a session directory lies in
+        # the runtime root. The root itself being the protected directory only
+        # counts for a system directory (home == /root) and for the two
+        # workspace subtrees of the runtime root.
+        if any(_within(r, prot) and (r != prot or prot in system) for r in admitting):
+            continue
+        if in_home_workspace and prot == corvin_home:
+            continue
+        raise DelegateError(
+            "working_dir is inside a protected directory (runtime root, "
+            "credential/config or system directory)")
+    if not in_operator_root:
+        for prot in protected:
+            if prot != resolved and _within(prot, resolved):
+                raise DelegateError(
+                    "working_dir contains a protected directory (runtime root or "
+                    f"credential/config directory); declare it in {WORKSPACE_ROOTS_ENV} "
+                    "if this tree is meant to be a worker workspace")
+    if not admitting:
+        raise DelegateError(
+            "working_dir is not under a workspace root (session directory, temp "
+            f"directory, the user's home, or {WORKSPACE_ROOTS_ENV})")
+    return resolved
 
 
 def _validate_env_extra(env_extra: Any) -> dict[str, str] | None:
@@ -628,6 +865,7 @@ def run_delegate(
     pin_session: bool = False,
     scope_label: str = "",
     session_home: "Path | None" = None,
+    tenant_id: "str | None" = None,
 ) -> DelegateResult:
     """Synchronous delegation. Returns DelegateResult (never raises engine errors).
 
@@ -669,7 +907,7 @@ def run_delegate(
     prompt = _validate_prompt(prompt)
     model = _validate_model(model)
     budget = _clamp_budget(budget_s, ceiling_s=budget_ceiling_s)
-    cwd = _validate_working_dir(working_dir)
+    cwd = _validate_working_dir(working_dir, tenant_id)
     env_overlay = _validate_env_extra(env_extra)
     cap_chars = _clamp_output_cap(output_cap_chars)
     allow_write = bool(allow_write)
@@ -729,6 +967,8 @@ def run_delegate(
 
     factory = engine_factory or _default_engine_factory
     persona_tag = (persona or os.environ.get("CORVIN_CALLER_PERSONA") or "").strip()
+    # The tenant is resolved ONCE and handed to every gate / audit writer below.
+    tenant = _resolve_tenant_id(tenant_id)
 
     # Layer 29.4a — tenant policy + engine-zone gate. Closes the
     # data-residency bypass: ADR-0007 Phase 3.2/3.3 gates the gateway
@@ -755,6 +995,7 @@ def run_delegate(
         prompt=prompt,
         model=model,
         persona_tag=persona_tag,
+        tenant_id=tenant,
     )
     if classification_denial is not None:
         return classification_denial
@@ -879,10 +1120,24 @@ def run_delegate(
         sandbox_mode,
     )
     sandbox_decision = _sandbox.decide_sandbox(final_sandbox_mode)
-    # Layer 29.5 — emit sandbox lifecycle audit BEFORE the env-scrub
-    # context manager starts, so CORVIN_HOME is still in the env when
-    # the audit writer resolves the chain path. Decision-only audit
-    # (no spawn-side state needed at this point).
+    # A sandbox that was DECIDED is not yet a sandbox that is APPLIED. Two
+    # things can still keep the bwrap argv from reaching the subprocess:
+    #   * the engine has no launcher-prefix support (capability "argv_prefix");
+    #     an engine that swallows unknown kwargs would run NATIVE while the
+    #     chain said "sandboxed";
+    #   * there is no directory to bind (hermetic=False and no working_dir).
+    # ``enforcing`` then refuses the delegation; ``advisory`` runs native and
+    # says so. ``delegate.sandboxed`` is written only after the prefix was
+    # handed to the engine's spawn (see ``sandbox_applied`` below).
+    sandbox_block = ""
+    if sandbox_decision == "bwrap":
+        _engine_caps = getattr(worker, "capabilities", None)
+        if not (isinstance(_engine_caps, dict) and _engine_caps.get("argv_prefix") is True):
+            sandbox_block = "engine-no-argv-prefix"
+        elif cwd is None and not hermetic:
+            sandbox_block = "no-working-dir-to-bind"
+    # Lifecycle audit BEFORE the env-scrub context manager starts, so
+    # CORVIN_HOME is still in the env when the audit writer resolves the chain.
     if audit:
         if sandbox_decision == "denied-no-bwrap":
             _emit_audit_sandbox_unavailable(
@@ -898,12 +1153,13 @@ def run_delegate(
                 mode=final_sandbox_mode,
                 reason="bwrap-binary-missing-fallback-native",
             )
-        elif sandbox_decision == "bwrap":
-            _emit_audit_sandboxed(
+        elif sandbox_block:
+            _emit_audit_sandbox_unavailable(
                 engine=engine,
                 persona=persona_tag,
                 mode=final_sandbox_mode,
-                decision="bwrap",
+                reason=(sandbox_block if final_sandbox_mode == "enforcing"
+                        else f"{sandbox_block}-fallback-native"),
             )
     if sandbox_decision == "denied-no-bwrap":
         return DelegateResult(
@@ -914,6 +1170,25 @@ def run_delegate(
             model=model,
             allow_write=allow_write,
         )
+    if sandbox_block:
+        if final_sandbox_mode == "enforcing":
+            return DelegateResult(
+                ok=False,
+                engine=engine,
+                error=(f"sandbox-denied: sandbox_mode=enforcing but the sandbox "
+                       f"cannot be applied to engine {engine!r} ({sandbox_block})"),
+                model=model,
+                allow_write=allow_write,
+            )
+        sandbox_decision = "fallback-unsupported"
+    # ``requested``: the bwrap prefix was built and handed to spawn().
+    # ``applied``: that spawn ran - the engine's event stream was drained
+    # without raising. Only ``applied`` is recorded as ``delegate.sandboxed``
+    # (review R2-A2A-10: the flag used to flip BEFORE worker.spawn, so a spawn
+    # that raised left "decision: bwrap" in the chain for a sandbox that never
+    # started).
+    sandbox_requested = False
+    sandbox_applied = False
 
     # Layer 29.2a — when no working_dir given AND hermetic mode is on
     # (default), provide a fresh 0o700 tempdir for the duration of the
@@ -980,13 +1255,18 @@ def run_delegate(
             # The lifecycle audit was emitted BEFORE entering env_cm
             # (so CORVIN_HOME is still readable); this block only
             # builds the argv-prefix that flows through to spawn().
-            if sandbox_decision == "bwrap" and effective_cwd is not None:
+            if sandbox_decision == "bwrap":
+                if effective_cwd is None:
+                    # Unreachable by the checks above; kept as a hard stop so a
+                    # future code path cannot spawn native under a bwrap decision.
+                    raise RuntimeError("sandbox decided but no directory to bind")
                 argv_prefix = _sandbox.build_bwrap_args(
                     engine_id=engine,
                     hermetic_dir=Path(effective_cwd),
                     allow_net=True,
                 )
                 spawn_kwargs["argv_prefix"] = argv_prefix
+                sandbox_requested = True
             # ADR-0049 — pass resume_session_id when session is pinned.
             if _pin_can and _pin_resume_sid:
                 spawn_kwargs["resume_session_id"] = _pin_resume_sid
@@ -998,6 +1278,7 @@ def run_delegate(
             # the engine abstraction rather than building argv here.
             events = worker.spawn(prompt, **spawn_kwargs)
             spawn_result = collect(events)
+            sandbox_applied = sandbox_requested
 
             # ADR-0049 — stale-session eviction + one-shot re-spawn.
             if (_pin_can and _pin_resume_sid
@@ -1019,6 +1300,20 @@ def run_delegate(
     except Exception as e:  # noqa: BLE001
         duration_ms = int((time.monotonic() - start) * 1000)
         reason = f"engine-spawn-failed: {type(e).__name__}"
+        if type(e).__name__ == "UnsafeConfigTarget":
+            # Raised by the MCP wiring BEFORE any spawn: no engine ran.
+            reason = "unsafe-config-target"
+        if audit and sandbox_applied:
+            # A first spawn ran inside the sandbox; the failure came later
+            # (the stale-session re-spawn).
+            _emit_audit_sandboxed(engine=engine, persona=persona_tag,
+                                  mode=final_sandbox_mode, decision="bwrap")
+        elif audit and sandbox_requested:
+            # The sandbox was decided and its launcher built, but the spawn
+            # raised: nothing ran inside it, and the chain must not say it did.
+            _emit_audit_sandbox_unavailable(
+                engine=engine, persona=persona_tag, mode=final_sandbox_mode,
+                reason="engine-spawn-failed")
         if audit:
             _emit_audit_failed(
                 engine=engine,
@@ -1036,6 +1331,12 @@ def run_delegate(
         )
 
     duration_ms = int((time.monotonic() - start) * 1000)
+    # ``delegate.sandboxed`` AFTER application: the bwrap prefix was handed to
+    # an engine that declares it prepends it. (Written here, outside the
+    # env-scrub context, so the chain path resolves.)
+    if audit and sandbox_applied:
+        _emit_audit_sandboxed(engine=engine, persona=persona_tag,
+                              mode=final_sandbox_mode, decision="bwrap")
 
     if spawn_result.error:
         if audit:
@@ -1045,6 +1346,15 @@ def run_delegate(
                 reason="engine-error",
                 duration_ms=duration_ms,
             )
+        # A failed or timed-out run was still billed for what it consumed
+        # (A2A-12): close a worker span on the model the engine REPORTED and
+        # the usage it returned, status "error". Without it the run read $0.00.
+        _write_wdat_run_for_delegation(
+            engine=engine, model=model, duration_ms=duration_ms,
+            start_wall=start_wall, prompt=prompt, usage=spawn_result.usage,
+            reported_model=_attested_model_of(spawn_result),
+            tenant_id=tenant, status="error",
+        )
         return DelegateResult(
             ok=False,
             engine=engine,
@@ -1089,6 +1399,35 @@ def run_delegate(
         runner=judge_runner,
     )
 
+    if final_judge_mode == "enforcing" and judge_result.verdict == "judge_error":
+        # Enforcing means the output is released only with a verdict. A judge
+        # that could not produce one (timeout, crash, unparseable reply) is a
+        # denial, not a pass-through of the unjudged text (A2A-12).
+        if audit:
+            _emit_audit_output_judged(
+                engine=engine, persona=persona_tag, mode=final_judge_mode,
+                verdict=judge_result.verdict, latency_ms=judge_result.latency_ms,
+                replaced=False,
+            )
+            _emit_audit_failed(engine=engine, persona=persona_tag,
+                               reason="output-judge-error", duration_ms=duration_ms)
+        _write_wdat_run_for_delegation(
+            engine=engine, model=model, duration_ms=duration_ms,
+            start_wall=start_wall, prompt=prompt, usage=spawn_result.usage,
+            reported_model=_attested_model_of(spawn_result),
+            tenant_id=tenant, status="error",
+        )
+        return DelegateResult(
+            ok=False, engine=engine, duration_ms=duration_ms,
+            usage=spawn_result.usage, model=model, allow_write=allow_write,
+            error=("output-judge-error: output_judge_mode=enforcing and the judge "
+                   "returned no verdict — output withheld (fail-closed)"),
+            output_judge_mode=final_judge_mode,
+            output_judge_verdict=judge_result.verdict,
+            output_judge_notes=judge_result.notes,
+            output_judge_latency_ms=judge_result.latency_ms,
+        )
+
     judge_replaced = False
     final_text_after_judge = capped_text
     if final_judge_mode == "enforcing" and judge_result.verdict == "corrected":
@@ -1121,6 +1460,7 @@ def run_delegate(
         prompt=prompt,
         usage=spawn_result.usage,
         reported_model=_attested_model_of(spawn_result),
+        tenant_id=tenant,
     )
 
     return DelegateResult(
@@ -1156,6 +1496,8 @@ def _write_wdat_run_for_delegation(
     prompt: str,
     usage: dict,
     reported_model: str = "",
+    tenant_id: "str | None" = None,
+    status: str = "ok",
 ) -> None:
     """Write an ACS-compatible run directory + L16 audit events for a delegation run.
 
@@ -1188,7 +1530,8 @@ def _write_wdat_run_for_delegation(
     if session_dir is not None and not session_dir.is_absolute():
         session_dir = None
 
-    tenant_id = (os.environ.get("CORVIN_TENANT_ID") or "_default").strip() or "_default"
+    tenant_id = _resolve_tenant_id(tenant_id)
+    status = "ok" if status == "ok" else "error"
     # THE tenant chain via forge.paths (honours CORVIN_HOME, validates the
     # tenant id), resolved by the SAME resolver the delegate.* records use —
     # it repairs a namespace-bound ``forge`` and never binds a second copy
@@ -1206,7 +1549,11 @@ def _write_wdat_run_for_delegation(
     spawn_nonce = secrets.token_hex(4)
     instruction_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
     duration_s = duration_ms / 1000.0
-    model_id = model or engine
+    # The model the ENGINE reported (``agents.attested_model``), or "" — never
+    # the requested ``model`` and never the engine NAME (A2A-8: ``model or
+    # engine`` put "claude_code" / "codex_cli" into ``model_id`` of every
+    # record this function writes; a reader prices on that field).
+    model_id = reported_model or ""
     # The four-way split (input / output / cache read / cache write) comes from the ONE
     # normaliser every span emitter shares, ``engine_span.usage_split()`` (CLAUDE.md,
     # ADR-0759; review DLG-21 — a private copy here read `tokens_in` / only the raw
@@ -1224,8 +1571,6 @@ def _write_wdat_run_for_delegation(
     _split = _espan.usage_split(usage)
     tokens_in = _split["input_tokens"]
     tokens_out = _split["output_tokens"]
-    cache_read = _split["cache_read_tokens"]
-    cache_write = _split["cache_write_tokens"]
     tokens_used = tokens_in + tokens_out
 
     if session_dir is not None:
@@ -1234,8 +1579,7 @@ def _write_wdat_run_for_delegation(
             spawn_nonce=spawn_nonce, instruction_hash=instruction_hash, engine=engine,
             model_id=model_id, tenant_id=tenant_id, start_wall=start_wall,
             duration_s=duration_s, duration_ms=duration_ms, tokens_used=tokens_used,
-            tokens_in=tokens_in, tokens_out=tokens_out, cache_read=cache_read,
-            cache_write=cache_write)
+            status=status)
 
     # ADR-0171 — universal engine span (role=worker) on the SAME chain + IDs as
     # the acs.* records, so the console renders the delegation engine
@@ -1250,7 +1594,7 @@ def _write_wdat_run_for_delegation(
         _end = _espan.end_details(
             span_id=_span_id, role="worker",
             engine_id=engine, model_id=reported_model or "",
-            run_id=run_id, status="ok",
+            run_id=run_id, status=status,
             duration_ms=duration_ms, tokens_used=tokens_used, **_split)
         _sec.write_event(audit_path, _espan.ENGINE_SPAN_END, details=_end)
         # ADR-2286 — live model-usage signal from the same span details.
@@ -1263,7 +1607,7 @@ def _write_wdat_run_records(
     _sec: Any, audit_path: Path, *, session_dir: Path, run_id: str, worker_id: str,
     spawn_nonce: str, instruction_hash: str, engine: str, model_id: str, tenant_id: str,
     start_wall: float, duration_s: float, duration_ms: int, tokens_used: int,
-    tokens_in: int, tokens_out: int, cache_read: int, cache_write: int,
+    status: str = "ok",
 ) -> None:
     """The console's WDAT run directory + its acs.* records (needs a session dir)."""
     # 1. Run directory + manifest.json
@@ -1287,7 +1631,7 @@ def _write_wdat_run_records(
     try:
         result = {
             "run_id":          run_id,
-            "status":          "completed",
+            "status":          "completed" if status == "ok" else "failed",
             "workers_spawned": 1,
             "iterations":      1,
             "elapsed_s":       round(duration_s, 3),
@@ -1323,23 +1667,18 @@ def _write_wdat_run_records(
             "engine_id":   engine,
             "model_id":    model_id,
             "duration_ms": duration_ms,
+            # Display total only (the console's run graph). The PRICEABLE
+            # four-way split is carried by ONE record, the engine.span.end
+            # written by the caller (A2A-8): both carried it, and
+            # model_selection_learner reads both, so a console delegation was
+            # priced twice. ``span_id`` names the span that holds the tokens.
             "tokens_used": tokens_used,
-            # The four-way split, same shape acs_runtime.py's real worker path
-            # emits. Without these the Model Cost Optimizer's worker series
-            # reads this record's tokens as all-zero and excludes the run from
-            # cost entirely (model_selection_learner.py::_read_acs_completions
-            # reads only the split keys, never `tokens_used`) — so every
-            # delegate_* delegation contributed $0.00 to the panel while still
-            # counting toward its turn total.
-            "input_tokens":                tokens_in,
-            "output_tokens":               tokens_out,
-            "cache_creation_input_tokens": cache_write,
-            "cache_read_input_tokens":     cache_read,
+            "span_id":     f"spn-{run_id}-{worker_id}",
         })
         _sec.write_event(audit_path, "acs.worker_traced", details={
             "run_id":     run_id,
             "worker_id":  worker_id,
-            "status":     "completed",
+            "status":     "completed" if status == "ok" else "failed",
             "duration_ms": duration_ms,
             "engine_attestation": {"engine": engine, "model_id": model_id},
         })
@@ -1444,9 +1783,9 @@ def _check_prompt_safety(
     on REFUSE in blocking mode, or None to proceed.
 
     Audit always fires when the classifier ran (i.e. mode != off);
-    the verdict drives whether we proceed or block. Fail-safe: on
-    classifier_error the delegation proceeds (with WARNING audit so
-    the operator notices silent classifier-down conditions).
+    the verdict drives whether we proceed or block. In ``blocking`` mode a
+    ``classifier_error`` is a denial (fail-closed); in ``advisory`` mode the
+    delegation proceeds and the audit carries the error verdict.
     """
     from . import prompt_safety as _ps  # lazy
     final_mode = _ps.max_strictness(_ps.env_floor_mode(), mode)
@@ -1459,9 +1798,13 @@ def _check_prompt_safety(
         runner=runner,
     )
 
+    # ``blocking`` releases a prompt only on a SAFE verdict. A classifier that
+    # could not produce one (timeout, crash, unparseable reply) is a denial —
+    # it used to be a pass, so taking the classifier down opened the gate
+    # (A2A-12). ``advisory`` keeps proceeding on an error, with the audit.
     blocked = (
         final_mode == "blocking"
-        and result.verdict == "refuse"
+        and result.verdict in ("refuse", "classifier_error")
     )
     if audit:
         _emit_audit_prompt_classified(
@@ -1476,7 +1819,10 @@ def _check_prompt_safety(
         return DelegateResult(
             ok=False,
             engine=engine,
-            error="prompt-safety-refused: classifier marked outbound prompt as REFUSE",
+            error=("prompt-safety-refused: classifier marked outbound prompt as REFUSE"
+                   if result.verdict == "refuse" else
+                   "prompt-safety-refused: prompt_safety_mode=blocking and the "
+                   "classifier returned no verdict (fail-closed)"),
             model=model,
             allow_write=allow_write,
         )
@@ -1488,61 +1834,68 @@ def _check_prompt_safety(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_tenant_id(tenant_id: "str | None") -> str:
+    """The tenant this delegation runs for.
+
+    The caller states it (``run_delegate(tenant_id=...)``). The delegate MCP
+    server is a per-tenant subprocess whose spawner sets ``CORVIN_TENANT_ID``,
+    so that variable is the caller's statement on that surface; ``_default`` is
+    the single-tenant install. The resolved id is passed EXPLICITLY to every
+    gate below — no gate re-reads the environment on its own.
+    """
+    tid = (tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
+    return tid or "_default"
+
+
 def _check_data_classification(
     *,
     engine: str,
     prompt: str,
     model: str | None,
     persona_tag: str,
+    tenant_id: "str | None" = None,
 ) -> "DelegateResult | None":
-    """Layer 34 — data-classification × engine-egress gate for delegation.
+    """Layer 34 — data-classification x engine-egress gate for delegation.
 
-    Closes the bypass found in the compliance review: the delegation path
-    enforced only the orthogonal L29.4a tenant-zone gate, NOT L34. A
-    SECRET/CONFIDENTIAL prompt delegated to a cloud engine was ungated on
-    the sensitivity axis. Mirrors the adapter OS-turn gate exactly
-    (classify_task → DataFlowGuard.validate), which emits its own
-    ``data_flow.approved``/``blocked`` audit event. Fail-open only when the
-    module is genuinely unavailable (adapter / tenant-policy parity).
+    This is ``spawn_gates.check_l34`` — the gate the OS turn and ACS use — not
+    a copy of it. (The A2A worker is NOT on it: ``a2a_worker.spawn_a2a_worker``
+    still carries its own L34 block — it classifies several texts, attachments
+    included, and ignores a peer's ``[class:]`` marker — so "one gate" holds
+    for OS turn, ACS and delegation only.) The copy that lived here failed OPEN on
+    every internal error (an unimportable classifier, a present policy that
+    could not be loaded, a classify/validate exception) while the shared gate
+    refuses in each of those cases, so the same prompt was denied on an OS
+    turn and waved through as a delegation.
+
+    Fail-closed: a gate that cannot be loaded or that raises is a denial.
+    ``check_l34`` itself keeps the documented opt-in default (no tenant policy
+    => allow, except a SECRET prompt) and writes ``data_flow.approved`` /
+    ``data_flow.blocked``.
     """
+    tenant = _resolve_tenant_id(tenant_id)
     try:
-        from data_classification import (  # type: ignore
-            load_guard_for_tenant, classify_task, secret_floor_refusal,
+        _ensure_agents_on_path()
+        import spawn_gates as _gates  # type: ignore[import-not-found]
+        refusal = _gates.check_l34(
+            engine, tenant, prompt=prompt, persona=persona_tag or None,
         )
-    except Exception:  # noqa: BLE001 — module not on path → no enforcement
-        return None
-    tenant_id = os.environ.get("CORVIN_TENANT_ID") or "_default"
-    try:
-        # Opt-in (adapter parity): no tenant data_classification config → allow,
-        # except a SECRET prompt, which the built-in floor refuses (T-0254).
-        guard = load_guard_for_tenant(tenant_id)
-        if guard is None:
-            floor = secret_floor_refusal(tenant_id, engine_id=engine, prompt=prompt,
-                                         persona=persona_tag or None)
-            if floor is None:
-                return None
-            return DelegateResult(
-                ok=False,
-                engine=engine,
-                error=(f"data-flow-denied: classification SECRET is not allowed for "
-                       f"engine {engine!r}: {floor.reason}")[:400],
-                model=model,
-            )
-        classification = classify_task(prompt or "", persona=persona_tag or None)
-        decision = guard.validate(
-            classification=classification,
-            engine_id=engine,
-            persona=persona_tag or None,
+    except Exception as exc:  # noqa: BLE001 — no verdict is a denial
+        _log.warning("delegate L34 gate unavailable (%s) — fail-closed",
+                     type(exc).__name__)
+        return DelegateResult(
+            ok=False,
+            engine=engine,
+            error=(f"data-flow-denied: the data-classification gate could not be "
+                   f"evaluated for engine {engine!r} "
+                   f"(gate error: {type(exc).__name__}) — fail-closed"),
+            model=model,
         )
-    except Exception:  # noqa: BLE001 — internal error → fail-open (adapter parity)
-        return None
-    if decision.allowed:
+    if refusal is None:
         return None
     return DelegateResult(
         ok=False,
         engine=engine,
-        error=(f"data-flow-denied: classification {classification.name} is not "
-               f"allowed for engine {engine!r}: {decision.reason}")[:400],
+        error=f"data-flow-denied: {refusal}"[:400],
         model=model,
     )
 
@@ -1689,7 +2042,9 @@ def _wire_mcp_for_engine(
         overlay (e.g. ``CODEX_HOME`` for Codex).
 
     Both default to empty dicts when MCP wiring is disabled or
-    fails (best-effort; never blocks the spawn).
+    fails (best-effort; never blocks the spawn) - with ONE exception:
+    ``mcp_config_builder.UnsafeConfigTarget`` propagates and refuses the
+    delegation.
     """
     empty = {"spawn_kwargs": {}, "env_overlay": {}, "mcp_servers": []}
     if tempdir is None:
@@ -1733,6 +2088,15 @@ def _wire_mcp_for_engine(
             tempdir=tempdir,
             working_dir=working_dir,
         )
+    except _mcb.UnsafeConfigTarget:
+        # NOT best-effort (review R2-A2A-12). The config target in the worker's
+        # directory is a symlink, a hard link or not a plain file: somebody
+        # planted it. Swallowing this started the worker in that directory
+        # anyway - for OpenCode with the planted ``opencode.json`` as its
+        # config, i.e. MCP servers of the planter's choosing. The delegation is
+        # refused; run_delegate records it (delegate.failed, reason
+        # "unsafe-config-target").
+        raise
     except Exception:  # noqa: BLE001
         return empty
 

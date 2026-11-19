@@ -41,14 +41,20 @@ def _tid() -> str:
 
 
 def _audit_path() -> Path | None:
+    """THE tenant chain, resolved by the shared resolver.
+
+    Review 2026-11-19 (SEC-4): this composed ``<tenant>/global/<chain>`` by hand -
+    a sibling file the boot tripwire does not verify and no compliance report
+    reads - and its only import (``corvin_operator.forge.forge.paths``) fails in
+    the plugin layout, so MCP install/activate events were mostly not written at
+    all.
+    """
     try:
-        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore[import-not-found]
         _forge = _HERE.parents[2] / "forge"
-        if str(_forge) not in sys.path:
+        if _forge.is_dir() and str(_forge) not in sys.path:
             sys.path.insert(0, str(_forge))
-        from corvin_operator.forge.forge.paths import corvin_home  # noqa: F811  # type: ignore
-        home = Path(corvin_home())
-        return home / "tenants" / _tid() / "global" / "audit.jsonl"
+        from forge.paths import tenant_audit_chain  # type: ignore[import-not-found]
+        return Path(tenant_audit_chain(_tid()))
     except Exception:
         return None
 

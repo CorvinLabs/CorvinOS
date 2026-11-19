@@ -388,8 +388,11 @@ def check_l34(
     if classification is None or (isinstance(prompt, str) and prompt.strip()):
         try:
             from data_classification import DataClassification, classify_task  # type: ignore
+            # SEC-11: a tenant policy is present here, so a classifier step that
+            # fails must refuse (the except below), not be skipped into PUBLIC.
             cls_val = classify_task(prompt or "", persona=persona,
-                                    detector=bool(getattr(guard, "detector_on", False)))
+                                    detector=bool(getattr(guard, "detector_on", False)),
+                                    fail_closed=True)
             if classification is not None:
                 # DLG-1: the declared class may only RAISE the content's class. An
                 # unparseable label stays as given — the guard denies it
@@ -588,11 +591,16 @@ def check_l44(
     Metadata-only: the emitted event carries rule_id / action / reason-code /
     confidence — NEVER the task text (GDPR/PII floor).
 
-    Two-way escalate wording: a transient ``classifier_error`` /
-    ``clear_low_confidence`` verdict is NOT a finding against the user's content
-    — it gets a neutral "couldn't be safety-checked just now, try again"
-    message. A genuine borderline/violation verdict gets the operator-approval
-    wording. Either way the turn stays BLOCKED.
+    Returns ``None`` exactly when the gate's decision is allowed. That includes
+    an unsure clear with no Tier-0 keyword hit, which the gate itself records as
+    ``house_rules.allowed`` (reason ``clear_low_confidence_no_tier0_hit``).
+
+    Every ``escalate`` BLOCKS; only the wording differs. ``classifier_error``,
+    an unsure clear that Tier-0 keywords contradict
+    (``clear_unsure_tier0_flagged``) and a task longer than the classifier
+    window (``prompt_over_classifier_cap``) are not findings against the user's
+    content and get neutral wording; a borderline/violation verdict gets the
+    operator-approval wording.
     """
     task = prompt or ""
     if not task.strip():
@@ -718,25 +726,53 @@ def check_l44(
         # against the user's content — give it a neutral try-again message.
         # Reserve operator-approval wording for a genuine borderline/violation
         # verdict. Either way the turn is still blocked (non-None return).
-        if decision.reason in ("classifier_error", "clear_low_confidence"):
+        if decision.reason == "classifier_error":
             # M4: track classifier_error in the degradation window (ADR-0157 M4).
-            # clear_low_confidence is intentionally NOT tracked — it is a verdict-
-            # quality signal (model uncertain but healthy), not a health failure.
-            if decision.reason == "classifier_error":
-                try:
-                    _hr._house_rules_track_degradation(audit_write=_hr_classifier_audit)
-                except Exception:  # noqa: BLE001 — observability never blocks the gate
-                    pass
-                return (
-                    "[house-rules] This request couldn't be safety-checked just now — "
-                    "the automated acceptable-use check was inconclusive (it did not "
-                    "flag your request). Please send it again in a moment; if it keeps "
-                    "happening an operator will review it."
-                )
-            # clear_low_confidence: classifier ran successfully and did NOT flag the
-            # request — it was merely uncertain. Allow through silently so normal
-            # questions are never blocked by classifier confidence noise.
-            return None
+            try:
+                _hr._house_rules_track_degradation(audit_write=_hr_classifier_audit)
+            except Exception:  # noqa: BLE001 — observability never blocks the gate
+                pass
+            return (
+                "[house-rules] This request couldn't be safety-checked just now — "
+                "the automated acceptable-use check was inconclusive (it did not "
+                "flag your request). Please send it again in a moment; if it keeps "
+                "happening an operator will review it."
+            )
+        if decision.reason == "floor_only_policy_unreadable":
+            # Round 2 (R2-SEC-10): name the cause. The generic "needs operator
+            # approval" wording made a broken tenant.corvin.yaml look like a
+            # policy somebody had set.
+            return (
+                "[house-rules] This request needs operator approval before it can run: "
+                "the tenant configuration (tenant.corvin.yaml) could not be read, so the "
+                "acceptable-use check is running in its restricted mode. Operator: fix "
+                "the file (see the log line '[house-rules] tenant config ... could not "
+                "be evaluated')."
+            )
+        if decision.reason == "prompt_over_classifier_cap":
+            return (
+                "[house-rules] This request is too long to be safety-checked in full, "
+                "so it was not run. Please shorten it or split it into several messages."
+            )
+        if decision.reason in ("clear_unsure_tier0_flagged", "clear_low_confidence"):
+            # Review 2026-11-19, rounds 1+2 (SEC-10 / R2-SEC-2). An ESCALATE blocks
+            # here whatever its reason code: this function never turns a verdict
+            # the gate recorded as ``house_rules.escalated`` into a turn that runs.
+            # What a doubtful clear MEANS is decided once, in
+            # ``HouseRulesGate.classify``: an unsure clear with no Tier-0 keyword
+            # hit comes back as an ALLOW (``clear_low_confidence_no_tier0_hit``,
+            # recorded as ``house_rules.allowed``) and left through the
+            # ``decision.allowed`` return above; only an unsure clear that Tier-0
+            # keywords contradict reaches this branch. ``clear_low_confidence`` is
+            # the legacy code - the gate no longer produces it - kept so an
+            # escalate carrying it still blocks. Neutral wording: the classifier
+            # did not flag the request.
+            return (
+                "[house-rules] This request couldn't be safety-checked with enough "
+                "confidence - the automated acceptable-use check did not flag it, but "
+                "was not sure. Please rephrase or send it again; if it keeps happening "
+                "an operator will review it."
+            )
         return (
             f"[house-rules] This request needs operator approval before it can run "
             f"(rule '{rid}'). It touches a restricted or uncertain area. "
@@ -1130,7 +1166,8 @@ def decide_l34_route(
 
     if classification is None:
         try:
-            cls = _dc.classify_task(prompt or "", persona=persona, detector=guard.detector_on)
+            cls = _dc.classify_task(prompt or "", persona=persona, detector=guard.detector_on,
+                                    fail_closed=True)
         except Exception:  # noqa: BLE001 — a policy exists and the turn cannot be judged
             return RouteOutcome(kind="refuse", engine=engine_id, reason="classifier_error")
     else:

@@ -7,7 +7,7 @@ import logging
 from .base import StageTelemetry
 from .registry import register_stage
 from ._util import confidence_tier
-from ..memory_lookup import MemoryLookup
+from ..memory_lookup import MemoryLookup, resolve_memory_source
 
 _log = logging.getLogger("corvin.cel.memory")
 
@@ -74,7 +74,13 @@ class MemoryStage:
     trust = "builtin"
 
     def run(self, bundle, ctx):
-        brief = MemoryLookup().enrich_task(ctx.task_obj)
+        # Which memory this turn may read is decided per turn, never by a process-wide
+        # default: the host auto-memory is the operator's and reaches only the boot
+        # tenant's owner turns (memory_lookup.resolve_memory_source).
+        mem_dir, mem_source = resolve_memory_source(
+            getattr(ctx, "tenant_id", "") or "", getattr(ctx, "session", None))
+        bundle.scratch["memory_source"] = mem_source
+        brief = MemoryLookup(memory_dir=mem_dir).enrich_task(ctx.task_obj)
         brief = _apply_context_retriever(brief, ctx)
         bundle.brief = brief
         mc = getattr(brief, "memory_context", None)

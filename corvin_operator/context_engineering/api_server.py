@@ -9,6 +9,7 @@ Serves K=8 aggregator measurement data as JSON endpoints:
 - /api/v1/measurements/budget (ADR-0273)
 """
 
+import hmac
 import json
 import logging
 import os
@@ -19,25 +20,57 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from functools import wraps
 from talent_score import get_talent_calculator
+from measurement_hooks import measurement_root
 
 logger = logging.getLogger(__name__)
 
-# Simple API key from environment (operator-only service)
-API_KEY = os.environ.get("CORVIN_TELEMETRY_API_KEY", "local-dev-only")
+#: Environment variable holding the operator's API key. There is NO default: a service
+#: whose key is a constant from the source tree is an open service.
+API_KEY_ENV = "CORVIN_TELEMETRY_API_KEY"
+#: The former built-in default. It is public (it shipped in this file), so it is refused
+#: even when an operator sets it explicitly.
+_REJECTED_KEYS = frozenset({"local-dev-only"})
+_MIN_KEY_LEN = 16
+
+
+def _configured_key() -> str:
+    """The operator's key, or "" when none usable is configured (read per request, so a
+    rotated key applies without a restart)."""
+    key = (os.environ.get(API_KEY_ENV) or "").strip()
+    if len(key) < _MIN_KEY_LEN or key in _REJECTED_KEYS:
+        return ""
+    return key
+
 
 def validate_api_key(f):
-    """Decorator: require valid API key or localhost origin."""
+    """Decorator: require the operator's API key (``X-API-Key``) on EVERY request.
+
+    * No key configured -> 503, nothing is served. There is no built-in key.
+    * No loopback exemption: ``remote_addr`` is 127.0.0.1 for every local process and
+      for everything a reverse proxy or an SSH/Cloudflare tunnel forwards, so "localhost"
+      proved nothing about the caller.
+    * Constant-time comparison (``hmac.compare_digest``)."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Allow localhost without key (development)
-        if request.remote_addr in ("127.0.0.1", "localhost"):
-            return f(*args, **kwargs)
-        # Otherwise, check API key header
-        key = request.headers.get("X-API-Key", "")
-        if key != API_KEY:
+        expected = _configured_key()
+        if not expected:
+            logger.error("telemetry API refused a request: %s is not set (or too short)",
+                         API_KEY_ENV)
+            return jsonify({"error": "service not configured"}), 503
+        supplied = request.headers.get("X-API-Key", "")
+        if not hmac.compare_digest(supplied.encode("utf-8", "surrogatepass"),
+                                   expected.encode("utf-8", "surrogatepass")):
             return jsonify({"error": "unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated_function
+
+
+def _internal_error(what: str, exc: Exception):
+    """Log the failure server-side and answer generically: an exception text names
+    paths, keys and record contents the caller has no business reading."""
+    logger.error("%s failed: %s", what, type(exc).__name__, exc_info=True)
+    return jsonify({"error": "internal error"}), 500
+
 
 def validate_days_param():
     """Extract and validate days parameter (1-90 range)."""
@@ -52,7 +85,7 @@ CORS(app, resources={
     r"/api/*": {
         "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8765"],
         "methods": ["GET"],
-        "allow_headers": ["Content-Type"],
+        "allow_headers": ["Content-Type", "X-API-Key"],
     }
 })
 
@@ -65,7 +98,7 @@ class MeasurementReader:
 
     def __init__(self, queue_root: Path = None):
         if queue_root is None:
-            queue_root = Path.home() / ".corvin" / "measurement"
+            queue_root = measurement_root()
         self.queue_root = queue_root
 
     def read_jsonl_file(self, filepath: Path, limit: Optional[int] = None) -> List[Dict]:
@@ -319,8 +352,7 @@ def get_talent_score():
         report = calculator.generate_talent_report(days=days)
         return jsonify(report)
     except Exception as e:
-        logger.error(f"Talent score computation failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _internal_error("Talent score computation", e)
 
 
 @app.route("/api/v1/talent/ranking", methods=["GET"])
@@ -338,8 +370,7 @@ def get_talent_ranking():
             "count": len(ranking),
         })
     except Exception as e:
-        logger.error(f"Context ranking failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _internal_error("Context ranking", e)
 
 
 @app.route("/api/v1/talent/events", methods=["GET"])
@@ -357,8 +388,7 @@ def get_talent_events():
             "count": len(events),
         })
     except Exception as e:
-        logger.error(f"Learning events failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _internal_error("Learning events", e)
 
 
 @app.route("/api/v1/talent/history", methods=["GET"])
@@ -375,8 +405,7 @@ def get_talent_history():
             "days_returned": len(daily),
         })
     except Exception as e:
-        logger.error(f"History fetch failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _internal_error("History fetch", e)
 
 
 @app.route("/api/v1/talent/task-types", methods=["GET"])
@@ -393,8 +422,7 @@ def get_task_type_performance():
             "count": len(task_perf),
         })
     except Exception as e:
-        logger.error(f"Task type performance failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _internal_error("Task type performance", e)
 
 
 @app.route("/api/v1/talent/correlation", methods=["GET"])
@@ -411,8 +439,7 @@ def get_correlation_data():
             "points_count": len(corr.get("points", [])),
         })
     except Exception as e:
-        logger.error(f"Correlation fetch failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _internal_error("Correlation fetch", e)
 
 
 @app.route("/api/v1/talent/insights", methods=["GET"])
@@ -432,8 +459,7 @@ def get_talent_insights():
             "badges": badges,
         })
     except Exception as e:
-        logger.error(f"Insights fetch failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _internal_error("Insights fetch", e)
 
 
 @app.route("/api/v1/talent/story", methods=["GET"])
@@ -449,8 +475,7 @@ def get_improvement_story():
             "story": story,
         })
     except Exception as e:
-        logger.error(f"Story fetch failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _internal_error("Story fetch", e)
 
 
 @app.route("/health", methods=["GET"])

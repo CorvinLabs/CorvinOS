@@ -169,6 +169,11 @@ class LocalAgentRegistry:
         federable: bool = False,
     ) -> LocalAgent:
         agent_id = _validate_agent_id(agent_id)
+        if agent_id.lower() == "operator":
+            # Reserved (any case): "operator" is the human's name in an agent
+            # conversation prompt. Only registration is refused, so an agent
+            # registered before this rule can still be read and deregistered.
+            raise LocalAgentError("agent_id 'operator' is reserved")
         caps = _validate_capabilities(capabilities)
         if not (engine_type or "").strip():
             raise LocalAgentError("engine_type must not be empty")

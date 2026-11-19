@@ -57,6 +57,10 @@ def _run(args: list[str], *, env: dict[str, str] | None = None, timeout: int = 2
     # a test must never contend with (or leave a lock behind for) a real
     # install/update on the same host.
     env.setdefault("TMPDIR", tempfile.mkdtemp(prefix="install-sh-test-"))
+    # Since 2026-11-19 the lock and the log live in a per-user state directory
+    # (${XDG_STATE_HOME:-$HOME/.local/state}/corvinos), not in TMPDIR. Keep it
+    # private too, or a test run would use the operator's real state dir.
+    env.setdefault("XDG_STATE_HOME", tempfile.mkdtemp(prefix="install-sh-state-"))
     return subprocess.run(
         ["/bin/sh", str(_INSTALL_SH), *args],
         cwd=_REPO,
@@ -298,31 +302,38 @@ def test_stale_lock_of_a_dead_process_is_taken_over(tmp_path) -> None:
     """A run killed mid-way leaves the lock behind. Taking it over when its
     owner is dead is what keeps later installs — and the watchdog, which
     stands down while the lock is held — from being blocked forever."""
-    lock = tmp_path / "corvinos-setup.lock"
-    lock.mkdir()
+    state = tmp_path / "state"
+    lock = state / "corvinos" / "corvinos-setup.lock"
+    lock.mkdir(parents=True)
+    (state / "corvinos").chmod(0o700)
     (lock / "pid").write_text("999999", encoding="utf-8")  # no such process
     result = _run(["--this-flag-does-not-exist"],
-                  env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path), "HOME": str(tmp_path)})
+                  env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path), "HOME": str(tmp_path),
+                       "XDG_STATE_HOME": str(state)})
     # argument parsing happens first; a valid run must get past the lock:
     assert "Unknown argument" in result.stderr
     # Only the lock's own tools on PATH: past the lock the script must stop at
     # the very next check (no curl/wget), proving the lock was taken over.
     tools = tmp_path / "tools"
     tools.mkdir()
-    for t in ("mkdir", "rm", "cat", "sleep", "find", "id", "uname", "date"):
+    for t in ("mkdir", "rm", "cat", "sleep", "find", "id", "uname", "date", "chmod"):
         src = shutil.which(t)
         if src:
             os.symlink(src, tools / t)
-    result = _run([], env={"PATH": str(tools), "TMPDIR": str(tmp_path), "HOME": str(tmp_path)})
+    result = _run([], env={"PATH": str(tools), "TMPDIR": str(tmp_path), "HOME": str(tmp_path),
+                           "XDG_STATE_HOME": str(state)})
     assert "another CorvinOS install/update is running" not in result.stderr
     assert "curl or wget" in result.stderr
 
 
 def test_live_lock_blocks_a_second_run(tmp_path) -> None:
-    lock = tmp_path / "corvinos-setup.lock"
-    lock.mkdir()
+    state = tmp_path / "state"
+    lock = state / "corvinos" / "corvinos-setup.lock"
+    lock.mkdir(parents=True)
+    (state / "corvinos").chmod(0o700)
     (lock / "pid").write_text(str(os.getpid()), encoding="utf-8")  # alive: this test process
-    result = _run([], env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path), "HOME": str(tmp_path)})
+    result = _run([], env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path), "HOME": str(tmp_path),
+                           "XDG_STATE_HOME": str(state)})
     assert result.returncode == 1
     assert "another CorvinOS install/update is running" in result.stderr
     assert lock.is_dir(), "a live owner's lock must never be removed"

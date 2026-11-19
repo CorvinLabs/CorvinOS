@@ -72,6 +72,7 @@ const { queueStats }            = require('../shared/js/queue_stats');
 const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
+const { fetchToFile, safeExt } = require('../shared/js/media_fetch');
 const { writeInboxAtomic }      = require('../shared/js/inbox_write');
 const { makeStickyProgress }    = require('../shared/js/sticky_progress');
 const inChatCmds                = require('../shared/js/in_chat_commands');
@@ -151,6 +152,9 @@ for (const d of [INBOX, OUTBOX]) fs.mkdirSync(d, { recursive: true });
 const HTTP_PORT = parseInt(process.env.DISCORD_HTTP_PORT || '7893', 10);
 
 const log = makeLogger('discord');
+// Inbound attachment cap: Discord's own upload limits are far below this for
+// most accounts; nothing larger is buffered or stored.
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const { loadSettings, currentSettings, saveSettings } =
   makeSettingsAccessor(SETTINGS_FILE, log);
 const settings = loadSettings(); // boot snapshot — held mutable for debug-list edits
@@ -165,7 +169,7 @@ const OPERATOR_NAME = currentON.trim();
 if (!OPERATOR_NAME || OPERATOR_NAME === '(owner)') {
   log('[security] V-022: operator_name not set in settings.json — disclosure card will show "(owner)" placeholder. Configure operator_name for Art. 50 compliance.');
 }
-const { rateAllow, authOk, readOnlyOk } = makeAuth({
+const { rateAllow, authOk, readOnlyOk, classify, isOwner: isOwnerUid } = makeAuth({
   settingsFile: SETTINGS_FILE, currentSettings, loadSettings, logger: log,
   channel: CHANNEL,
   // Security fix: without this, an empty whitelist made authOk() return true for
@@ -202,7 +206,17 @@ function _isOwnerCheck(userId, text, channelId, addressed = true) {
     if (access.promoted) saveSettings(settings);
     return access.authorized;
   }
-  return authOk(userId, text, channelId);
+  // authOk() answers "may this sender reach the bot" — it also admits guests
+  // of an `audience=all` chat and runs the `/auth <pin>` claim. Owner means
+  // whitelist membership ONLY: until 2026-11-19 an audience guest came back
+  // as owner here and reached /vault, /all, /debug, /invite (R3-NEW-2).
+  return authOk(userId, text, channelId) && isOwnerUid(userId);
+}
+
+// A non-whitelisted sender in a chat the owner opened with `/all on`: admitted
+// to the chat like an SPG guest, never an owner.
+function _isAudienceGuest(userId, channelId) {
+  return classify(userId, String(channelId)) === 'guest';
 }
 
 const READ_ONLY_ACK = '🔒 You are read-only in this chat — you can read along, but you cannot drive the bot. Ask the owner to add you to the whitelist if that is wrong.';
@@ -404,8 +418,9 @@ client.on('interactionCreate', async (interaction) => {
     const _isOwner = _isOwnerCheck(userId, text, channelId);
     if (!_isOwner) {
       // ADR-0166: check SPG invitation before rejecting non-whitelisted sender
-      let _spgAllowed = false;
-      try {
+      // An `audience=all` guest is admitted without an SPG invitation.
+      let _spgAllowed = _isAudienceGuest(userId, channelId);
+      if (!_spgAllowed) try {
         const _spgScript = require('path').join(__dirname, '..', 'shared', 'spg.py');
         const _spgRes = require('child_process').spawnSync(
           require('../shared/js/python_bin').pythonBin(),
@@ -737,8 +752,9 @@ client.on('messageCreate', async (msg) => {
     const _isOwner = _isOwnerCheck(userId, text, msg.channel.id, _addressed);
     if (!_isOwner) {
       // ADR-0166: check SPG invitation before rejecting non-whitelisted sender
-      let _spgAllowed = false;
-      try {
+      // An `audience=all` guest is admitted without an SPG invitation.
+      let _spgAllowed = _isAudienceGuest(userId, msg.channel.id);
+      if (!_spgAllowed) try {
         const _spgScript = require('path').join(__dirname, '..', 'shared', 'spg.py');
         const _spgRes = require('child_process').spawnSync(
           require('../shared/js/python_bin').pythonBin(),
@@ -888,33 +904,35 @@ client.on('messageCreate', async (msg) => {
 
     // Handle attachments. Discord delivers them via msg.attachments (Map).
     if (msg.attachments.size > 0) {
+      // Only the first attachment is forwarded. The download is status-
+      // checked and size-bounded (declared size first, then a hard cap while
+      // streaming) and a nameless attachment no longer throws
+      // (media_fetch.js, review 2026-11-19 R3-NEW-33).
       const att = msg.attachments.first();
-      const fileResp = await fetch(att.url);
-      const buf = Buffer.from(await fileResp.arrayBuffer());
-      const safeName = (att.name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const safeName = (att.name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
       const ct = (att.contentType || '').toLowerCase();
-      const ext = (att.name || '').slice(att.name.lastIndexOf('.')).toLowerCase();
+      const ext = safeExt(att.name);
+      const p = path.join(INBOX, `${id}_${safeName}`);
+      try {
+        await fetchToFile(att.url, p, { maxBytes: MAX_ATTACHMENT_BYTES, declaredSize: Number(att.size) });
+      } catch (e) {
+        log(`attachment download failed msg=${msg.id} channel=${msg.channel.id}: ${e && e.message}`);
+        try { await msg.reply('Could not fetch that attachment (too large or the download failed).'); } catch {}
+        return;
+      }
       if (ct.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)$/.test(ext)) {
-        const p = path.join(INBOX, `${id}_${safeName}`);
-        fs.writeFileSync(p, buf);
         writeInbox({ ...base, image_path: p, caption: text });
         return;
       }
       if (ct.startsWith('audio/') || /\.(ogg|mp3|m4a|wav|opus)$/.test(ext)) {
-        const p = path.join(INBOX, `${id}_${safeName}`);
-        fs.writeFileSync(p, buf);
         writeInbox({ ...base, audio_path: p, caption: text });
         return;
       }
       if (ct.startsWith('video/') || /\.(mp4|mov|webm|mkv)$/.test(ext)) {
-        const p = path.join(INBOX, `${id}_${safeName}`);
-        fs.writeFileSync(p, buf);
         writeInbox({ ...base, video_path: p, caption: text });
         return;
       }
       // Default: treat as document.
-      const p = path.join(INBOX, `${id}_${safeName}`);
-      fs.writeFileSync(p, buf);
       writeInbox({ ...base, document_path: p, document_name: att.name, mimetype: att.contentType, caption: text });
       return;
     }

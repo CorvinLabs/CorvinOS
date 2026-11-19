@@ -64,6 +64,44 @@ except ImportError:
 
 log = logging.getLogger("corvin.license")
 
+_FORGE_PATHS_PRIVATE_NAME = "_corvin_license_forge_paths"
+
+
+def _forge_paths_module() -> Any:
+    """The path-resolver module that owns ``tenant_audit_chain`` — whatever ``paths`` is.
+
+    ``paths`` is not one module: ``forge/forge/paths.py``, ``bridges/shared/paths.py`` and
+    ``cowork/lib/paths.py`` all load under that bare name, and whichever directory is first on
+    ``sys.path`` (or was imported first) owns ``sys.modules["paths"]``. The cowork one has no
+    ``tenant_audit_chain``, so ``from paths import tenant_audit_chain`` raised ImportError in
+    any process that had loaded it first — inside try-blocks, so every license audit record
+    and the chain-DNA seeding silently did not happen there.
+
+    A ``paths`` already loaded that HAS the resolver is used as is (same module every other
+    chain writer in the process uses). Otherwise ``forge/forge/paths.py`` is loaded from its
+    file under a private name; ``sys.modules["paths"]`` is never replaced.
+    """
+    mod = sys.modules.get("paths")
+    if mod is not None and callable(getattr(mod, "tenant_audit_chain", None)):
+        return mod
+    mod = sys.modules.get(_FORGE_PATHS_PRIVATE_NAME)
+    if mod is not None:
+        return mod
+    import importlib.util  # noqa: PLC0415
+    src = Path(__file__).resolve().parents[1] / "forge" / "forge" / "paths.py"
+    spec = importlib.util.spec_from_file_location(_FORGE_PATHS_PRIVATE_NAME, src)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load the path resolver from {src}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[_FORGE_PATHS_PRIVATE_NAME] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        sys.modules.pop(_FORGE_PATHS_PRIVATE_NAME, None)
+        raise
+    return mod
+
+
 
 def _log_non_numeric_limit(
     feature: str,
@@ -1298,7 +1336,7 @@ def _load_license_from_env_locked(*, force: bool = False) -> None:
         from chain_dna import derive_seed_paid as _dna_derive_paid  # type: ignore[import]
         from security_events import set_chain_dna_seed as _dna_seed_set, write_event as _dna_write  # type: ignore[import]
         from instance_identity import get_instance_id as _get_iid  # type: ignore[import]
-        from paths import tenant_audit_chain as _dna_audit_chain  # type: ignore[import]
+        _dna_audit_chain = _forge_paths_module().tenant_audit_chain
         _dna_seed = _dna_derive_paid(token, _get_iid())
         _dna_seed_set(_dna_seed)
         # Flush stale CIT cache so the next gate() call from any static
@@ -1590,7 +1628,7 @@ def _reload_from_disk_locked() -> None:
             from chain_dna import derive_seed_paid as _rld_derive  # type: ignore[import]
             from security_events import set_chain_dna_seed as _rld_seed_set, write_event as _rld_write  # type: ignore[import]
             from instance_identity import get_instance_id as _rld_get_iid  # type: ignore[import]
-            from paths import tenant_audit_chain as _rld_audit_chain  # type: ignore[import]
+            _rld_audit_chain = _forge_paths_module().tenant_audit_chain
             _rld_seed = _rld_derive(token, _rld_get_iid())
             _rld_seed_set(_rld_seed)
             try:

@@ -1085,6 +1085,7 @@ class ClassifierError(RuntimeError):
 
 def _classify_task_opted_in(
     task: str, persona: "str | None", patterns: "list[re.Pattern[str]]",
+    honor_marker: bool = True,
 ) -> DataClassification:
     """``max(marker, secret bank, personal_data zone, detector)``; fail-closed (ADR-2268 Decision 6)."""
     if not isinstance(task, str):
@@ -1095,7 +1096,7 @@ def _classify_task_opted_in(
         if pat.search(task):
             return DataClassification.SECRET
     best = DataClassification.PUBLIC
-    m = _CLASS_MARKER_RE.match(task)
+    m = _CLASS_MARKER_RE.match(task) if honor_marker else None
     if m:
         best = max(best, DataClassification[m.group(1).upper()])
     try:
@@ -1121,17 +1122,45 @@ def classify_task(
     *,
     secret_patterns: list[re.Pattern[str]] | None = None,
     detector: bool = False,
+    honor_marker: bool = True,
+    fail_closed: bool = False,
 ) -> DataClassification:
     """Heuristic classifier. Default is ``PUBLIC`` — users opt in to restriction.
 
-    Precedence:
+    The class is the MAXIMUM of:
       1. Secret regex hit → ``SECRET`` (cannot be overridden by any marker).
-      2. Explicit ``[class:<name>]`` marker → user/operator override (only
-         honoured when no secret pattern matched in step 1). Users who handle
-         sensitive data add ``[class:internal]`` or ``[class:confidential]``
-         to their task to enforce stricter engine routing.
+      2. Explicit ``[class:<name>]`` marker — it can only RAISE the class. Users
+         who handle sensitive data add ``[class:internal]`` or
+         ``[class:confidential]`` to enforce stricter engine routing.
       3. compliance_zone == ``personal_data`` → ``CONFIDENTIAL``.
       4. Otherwise → ``PUBLIC`` (any engine allowed).
+
+    Review 2026-11-19 (SEC-11): the marker used to RETURN before step 3, so
+    ``[class:public]`` in front of a text full of personal data classified it
+    PUBLIC - the label lowered the class of the content it was attached to, and
+    whoever wrote the text chose the engine it may reach. A marker is a floor
+    now, never a ceiling.
+
+    What that takes away, stated (round 2, R2-SEC-8): an OPERATOR could use
+    ``[class:public]`` to overrule a false positive of the zone classifier - a
+    text the detector reads as personal data and the operator knows to be
+    public. That override is gone, for the operator and the user alike: the
+    marker cannot tell them apart, and whoever writes the text writes the
+    marker. A downgrade has to come from somewhere the text's author cannot
+    reach - tenant POLICY, not message content (for example a
+    ``spec.data_classification`` entry in ``tenant.corvin.yaml`` naming the
+    persona or the detector category to exempt; that file is 0600 and
+    path-gated). No such policy key exists yet; until it does, a false
+    positive is resolved by routing the turn to an engine the higher class
+    admits.
+
+    ``honor_marker=False`` ignores the marker entirely. Use it where the text
+    comes from a party that is not the tenant's operator or user - an inbound
+    A2A task, a fetched document: their label is content, not an instruction.
+
+    ``fail_closed=True`` is for a caller that enforces a tenant POLICY: a zone
+    classifier that is missing or raises then raises :class:`ClassifierError`
+    instead of the step being skipped (which let the turn become ``PUBLIC``).
 
     Rationale: data residency restrictions should apply when the user knows
     their data is sensitive and declares it. Defaulting to INTERNAL blocked
@@ -1148,8 +1177,13 @@ def classify_task(
     """
     if detector:
         return _classify_task_opted_in(
-            task, persona, secret_patterns if secret_patterns is not None else _SECRET_PATTERNS)
-    if not isinstance(task, str) or not task.strip():
+            task, persona, secret_patterns if secret_patterns is not None else _SECRET_PATTERNS,
+            honor_marker=honor_marker)
+    if not isinstance(task, str):
+        if fail_closed:
+            raise ClassifierError("task is not a string")
+        return DataClassification.PUBLIC
+    if not task.strip():
         return DataClassification.PUBLIC
 
     # 1. Secret patterns first — cannot be overridden by an explicit marker.
@@ -1160,10 +1194,11 @@ def classify_task(
         if pat.search(task):
             return DataClassification.SECRET
 
-    # 2. Explicit marker (only honoured when no secret pattern matched above).
-    m = _CLASS_MARKER_RE.match(task)
+    # 2. Explicit marker: a FLOOR for the result, never a ceiling (SEC-11).
+    best = DataClassification.PUBLIC
+    m = _CLASS_MARKER_RE.match(task) if honor_marker else None
     if m:
-        return DataClassification[m.group(1).upper()]
+        best = DataClassification[m.group(1).upper()]
 
     # 3. PII → CONFIDENTIAL (delegate to compliance_zone_classifier).
     # Lazy import to keep this module standalone-testable.
@@ -1172,18 +1207,22 @@ def classify_task(
     except ImportError:
         try:
             from compliance_zone_classifier import classify_zone  # type: ignore
-        except ImportError:
+        except ImportError as exc:
+            if fail_closed:
+                raise ClassifierError("compliance zone classifier: not importable") from exc
             classify_zone = None  # type: ignore[assignment]
     if classify_zone is not None:
         try:
             z = classify_zone(task, persona)
             if isinstance(z, dict) and z.get("zone") == "personal_data":
-                return DataClassification.CONFIDENTIAL
-        except Exception:  # noqa: BLE001
-            pass
+                best = max(best, DataClassification.CONFIDENTIAL)
+        except Exception as exc:  # noqa: BLE001
+            if fail_closed:
+                raise ClassifierError(
+                    f"compliance zone classifier: {type(exc).__name__}") from exc
 
     # 4. Default: PUBLIC — users opt in to stricter classification via [class:internal].
-    return DataClassification.PUBLIC
+    return best
 
 
 # ----- forge-backed audit writer (production wiring) ------------------

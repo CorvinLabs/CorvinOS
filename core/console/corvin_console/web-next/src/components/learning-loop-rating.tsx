@@ -14,6 +14,15 @@ export const RATEABLE_SKILLS = new Set([
   "os.flow_guard",
 ]);
 
+/**
+ * Paths are relative to the client's BASE ("/v1/console") — api() prepends it,
+ * so a path that repeats the prefix resolves to /v1/console/v1/console/… (404).
+ */
+export const SKILL_FEEDBACK_PATH = "/feedback/skill";
+export function recentDecisionsPath(skillId: string, limit = 5): string {
+  return `${SKILL_FEEDBACK_PATH}/recent?skill_id=${encodeURIComponent(skillId)}&limit=${limit}`;
+}
+
 interface RecentDecision {
   event_id: string;
   timestamp: string;
@@ -49,12 +58,12 @@ export const LearningLoopRating: React.FC<{ skillId: string }> = ({ skillId }) =
   const recent = useQuery({
     queryKey: ["skill-recent-decisions", skillId],
     queryFn: () =>
-      api<RecentResponse>(`/v1/console/feedback/skill/recent?skill_id=${encodeURIComponent(skillId)}&limit=5`),
+      api<RecentResponse>(recentDecisionsPath(skillId)),
   });
 
   const rate = useMutation({
     mutationFn: (args: { eventId: string; rating: 1 | -1 }) =>
-      api<SubmitResult>("/v1/console/feedback/skill", {
+      api<SubmitResult>(SKILL_FEEDBACK_PATH, {
         method: "POST",
         csrf,
         body: { skill_id: skillId, subject_id: args.eventId, rating: args.rating, category: "accuracy" },

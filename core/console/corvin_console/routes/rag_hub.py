@@ -16,6 +16,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
@@ -182,7 +183,8 @@ async def publish_provider(
     tenant_id = _session.tenant_id
     hub = _get_hub(tenant_id)
     if hub is None:
-        console_audit.action_failed(
+        await asyncio.to_thread(
+            console_audit.action_failed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.publish",
@@ -193,7 +195,8 @@ async def publish_provider(
         return {"error": "Hub not available"}
 
     if "provider_id" in req and "id" not in req:
-        return _publish_registered_provider(req, tenant_id, _session, hub)
+        return await asyncio.to_thread(
+            _publish_registered_provider, req, tenant_id, _session, hub)
 
     try:
         from shared.rag_hub import RAGHubProvider  # noqa: PLC0415
@@ -212,7 +215,8 @@ async def publish_provider(
         )
 
         published = hub.publish(provider)
-        console_audit.action_performed(
+        await asyncio.to_thread(
+            console_audit.action_performed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.publish",
@@ -225,7 +229,8 @@ async def publish_provider(
         }
     except Exception as e:
         logger.error("Failed to publish provider: %s", e)
-        console_audit.action_failed(
+        await asyncio.to_thread(
+            console_audit.action_failed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.publish",
@@ -362,7 +367,8 @@ async def add_review(
     tenant_id = _session.tenant_id
     hub = _get_hub(tenant_id)
     if hub is None:
-        console_audit.action_failed(
+        await asyncio.to_thread(
+            console_audit.action_failed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.review",
@@ -387,7 +393,8 @@ async def add_review(
         )
 
         added = hub.add_review(req["provider_id"], review)
-        console_audit.action_performed(
+        await asyncio.to_thread(
+            console_audit.action_performed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.review",
@@ -400,7 +407,8 @@ async def add_review(
         }
     except Exception as e:
         logger.error("Failed to add review: %s", e)
-        console_audit.action_failed(
+        await asyncio.to_thread(
+            console_audit.action_failed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.review",
@@ -503,7 +511,8 @@ async def import_provider(
     try:
         _assert_manifest_endpoints_allowed(manifest_yaml)
     except _UnsafeUrl as exc:
-        console_audit.action_failed(
+        await asyncio.to_thread(
+            console_audit.action_failed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.import",
@@ -526,7 +535,8 @@ async def import_provider(
         )
 
         if not success:
-            console_audit.action_failed(
+            await asyncio.to_thread(
+                console_audit.action_failed,
                 tenant_id=tenant_id,
                 sid_fingerprint=_session.sid_fingerprint,
                 action="hub.import",
@@ -544,7 +554,8 @@ async def import_provider(
 
         invalidate_orchestrator(tenant_id)
 
-        console_audit.action_performed(
+        await asyncio.to_thread(
+            console_audit.action_performed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.import",
@@ -557,7 +568,8 @@ async def import_provider(
         }
     except Exception as e:
         logger.error("Failed to import provider: %s", e)
-        console_audit.action_failed(
+        await asyncio.to_thread(
+            console_audit.action_failed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.import",
@@ -598,7 +610,8 @@ async def export_provider(
         manifest_yaml = RAGProviderImportExport.export_manifest(manifest_file)
         manifest_hash = RAGProviderImportExport.compute_manifest_hash(manifest_yaml)
 
-        console_audit.action_performed(
+        await asyncio.to_thread(
+            console_audit.action_performed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.export",
@@ -612,7 +625,8 @@ async def export_provider(
         }
     except Exception as e:
         logger.error("Failed to export provider: %s", e)
-        console_audit.action_failed(
+        await asyncio.to_thread(
+            console_audit.action_failed,
             tenant_id=tenant_id,
             sid_fingerprint=_session.sid_fingerprint,
             action="hub.export",

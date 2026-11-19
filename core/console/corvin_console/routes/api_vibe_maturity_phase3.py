@@ -7,6 +7,7 @@ GET /v1/console/vibe/maturity/anomalies?window=300
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -217,7 +218,9 @@ async def get_historical_data(
     """
     from . import maturity_live
 
-    raw = maturity_live.build_history(tenant_id=rec.tenant_id, loop=loop, window=window)
+    # Blocking chain/learning-store read: worker thread, not the event loop.
+    raw = await asyncio.to_thread(
+        maturity_live.build_history, tenant_id=rec.tenant_id, loop=loop, window=window)
     points = [
         HistoricalPoint(
             timestamp=str(p.get("timestamp", "")),
@@ -253,7 +256,8 @@ async def detect_anomalies(
     """
     from . import maturity_live
 
-    raw = maturity_live.build_anomalies(tenant_id=rec.tenant_id, window="7d")
+    raw = await asyncio.to_thread(
+        maturity_live.build_anomalies, tenant_id=rec.tenant_id, window="7d")
     anomalies = [AnomalyModel(**a) for a in raw]
 
     return AnomaliesResponse(
@@ -280,7 +284,8 @@ async def get_patterns(
     """
     from . import maturity_live
 
-    raw = maturity_live.build_patterns(tenant_id=rec.tenant_id, window=window)
+    raw = await asyncio.to_thread(
+        maturity_live.build_patterns, tenant_id=rec.tenant_id, window=window)
     return PatternsResponse(
         window=str(raw.get("window", window)),
         generated_at=str(raw.get("generated_at", "")),

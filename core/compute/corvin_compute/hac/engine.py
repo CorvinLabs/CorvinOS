@@ -15,7 +15,10 @@ from ..engine_protocol import (
     GateAction,
     UnknownJobId,
 )
-from .manifest import HACManifest, SubManagerSpec, LossWeights, new_hac_id
+from .manifest import (
+    HACManifest, SubManagerSpec, LossWeights, new_hac_id, require_unique_manager_ids,
+)
+from ..pipeline.engine import _drain
 from .coordinator import HACCoordinator
 from .attribution import compute_root_loss, compute_attribution
 
@@ -40,6 +43,7 @@ class HACEngine:
         self._loop = loop
         self._coordinators: dict[str, HACCoordinator] = {}
         self._gate_queues: dict[str, asyncio.Queue] = {}
+        self._futures: dict[str, Any] = {}  # job id -> coordinator Future
         self._lock = threading.Lock()
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -49,6 +53,9 @@ class HACEngine:
         hac_id = new_hac_id()
         extra = spec.extra
         sub_managers = [SubManagerSpec.from_dict(sm) for sm in extra.get("sub_managers", [])]
+        # Refused at submit, before a job id exists (ValueError, like an
+        # invalid manager_id): every per-manager structure is keyed by the id.
+        require_unique_manager_ids(sub_managers)
         loss_weights_dict = extra.get("loss_weights", {})
         if not loss_weights_dict.get("weights") and sub_managers:
             n = len(sub_managers)
@@ -82,7 +89,9 @@ class HACEngine:
             self._coordinators[hac_id] = coordinator
             self._gate_queues[hac_id] = gate_q
         if self._loop is not None:
-            asyncio.run_coroutine_threadsafe(coordinator.run(), self._loop)
+            fut = asyncio.run_coroutine_threadsafe(coordinator.run(), self._loop)
+            with self._lock:
+                self._futures[hac_id] = fut
         return hac_id
 
     def status(self, job_id: str) -> ComputeStatus:
@@ -121,6 +130,23 @@ class HACEngine:
         if coord is None:
             raise UnknownJobId(f"no hac job: {job_id!r}")
         coord.request_abort()
+
+    def interrupt_all(self) -> int:
+        """Worker shutdown: stop every non-terminal HAC run. Returns the count."""
+        with self._lock:
+            coords = list(self._coordinators.values())
+        n = 0
+        for coord in coords:
+            if coord._state not in ("converged", "failed", "aborted", "budget"):
+                coord.request_interrupt()
+                n += 1
+        return n
+
+    async def wait_stopped(self, timeout_s: float) -> int:
+        """Worker shutdown, after ``interrupt_all``: wait up to *timeout_s* for
+        every HAC run's terminal record, then write ``aborted`` synchronously
+        for any run still open (see ``PipelineEngine.wait_stopped``)."""
+        return await _drain(self, timeout_s)
 
     def _get(self, job_id: str) -> HACCoordinator:
         coord = self._coordinators.get(job_id)

@@ -678,13 +678,7 @@ All of it is structural — no flag, no env kill-switch.
 | **Mid-turn heartbeat markers** | `mid_turn_heartbeat.default_state_dir()` = `<corvin_home>/bridges/mid_turn_heartbeats/` | Previously written into the repo tree (`corvin_operator/bridges/shared/`, un-ignored, world-readable, raw chat id in the filename). Now 0700 dir / 0600 files, filename carries a sha256 fingerprint of the session key; the raw ids stay in the marker body only. |
 | **L34 gate on a nameless engine** | `adapter.py::_check_compliance_or_fail` | An engine without `name` cannot be matched against the locality matrix → **refused** (`[compliance] Spawn rejected … fail-closed`). It used to fail-open. |
 | **L34 / L35 gate that CRASHES** | `adapter.py::_check_compliance_or_fail`, `_check_egress_or_fail` | An exception out of `check_l34` / `check_l35` is not a decision → **refused** (`[security] … gate failed before it could judge this request … fail-closed`). A missing policy or an unavailable guard is still decided inside the gate (permitted). Until 2026-11-05 both answered `None` on a crash. |
-| **L44 low-confidence allow is audited** | `adapter.py::_check_house_rules_or_fail` | `house_rules.py` writes `house_rules.escalated` for a `clear_low_confidence` verdict and the adapter then allows the turn; the override is now recorded as `house_rules.allowed_after_lowconf` (WARNING; rule id, reason code, confidence, fingerprinted chat key) so the chain never claims "blocked" for a request that ran. |
-
-### Round 2 (2026-09-07) — prompt head, legacy fallback, dispatcher peeks
-
-| Finding | Mechanism | Where | Contract |
-|---|---|---|---|
-| **R2-E1** | **Prompt-head sentinel** | `agents/claude_code.py::guard_prompt_head` (single shared helper) — called at EVERY `claude -p` spawn site: `adapter.py` `_build_claude_args` + `_call_claude_streaming_via_engine`, `corvin_console/task_worker_pool.py::_worker_stdin_payload`, `corvin_console/chat_runtime.py` (turn stdin + ADR-0213 context-sync note), `corvin_console/routes/assistant.py` (added R3-C1), `../orchestration/tde/worker_ipc.py` (added R3), `../voice/scripts/summarize.py::_run_claude_print` | The CLI expands a user message whose **first byte is `/`** into a slash command / skill on EVERY transport — positional-after-`--` and the stdin `stream-json` user message alike. Proven: a chat instruction `/pwn` executed `.claude/commands/pwn.md` from the persona workdir under `bypassPermissions`; `/cost` returned the operator's subscription usage with `num_turns == 0` (the CLI answered, the model never ran). Every site now prepends ONE fixed, non-slash sentinel line (`User input:\n`), **unconditionally** — independent of whether a CEL brief / observer block / volatile prefix happens to be present, because those are conditional and this must not be. The user's text follows verbatim, so `/pwn` reaches the model as literal text. Fail-closed: `_worker_stdin_payload` raises rather than build an unguarded payload, and `summarize.py` raises `OSError` (degrading to the no-LLM structural fallback) if the helper is not importable. The guard is idempotent. |
+| **L44 is one implementation** (R3-SEC-7, 2026-11-19; replaces "L44 low-confidence allow is audited") | `adapter.py::_check_house_rules_or_fail` → `spawn_gates.check_l44` | The adapter carried its own copy of the L44 evaluation. It let an `escalate / clear_low_confidence` verdict run (recording the override as `house_rules.allowed_after_lowconf`), showed generic wording for reason codes it did not know, and wrote its records to `<corvin_home>/global/forge/audit.jsonl` instead of the tenant chain. It now delegates to `spawn_gates.check_l44`, the function the console and ACS call: every `escalate` blocks, an unsure clear without a Tier-0 hit runs as `house_rules.allowed`, the wording is `check_l44`'s, and the record is on `<tenant>/global/forge/audit.jsonl`. Nothing emits `house_rules.allowed_after_lowconf` any more. |
 | **R2-E2** | **Legacy `call_claude()` prompt off argv** | `adapter.py::call_claude` → `_build_claude_args(..., prompt_via_stdin=True, spawn_prompt_out=…)` | The legacy image/document fallback (reached from the engine-streaming `except` branch) still built argv WITH the prompt — world-readable via `/proc/<pid>/cmdline` for the process lifetime, plus the ~128 KiB E2BIG ceiling. The prompt now travels on **stdin** (`communicate(input=…)`, plain text — no `--input-format`, so the whole of stdin is the user message). `spawn_prompt_out` hands the caller the exact sentinel-guarded text the builder produced, so the two can never drift. |
 | **R2-B4** | **Total dispatcher peeks** | `adapter.py::_peek_envelope` (used by `_route_key` + `_peek_side_channel`) | The peeks caught only `(OSError, JSONDecodeError)`. A non-object envelope (`AttributeError` on `.get`) or non-UTF-8 bytes (`UnicodeDecodeError`) raised out of `submit_inbox_item` **before the future was attached**: the whole poll tick died and the msg_id stayed pinned in `_in_flight` for `IN_FLIGHT_TTL` (3600 s), so the message could never be retried. `_peek_envelope` returns `None` for anything that is not a JSON object in valid UTF-8; the runner then quarantines it through the normal poison path. |
 
@@ -914,7 +908,32 @@ on a gate `return` without `_turn_refused` right before it.
 own turns — someone else's conversation keeps `output_chars`, never text.
 `chat_debug.jsonl`: one `turn.start` per turn (attempt 0; retries log
 `turn.retry`) and one matching `turn.done`; a turn refused before
-`turn.start` logs neither. The boot reaper (`TaskManager.reap_stale_running`,
+`turn.start` logs neither. The file sits in the worker's cwd and is
+**content-free**: no prompt text and no prompt preview (`prompt_len` only — a
+hash of a short prompt is guessable), and the chat is named by `chat_fp`, never
+by its raw key. `chat_fp` is the first 16 hex of an **HMAC-SHA256** under an
+install-local key, `<tenant>/global/chat_debug_fp.key` (32 random bytes, mode
+0600, outside every worker cwd; read with `O_NOFOLLOW`, created through a
+`mkstemp` temp that is hard-linked into place so a concurrent creator never
+replaces a key in use). A bare truncated sha256 of a chat key — a phone number
+or a user id on most bridges — is reversed by enumeration, so there is no
+unkeyed fallback: no key (unreadable, or a symlink planted under its name), no
+`chat_fp`. The key file is checked on the open descriptor (R3-BR-7): a regular
+file with one link, owned by this user; group/other permission bits are removed
+(`fchmod` 0600) before the key is used, anything else is not a key. A file
+SHORTER than a key (a crash mid-write, a full disk, an edit) used to leave the
+install without a fingerprint for good; it is now replaced — a fresh `mkstemp`
+temp + `os.replace`, serialised by `<tenant>/global/.chat_debug_fp.lock` so two
+repairers end up with one key. A usable key is never replaced. The log is opened `O_NOFOLLOW` at 0600 (an older, looser file is
+tightened; a planted symlink is removed, never written through). Files written
+before these rules (`prompt_preview`, raw `chat_key`) are **cleaned in place**
+on the first write per workdir and process — `chat_debug.jsonl`, `.1` and `.2`:
+each line loses those fields (the raw key becomes the keyed fingerprint), an
+unparseable line is dropped, a file that cannot be cleaned is removed. They are
+not renamed or kept: a renamed copy would still be a plaintext preview in the
+worker's cwd. The file is NOT yet covered by the Art. 17 orchestrator (open,
+erasure cluster). Guard: `shared/test_adapter_debug_log_and_failed_turn.py`.
+The boot reaper (`TaskManager.reap_stale_running`,
 run by the adapter AND by every console/gateway boot) never reaps a turn
 whose engine pid (`ENGINE_START_EVENTS`) OR owning process
 (`owner_pid` with the same `owner_start`, so a recycled pid is no owner) is
@@ -1404,6 +1423,93 @@ a native turn never resumes a route session. `reset_claude_session_state` (`/new
 corruption) clears the chat's route sessions together with the native one and records the ledger
 boundary against the chat; a reset on a route directory records it against its parent. This is
 not a new reset reason: `manual` still is the only one that fences re-supply.
+
+**The ledger records the session a turn ran in.** `append_turn(..., route=<route dir name>)`
+writes `route` on the record of a rerouted turn (absent for a native one). Coverage is decided
+per session (`uncovered_turns(records, live, route=)`): a turn can only be live in the transcript
+of the session it was spawned in, and a turn of another session neither counts as covered nor
+ends the alignment.
+
+**Route regate (`adapter._ledger_regate_for_route`).** `_resolve_spawn_inputs` renders the
+history block before the route is known — coverage against the chat's own session, every turn
+judged for the native engine. Once the turn is started on a provider (rerouted, or a provider
+assigned to `claude_code`) the block is rendered again: against the route session's transcript,
+with `_ledger_withhold(..., provider=)` (a provider without a `provider_compliance` entry, or an
+endpoint that cannot be named, is cleared for nothing), and it REPLACES the native block. The
+native block travels with the turn's own spawn inputs (`resolved["_ledger_block"]`, popped
+before the engine call) — it was a process-wide dict once, and an evicted or overwritten entry
+left the native block in place next to the provider's. Fail-closed in two steps: a failed
+re-render removes the native block and the turn starts without re-supplied history; a native
+block that cannot be removed (not found exactly once where this turn put it, or an unwritable
+system-prompt file) **refuses the turn** (`[security] …`, `l34_route_unavailable`) — text judged
+for the native engine never reaches the provider beside its own block. A failed re-render also
+removes the VIEW in the worker's cwd (R3-BR-1): `render_context` swallows its errors and returns
+`""`, and for a provider assigned to `claude_code` (no route directory) the view lying in the
+chat workdir is the one `_resolve_spawn_inputs` had just published with the NATIVE engine's
+withholding. `render_context` unlinks the view of its target directory in its `except` path and
+`_ledger_regate_for_route` does the same when the failure is raised before it is called.
+
+**A history view exists only for the session that is running.** The route view
+(`<chat>/.route-<provider>-<hash>/.corvin-history.md`) carries the PROVIDER's withholding and sits
+below the native worker's cwd; the chat's own view carries the NATIVE engine's withholding and
+sits one directory above the provider worker's cwd. So: rendering for a route removes the chat's
+view first; the route view is removed when that spawn ends, however it ends
+(`_route_view_scoped`); and every native render (`session_ledger.purge_route_views`) removes any
+route view a killed spawn left behind. Both views are rendered from the record on every spawn,
+never copied. Stated boundary (R3-BR-9, re-checked 2026-11-19 and left as is): the route
+directory itself stays below the chat workdir. `session_state.reset_claude_session_state` /
+`_route_dirs` and the console's `chat_runtime` (ADR-2268 console reroute) both locate route
+sessions as `<chat workdir>/.route-*`; moving them out needs both changed in one step, and
+`chat_runtime` builds the same path for the console. What the layout costs is bounded by the
+rule above — a route view exists only while the provider's CLI runs — but during that window
+a native worker of the SAME chat that is running concurrently (a `/btw` side turn, a background
+task) can read `<cwd>/.route-*/.corvin-history.md`. Also stated: the CLI's own transcripts under
+`~/.claude/projects` are readable by any worker of the same OS user — that needs OS-level
+isolation, not another unlink. Guard: `shared/test_ledger_reroute_regate_e2e.py`
+(`test_no_provider_view_plaintext_is_left_below_the_native_cwd` is the counter-direction test).
+
+**One chat id, one directory (R3-NEW-16, 2026-11-19).** A chat's workdir, its CLI session, its
+`.corvin-history.md` and its ledger store are all named after the SANITISED chat id
+(`session_state.legacy_chat_key`: alnum kept, everything else `_`, 64 chars). That form is
+lossy — `a.b@x.com`, `a_b@x.com` and `a-b@x.com` are all `a_b_x_com`, and the e-mail bridge
+keys a chat by its From address — so two people could share one session and one history.
+`adapter._session_dir` now resolves the name through `session_state.resolve_chat_dir`:
+
+* the legacy name is this chat's or nobody's → the legacy name. Every chat that existed before
+  the rule and every chat nobody collides with keeps its directory; nothing is renamed;
+* the legacy name belongs to a different chat id → `hashed_chat_key` (readable prefix + `_` +
+  `sha256(raw id)[:16]`, 64 chars at most), and it stays there (a hashed directory that exists
+  wins);
+* two ids that ALREADY shared a directory (the ledger holds turns of both): neither keeps it.
+  Both get their own hashed directory and start without re-supplied history; the shared
+  directory and its mixed ledger are left untouched (not merged, not split, not deleted).
+
+Ownership is `owner.json` (`{"chat_key": <raw id>, "claimed_at"}`, 0600) in the chat's ledger
+store — outside every worker cwd — written by hard-linking a fresh temp (never an overwrite, so
+two ids racing for one name cannot both win). Without a marker the ledger decides: a recorded
+TURN of another id that maps to the same name makes it foreign; boundary records are not
+evidence (the inactivity sweep writes them under the directory name). An unreadable marker
+grants the name to nobody. `session_state.claude_session_dirs` (reset, completion notices)
+resolves the same way without ever writing. Residual, stated: the proof covers what the ledger
+recorded (since 2026-10-02) — a directory two ids shared only BEFORE that looks unclaimed and
+goes to whoever asks first, as it did before. Mirrors of the name that do not call
+`session_state` still compute the legacy form and therefore miss a hashed directory:
+`spg.py::_resolve_session_dir`, and the directory-name matches in `erasure_handlers.py`
+(`_ledger_safe_key` / `_subject_value_forms` — add `session_state.chat_dir_names(subject)[1]`).
+The per-chat stores of `consent.py`, `roles.py`, `quota.py`, `disclosure.py`, `goal.py`,
+`ulo.py`, `proposal.py` and `engine_switch.py` each have their own copy of the lossy form and
+are NOT covered by this rule. The CEL anchor / seen-topics stores are: `anchor._safe_key`
+keeps the old name for keys it proves collision-free (`<channel>:<id>[@<domain>]` without `_`,
+console sids) and gives every other key `<readable>__<sha256[:16]>`; an old store moves to the
+new name only when every entry's `sender` is the chat id itself. Guard:
+`shared/test_review_20261119_r3_bridge.py`.
+
+**A turn that raised is recorded.** After the CLI was started: as it ran (`spawned` as
+measured, the answer = delivered interims + one line naming the exception TYPE, never its
+message). Before any CLI start (a delegated path, a pre-spawn step): `spawned: false`,
+`refused: "failed_before_spawn"`, the exception type — and the text as hash + length only,
+because nothing proves which pre-spawn gates the turn passed (the console's turn log treats an
+undelivered message the same way). The exception still leaves `process_one`.
 
 ### CEL session identity on the bridge
 

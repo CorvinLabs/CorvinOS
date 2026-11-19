@@ -17,8 +17,31 @@ from datetime import datetime
 from typing import Any, Optional
 from dataclasses import dataclass, asdict
 from contextlib import contextmanager
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _relative_caller_file(filename: str) -> str:
+    """Repo-relative POSIX path of a caller, or just its file name.
+
+    ``co_filename`` is absolute: it carries the install location and, on most
+    machines, the OS user name (``/home/<user>/...``) - personal data that
+    went into the permanent audit chain with every deprecated call. Inside the
+    checkout the path is made relative (which is also what the Phase C gate
+    expects: it tests ``startswith("core/legacy_compat")``, and an absolute
+    path never matched). Anything outside it is reduced to the base name.
+    """
+    try:
+        path = Path(filename)
+        try:
+            return path.resolve().relative_to(_REPO_ROOT).as_posix()
+        except ValueError:
+            return path.name
+    except (OSError, RuntimeError, TypeError):
+        return ""
 
 # Audit goes through the core hash-chained writer (verified commit). Until
 # 2026-09-07 this imported a `get_audit_writer` that never existed, so the
@@ -136,7 +159,7 @@ class DeprecatedAPICallLogger:
             DeprecatedAPIEvent (immutable audit record)
         """
         frame = inspect.currentframe().f_back
-        caller_file = frame.f_code.co_filename
+        caller_file = _relative_caller_file(frame.f_code.co_filename)
         caller_line = frame.f_lineno
         caller_func = frame.f_code.co_name
 

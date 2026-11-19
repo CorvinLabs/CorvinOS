@@ -6,9 +6,11 @@ ONE implementation shared by every consumer of a connection's credentials:
 * the chat tool ``datasource_query`` (forge MCP server).
 
 Credentials: a connection manifest stores only the NAMES of its secrets
-(``secrets: ["PGUSER", "PGPASSWORD"]``). The values live in the forge secret
-vault (``forge.secret_vault``), which is where the Databases form's
-``POST /data-sources/_secrets/{NAME}`` writes them.
+(``secrets: ["PGUSER", "PGPASSWORD"]``). The values live in the TENANT's forge
+secret vault (``forge.secret_vault.tenant_vault_path``), which is where the
+Databases form's ``POST /data-sources/_secrets/{NAME}`` writes them. A secret
+is released only to the tenant that stored it and only for the target (host)
+it is bound to.
 
 Fail-CLOSED: a declared connection that cannot be resolved (bad name, missing or
 malformed file, missing secret) raises ``ValueError`` - callers must never run
@@ -48,8 +50,51 @@ def load_connection(corvin_home: Any, tenant_id: str, name: str) -> dict[str, An
     return raw
 
 
-def env_for_connection(raw: dict[str, Any], name: str = "") -> dict[str, str]:
-    """Driver env for an already-loaded manifest (credentials from the vault)."""
+# Names a manifest may never have injected into a driver process, whatever the
+# vault holds: Corvin's own credentials and the process environment. The console
+# refuses to STORE these; a manifest written by hand or by ``datasource_connect``
+# could still NAME them (review 2026-11-19, R3-NEW-3).
+_RESERVED_EXACT = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "PWD", "TERM", "LANG", "TMPDIR", "DISPLAY",
+    "IFS", "ENV", "EDITOR", "PAGER", "HOSTALIASES",
+})
+_RESERVED_PREFIX = (
+    "ANTHROPIC", "OPENAI", "OPENROUTER", "OLLAMA", "CORVIN", "CLAUDE", "FORGE_", "XDG_",
+    "LD_", "PYTHON", "DYLD_", "NODE_", "BASH_", "GIT_", "SSH_", "LC_",
+)
+_RESERVED_PARTS = ("AUDIT", "VAULT", "POLICY", "LICENSE")
+_SECRET_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+
+
+def secret_name_reserved(name: str) -> bool:
+    """True when *name* must never be injected as a datasource credential."""
+    upper = str(name).upper()
+    return (
+        not _SECRET_NAME_RE.match(str(name))
+        or upper in _RESERVED_EXACT
+        or upper.startswith(_RESERVED_PREFIX)
+        or any(part in upper for part in _RESERVED_PARTS)
+    )
+
+
+def binding_target(raw: dict[str, Any]) -> str:
+    """The target a connection's secrets are bound to: its host, else its adapter."""
+    cfg = raw.get("config") if isinstance(raw.get("config"), dict) else {}
+    for key in ("host", "hostname", "server", "endpoint_url", "endpoint", "account", "url"):
+        value = cfg.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower().rstrip(".")
+    return "adapter:" + str(raw.get("adapter", "")).strip().lower()
+
+
+def env_for_connection(
+    raw: dict[str, Any], name: str = "", *, tenant_id: str | None = None,
+) -> dict[str, str]:
+    """Driver env for an already-loaded manifest (credentials from the vault).
+
+    Secrets come from *tenant_id*'s own vault only (default: the process tenant),
+    never from another tenant's, and only for the target the secret is bound to.
+    """
     try:
         from forge import secret_vault as _vault  # type: ignore[import]
     except Exception:  # noqa: BLE001
@@ -81,12 +126,25 @@ def env_for_connection(raw: dict[str, Any], name: str = "") -> dict[str, str]:
         if cfg.get("user"):
             env["MYSQL_USER"] = str(cfg["user"])
     # Vault-sourced secrets (passwords / tokens): NAMES only on disk.
-    secrets = [s for s in (raw.get("secrets") or []) if isinstance(s, str)]
+    declared = raw.get("secrets") or []
+    if not isinstance(declared, list) or any(not isinstance(s, str) for s in declared):
+        raise ValueError(f"datasource {name!r}: 'secrets' must be a list of names")
+    secrets = list(dict.fromkeys(declared))
     if secrets:
+        reserved = [s for s in secrets if secret_name_reserved(s)]
+        if reserved:
+            raise ValueError(
+                f"datasource {name!r} names reserved secret(s) {reserved}: process and "
+                "Corvin credentials are never injected into a driver")
         if _vault is None:
             raise ValueError(
                 f"datasource {name!r} declares secrets {secrets} but the forge vault is unavailable")
-        resolved, missing = _vault.resolve_secrets(secrets)
+        try:
+            tid = tenant_id if tenant_id is not None else _vault.process_tenant_id()
+            resolved, missing = _vault.resolve_secrets(
+                secrets, tenant_id=tid, bind_to=binding_target(raw))
+        except _vault.VaultError as exc:  # includes SecretBindingError
+            raise ValueError(f"datasource {name!r} secret(s) not released: {exc}") from exc
         if missing:
             raise ValueError(f"datasource {name!r} secret(s) missing from vault: {missing}")
         env.update({k: v for k, v in resolved.items() if isinstance(v, str)})
@@ -98,5 +156,5 @@ def resolve_connection_env(corvin_home: Any, tenant_id: str, names: list[str]) -
     env: dict[str, str] = {}
     for name in names:
         raw = load_connection(corvin_home, tenant_id, name)
-        env.update(env_for_connection(raw, name))
+        env.update(env_for_connection(raw, name, tenant_id=tenant_id))
     return env

@@ -4,9 +4,13 @@ from core.orchestration.workflow_engine import WorkflowEngine
 
 @pytest.mark.asyncio
 async def test_multi_tenant_quota():
+    # No quota backend exists behind MultiTenantManager. Until 2026-11-19 both
+    # calls answered True unconditionally and this test pinned that.
+    from core.multi_tenant.tenant_isolation import QuotaNotImplemented
     mgr = MultiTenantManager()
-    assert await mgr.check_quota("tenant1", 100.0) == True
-    assert await mgr.deduct_cost("tenant1", 50.0) == True
+    assert await mgr.check_quota("tenant1", 100.0) is False
+    with pytest.raises(QuotaNotImplemented):
+        await mgr.deduct_cost("tenant1", 50.0)
 
 @pytest.mark.asyncio
 async def test_workflow_optimization():

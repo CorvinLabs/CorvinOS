@@ -31,7 +31,6 @@ session's view of memory unfiltered (ADR-2098 §4, Session-Independence).
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -103,13 +102,11 @@ def collapse_duplicates(matches: list) -> "tuple[list, list[dict]]":
 # ── Session-scoped "already surfaced" store (mirrors anchor.py's shape) ────
 
 def _safe_key(session_key: str) -> str:
-    s = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_key or "")).strip("_")
-    if not s:
-        return "_nosession"
-    if len(s) > 100:
-        digest = hashlib.sha1(str(session_key).encode("utf-8")).hexdigest()[:12]
-        s = s[:80] + "_" + digest
-    return s
+    """The same collision-free name the anchor store uses (``anchor._safe_key``): the two
+    stores are per-session siblings and ``erasure_handlers`` matches both with one rule.
+    The old name here was the lossy one (``a+b`` and ``a_b`` shared a seen-topics file)."""
+    from .anchor import _safe_key as _anchor_safe_key  # noqa: PLC0415
+    return _anchor_safe_key(session_key)
 
 
 def _store_path(tenant_id: str, session_key: str) -> Path:

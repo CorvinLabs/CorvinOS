@@ -88,12 +88,17 @@ class TokenGenerationTests(unittest.TestCase):
         self.assertIsNotNone(token.exp)
         self.assertAlmostEqual(token.exp, now_before + 7 * 86400, delta=5)
 
-    def test_no_expiry_when_ttl_none(self):
+    def test_ttl_none_is_the_default_lifetime_never_no_expiry(self):
+        # Review 2026-11-19 (A2A-13): every invite expires.
         with tempfile.TemporaryDirectory() as d:
             key_path = Path(d) / "mk"
             with mock.patch.dict(os.environ, {"CORVIN_A2A_INVITE_MASTER_KEY_PATH": str(key_path)}):
-                token, _ = inv.generate_invite(iid="i", origin_id="p", url="https://a.b", ttl_seconds=None)
-        self.assertIsNone(token.exp)
+                before = time.time()
+                token, token_str = inv.generate_invite(
+                    iid="i", origin_id="p", url="https://a.b", ttl_seconds=None)
+                parsed = inv.parse_invite(token_str)[0]
+        self.assertAlmostEqual(token.exp, before + inv.DEFAULT_INVITE_TTL_S, delta=5)
+        self.assertEqual(parsed.exp, token.exp)
 
     def test_ikey_is_16_hex_chars(self):
         with tempfile.TemporaryDirectory() as d:
@@ -202,10 +207,14 @@ class ExpiryAndValidationTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.reason, "expired")
 
-    def test_no_expiry_token_always_valid(self):
-        token = self._token_with_exp(None)
-        result = inv.validate_invite(token, now=time.time() + 1_000_000)
-        self.assertTrue(result.ok)
+    def test_a_token_without_expiry_is_never_valid(self):
+        # Review 2026-11-19 (A2A-13): exp is mandatory; a hand-built token
+        # object without one is refused (parse_invite never returns one).
+        import dataclasses
+        token = dataclasses.replace(self._token_with_exp(time.time() + 9999), exp=None)
+        result = inv.validate_invite(token, now=time.time())
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, "no_expiry")
 
     def test_revoked_token_rejected(self):
         token = self._token_with_exp(time.time() + 9999)
@@ -365,6 +374,107 @@ class CILintTests(unittest.TestCase):
 
     def test_a2a_invite_registry_no_anthropic(self):
         self._check_no_anthropic(_REAL / "a2a_invite_registry.py")
+
+
+class InviteFormValidationTests(unittest.TestCase):
+    """Review 2026-11-19 (A2A-13): the payload FORM is enforced at parse time —
+    the accepting side cannot check a foreign signature and writes these fields
+    into its origin / endpoint files."""
+
+    def _raw(self, **over):
+        import base64 as _b64
+        import json as _json
+        import secrets as _secrets
+        p = {"v": 1, "iid": "issuer-1", "oid": "peer1", "url": "https://a.example",
+             "rp": "/v1/a2a/receive", "hk": _secrets.token_hex(32),
+             "rk": _secrets.token_hex(32), "pa": ["assistant"], "mt": 300,
+             "iat": 1000.0, "exp": 1000.0 + 3600, "su": False, "sw": False}
+        for k, v in over.items():
+            if v is _DROP:
+                p.pop(k, None)
+            else:
+                p[k] = v
+        pb = _json.dumps(p, sort_keys=True, separators=(",", ":")).encode()
+        enc = lambda b: _b64.urlsafe_b64encode(b).rstrip(b"=").decode()  # noqa: E731
+        return f"{inv.TOKEN_PREFIX}{enc(pb)}.{enc(b'x' * 32)}"
+
+    def test_positive_control_a_well_formed_token_parses(self):
+        tok = inv.parse_invite(self._raw())[0]
+        self.assertEqual((tok.oid, tok.mt, tok.pa), ("peer1", 300, ["assistant"]))
+        self.assertEqual(len(tok.hk), 64)
+
+    def _refused(self, **over):
+        with self.assertRaises(inv.InviteError, msg=repr(over)):
+            inv.parse_invite(self._raw(**over))
+
+    def test_keys_must_be_64_hex(self):
+        for bad in ("", "ab" * 31, "ab" * 33, "zz" * 32, None, 12345, ["a"], "ab" * 32 + "\n"):
+            self._refused(hk=bad)
+            self._refused(rk=bad)
+
+    def test_the_two_keys_must_differ(self):
+        self._refused(hk="ab" * 32, rk="AB" * 32)
+
+    def test_persona_list_is_a_bounded_list_of_identifiers(self):
+        for bad in ("assistant", [], [""], ["a/b"], ["../x"], [1], None, {"a": 1},
+                    ["ok", "bad name"], [f"p{i}" for i in range(inv.MAX_PERSONAS + 1)]):
+            self._refused(pa=bad)
+
+    def test_mt_is_a_bounded_integer(self):
+        for bad in (0, -1, inv.MAX_CALL_TTL_S + 1, 10 ** 12, "300", 3.5, True, None):
+            self._refused(mt=bad)
+
+    def test_exp_is_mandatory_and_bounded(self):
+        self._refused(exp=_DROP)
+        for bad in (None, "soon", True, 999.0, 1000.0,
+                    1000.0 + inv.MAX_INVITE_TTL_S + 10, float("inf")):
+            self._refused(exp=bad)
+
+    def test_version_and_flags_are_typed(self):
+        self._refused(v=2)
+        self._refused(v=True)
+        self._refused(su="yes")
+        self._refused(sw=1)
+        self._refused(iat="now")
+
+    def test_generate_refuses_out_of_form_arguments(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.dict(os.environ, {"CORVIN_A2A_INVITE_MASTER_KEY_PATH": f"{d}/mk"}):
+            base = dict(iid="i", origin_id="p", url="https://a.b")
+            for bad in (dict(max_ttl_s=0), dict(max_ttl_s=10 ** 9),
+                        dict(allowed_personas=["a b"]), dict(allowed_personas=[]),
+                        dict(ttl_seconds=0), dict(ttl_seconds=inv.MAX_INVITE_TTL_S + 1),
+                        dict(ttl_seconds=float("inf"))):
+                with self.assertRaises(inv.InviteError, msg=repr(bad)):
+                    inv.generate_invite(**base, **bad)
+
+    def test_master_key_file_is_0600_from_creation(self):
+        if os.name != "posix":
+            self.skipTest("POSIX modes")
+        with tempfile.TemporaryDirectory() as d:
+            key_path = Path(d) / "sub" / "mk"
+            seen = []
+            real_link = os.link
+
+            def _spy(src, dst, *a, **k):
+                seen.append(os.stat(src).st_mode & 0o777)   # mode BEFORE publication
+                return real_link(src, dst, *a, **k)
+
+            old_umask = os.umask(0o000)                      # worst case: umask 0
+            try:
+                with mock.patch.dict(os.environ, {"CORVIN_A2A_INVITE_MASTER_KEY_PATH": str(key_path)}), \
+                        mock.patch.object(os, "link", _spy):
+                    k1 = inv._load_or_create_master_key()
+                    k2 = inv._load_or_create_master_key()
+            finally:
+                os.umask(old_umask)
+            self.assertEqual(seen, [0o600])
+            self.assertEqual(key_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(k1, k2)
+            self.assertEqual([p.name for p in key_path.parent.iterdir()], ["mk"])
+
+
+_DROP = object()
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { ApiError } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth";
+import { safeHttpUrl } from "@/lib/safe-url";
 import { KEY_INDEX, KEY_INSTALLED, KEY_STATS } from "../header";
 import {
   KEY_UPDATES, enablePlugin, getInstallProgress, listIndex, listPluginUpdates, refusedEscalations,
@@ -92,6 +93,11 @@ function EntryCard({ p, csrf, onGoTo, update }: {
   const [installModalOpen, setInstallModalOpen] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [detail, setDetail] = useState(false);
+  // Index values come from a remote marketplace index: only an absolute http(s)
+  // URL becomes a link; anything else (javascript:, data:, relative) stays text.
+  const licenseHref = safeHttpUrl(p.license_url);
+  const sourceHref = safeHttpUrl(p.distribution?.source_url);
+  const readmeHref = safeHttpUrl(p.readme_url);
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: [...KEY_INDEX] });
     qc.invalidateQueries({ queryKey: [...KEY_INSTALLED] });
@@ -220,19 +226,19 @@ function EntryCard({ p, csrf, onGoTo, update }: {
               <dt className="text-muted-foreground">Category</dt><dd>{p.category}</dd>
               <dt className="text-muted-foreground">Author</dt><dd>{p.author || "—"}</dd>
               <dt className="text-muted-foreground">License</dt>
-              <dd>{p.license_url ? <a className="underline" href={p.license_url} target="_blank" rel="noreferrer">{p.license}</a> : p.license || "—"}</dd>
+              <dd>{licenseHref ? <a className="underline" href={licenseHref} target="_blank" rel="noreferrer">{p.license || licenseHref}</a> : p.license || "—"}</dd>
               <dt className="text-muted-foreground">Source</dt>
-              <dd>{p.distribution?.source_url
-                ? <a className="underline inline-flex items-center gap-1" href={p.distribution.source_url} target="_blank" rel="noreferrer">{p.distribution.source_url} <ExternalLink size={12} /></a>
-                : "—"}</dd>
+              <dd>{sourceHref
+                ? <a className="underline inline-flex items-center gap-1" href={sourceHref} target="_blank" rel="noreferrer">{sourceHref} <ExternalLink size={12} /></a>
+                : p.distribution?.source_url || "—"}</dd>
               <dt className="text-muted-foreground">Requires</dt><dd>{p.requires_version || "—"}</dd>
               <dt className="text-muted-foreground">Registry id</dt><dd className="font-mono">{p.registry_id ?? "—"}</dd>
               <dt className="text-muted-foreground">On this build</dt>
               <dd>{p.installed ? `installed${p.enabled ? ", enabled" : ", disabled"}${p.runtime_loaded ? ", running" : ""}`
                 : p.installable ? "installable" : `not installable: ${p.install_blocker}`}</dd>
             </dl>
-            {p.readme_url && (
-              <a className="underline text-xs inline-flex items-center gap-1" href={p.readme_url} target="_blank" rel="noreferrer">README <ExternalLink size={12} /></a>
+            {readmeHref && (
+              <a className="underline text-xs inline-flex items-center gap-1" href={readmeHref} target="_blank" rel="noreferrer">README <ExternalLink size={12} /></a>
             )}
           </div>
         </DialogContent>

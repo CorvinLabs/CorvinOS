@@ -40,6 +40,7 @@ const { writeInboxAtomic }      = require('../shared/js/inbox_write');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
 const { countPending }          = require('../shared/js/outbox');
+const { sanitizeAttachmentPaths } = require('../shared/js/outbox_paths');
 const {
   normalizeExecutionContext, shouldRenderContext,
   formatEngineId, formatDelegationMode, formatDuration, formatTokens,
@@ -590,7 +591,9 @@ async function handleParsed(parsed, uid) {
   // /help, /personas, /persona, /schedule, … — the same in-chat dispatcher.
   const cwk = inChatCmds.dispatch({
     text, channel: CHANNEL, chatKey: fromAddr,
-    isOwner: true, settingsFile: SETTINGS_FILE,
+    // Owner = whitelist membership only; an `audience=all` guest is not an
+    // owner (review 2026-11-19, R3-NEW-2).
+    isOwner: classify(fromAddr, null) === 'owner', settingsFile: SETTINGS_FILE,
   });
   if (cwk) {
     await sendReply(fromAddr, subject, cwk.reply, []);
@@ -750,6 +753,9 @@ setInterval(() => {
       try { payload = JSON.parse(fs.readFileSync(fpath, 'utf8')); }
       catch (e) { log(`bad json ${f}: ${e.message}`); fs.unlinkSync(fpath); continue; }
       if ((payload.channel || 'whatsapp') !== CHANNEL) continue;
+      // Never mail out a file from outside the outbox / session workdirs
+      // (outbox_paths.js, review 2026-11-19 R3-NEW-41).
+      sanitizeAttachmentPaths(payload, OUTBOX, { logger: log });
       try {
         await processOutboxItem(payload, fpath);
         fs.unlinkSync(fpath);

@@ -32,6 +32,8 @@ operator can check the arithmetic. See ``_LOOP_DOC`` for the per-loop mapping.
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -117,55 +119,189 @@ def _audit_event_key(rec: Dict[str, Any]) -> Optional[str]:
     return rec.get("event_type") or rec.get("event") or rec.get("action") or rec.get("type")
 
 
+# Incremental chain index (review 2026-11-19 round 3, R3-NEW-11)
+# -------------------------------------------------------------
+# Every dashboard request used to parse the WHOLE chain (plus its seam-linked
+# history) - twice per measurement, four times per anomaly request - from an
+# ``async def`` handler. On a 500 MB chain that is the "console stops
+# answering" incident shape. The dashboard only ever needs, per window, how
+# often each event type occurred and (for the trend line) in which hour. So
+# the chain is folded ONCE into ``{hour -> {event_type -> count}}`` and each
+# later request reads only the bytes appended since the previous one.
+#
+# * Per tenant: the index is keyed by tenant id and built from that tenant's
+#   own ``tenant_audit_chain()`` - there is no shared state across tenants.
+# * Hour buckets: a window edge is therefore resolved to the hour (the bucket
+#   containing ``since`` is counted whole). Windows are 1-90 days.
+# * A file that shrank or was replaced (different inode) rebuilds the index.
+# * BLOCKING. Route handlers call the builders through an awaited
+#   ``asyncio.to_thread``; the first build of a large chain takes seconds.
+
+_HOUR = 3600
+
+
+class _ChainIndex:
+    __slots__ = ("lock", "cursors", "hours", "undated", "total")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        #: file path -> (inode, byte offset just past the last complete line)
+        self.cursors: Dict[str, Tuple[int, int]] = {}
+        #: hour start (epoch seconds) -> event type -> count
+        self.hours: Dict[int, Dict[str, int]] = {}
+        #: records without a parseable time (counted in every window, as "now")
+        self.undated: Dict[str, int] = {}
+        #: non-empty lines seen across all files (the audit loop's own signal)
+        self.total = 0
+
+    def reset(self) -> None:
+        self.cursors.clear()
+        self.hours.clear()
+        self.undated.clear()
+        self.total = 0
+
+
+_INDEXES: Dict[str, _ChainIndex] = {}
+_INDEXES_LOCK = threading.Lock()
+
+
+def _index_for(tenant_id: str) -> _ChainIndex:
+    with _INDEXES_LOCK:
+        idx = _INDEXES.get(tenant_id)
+        if idx is None:
+            idx = _INDEXES[tenant_id] = _ChainIndex()
+        return idx
+
+
+def _chain_files(tenant_id: str) -> List[Path]:
+    """Seam-linked history (oldest first) + the canonical chain. ADR-2058:
+    after a chain loss the canonical file restarts, and reading it alone
+    reported a months-old install as brand new. History is read, never touched."""
+    path = _audit_chain_path(tenant_id)
+    if not path or not path.exists():
+        return []
+    try:
+        from core.paths.chain_history import chain_history_files  # noqa: PLC0415
+        return [*chain_history_files(path), path]
+    except Exception as exc:  # noqa: BLE001 - history is additive, never fatal
+        log.warning("maturity: chain history unavailable: %r", exc)
+        return [path]
+
+
+def _fold_file(idx: _ChainIndex, file_path: Path, *, is_canonical: bool) -> None:
+    """Fold the bytes of ``file_path`` not yet seen into ``idx``."""
+    key = str(file_path)
+    try:
+        fh = file_path.open("rb")
+    except OSError as exc:
+        log.warning("maturity: audit read failed: %r", exc)
+        return
+    with fh:
+        try:
+            st = os.fstat(fh.fileno())
+            _ino, offset = idx.cursors.get(key, (st.st_ino, 0))
+            fh.seek(offset)
+            for raw in fh:
+                if not raw.endswith(b"\n") and is_canonical:
+                    # The writer is mid-append: leave the line for the next pass.
+                    break
+                offset += len(raw)
+                line = raw.strip()
+                if not line:
+                    continue
+                idx.total += 1
+                try:
+                    rec = json.loads(line.decode("utf-8", errors="replace"))
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                ev_key = _audit_event_key(rec)
+                if not ev_key:
+                    continue
+                raw_ts = rec.get("ts")
+                ts = _parse_ts(raw_ts if raw_ts is not None else rec.get("timestamp"))
+                if ts is None:
+                    bucket = idx.undated
+                else:
+                    hour = int(ts.timestamp()) // _HOUR * _HOUR
+                    bucket = idx.hours.setdefault(hour, {})
+                k = str(ev_key)
+                bucket[k] = bucket.get(k, 0) + 1
+            idx.cursors[key] = (st.st_ino, offset)
+        except OSError as exc:
+            log.warning("maturity: audit read failed: %r", exc)
+
+
+def _refresh_index(tenant_id: str) -> _ChainIndex:
+    """Bring the tenant's index up to date (reads only appended bytes).
+    Returns it with ``idx.lock`` NOT held; read it under the lock."""
+    idx = _index_for(tenant_id)
+    files = _chain_files(tenant_id)
+    with idx.lock:
+        stale = set(idx.cursors) - {str(f) for f in files}
+        for f in files:
+            cur = idx.cursors.get(str(f))
+            if cur is None:
+                continue
+            try:
+                st = f.stat()
+            except OSError:
+                stale.add(str(f))
+                continue
+            if st.st_ino != cur[0] or st.st_size < cur[1]:
+                stale.add(str(f))
+        if stale:
+            idx.reset()
+        for f in files:
+            _fold_file(idx, f, is_canonical=(f is files[-1]))
+    return idx
+
+
+def _window_buckets(
+    tenant_id: str, since: Optional[datetime]
+) -> Tuple[Dict[int, Dict[str, int]], int]:
+    """``({hour_start: {event_type: count}}, total_chain_length)`` for the
+    window. Undated records are counted in the current hour (as before: a
+    record without a time was dated "now")."""
+    idx = _refresh_index(tenant_id)
+    floor = None if since is None else int(since.timestamp()) // _HOUR * _HOUR
+    with idx.lock:
+        out = {h: dict(c) for h, c in idx.hours.items() if floor is None or h >= floor}
+        if idx.undated:
+            now_h = int(_now().timestamp()) // _HOUR * _HOUR
+            cur = out.setdefault(now_h, {})
+            for k, v in idx.undated.items():
+                cur[k] = cur.get(k, 0) + v
+        return out, idx.total
+
+
+def _merge(buckets: Dict[int, Dict[str, int]]) -> Dict[str, int]:
+    merged: Dict[str, int] = {}
+    for counts in buckets.values():
+        for k, v in counts.items():
+            merged[k] = merged.get(k, 0) + v
+    return merged
+
+
 def read_audit_events(
     tenant_id: str, since: Optional[datetime]
 ) -> Tuple[List[Tuple[datetime, str]], int]:
     """Return ``([(ts, event_type), ...], total_chain_length)`` within the window.
 
-    ``total_chain_length`` is the full line count of the chain (window-
-    independent — it is the audit LOOP's own maturity signal). The event list
-    is filtered to ``since`` (``None`` = no lower bound).
-
-    ADR-2058 — "the chain" is the canonical file PLUS its seam-linked history
-    (``chain_history_files``, oldest first): after a chain loss the canonical
-    file restarts, and reading it alone reported a months-old install as brand
-    new. History files are read, never touched.
+    Kept for callers that want the flat list. ``ts`` is the START OF THE HOUR
+    the record fell into (the index keeps counts per hour, not per record).
+    ``total_chain_length`` is the full line count of the chain and its
+    seam-linked history (window-independent - the audit LOOP's own maturity
+    signal). ``since=None`` means no lower bound. The dashboard builders use
+    :func:`_window_buckets` directly and never materialise this list.
     """
-    path = _audit_chain_path(tenant_id)
+    buckets, total = _window_buckets(tenant_id, since)
     events: List[Tuple[datetime, str]] = []
-    total = 0
-    if not path or not path.exists():
-        return events, total
-    try:
-        from core.paths.chain_history import chain_history_files  # noqa: PLC0415
-        files = [*chain_history_files(path), path]
-    except Exception as exc:  # noqa: BLE001 — history is additive, never fatal
-        log.warning("maturity: chain history unavailable: %r", exc)
-        files = [path]
-    for file_path in files:
-        try:
-            with file_path.open("r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    total += 1
-                    try:
-                        rec = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(rec, dict):
-                        continue
-                    key = _audit_event_key(rec)
-                    if not key:
-                        continue
-                    raw_ts = rec.get("ts")
-                    ts = _parse_ts(raw_ts if raw_ts is not None else rec.get("timestamp"))
-                    if since is not None and ts is not None and ts < since:
-                        continue
-                    events.append((ts or _now(), str(key)))
-        except OSError as exc:
-            log.warning("maturity: audit read failed: %r", exc)
+    for hour in sorted(buckets):
+        dt = datetime.fromtimestamp(hour, tz=timezone.utc)
+        for key, n in buckets[hour].items():
+            events.extend([(dt, key)] * n)
     return events, total
 
 
@@ -176,6 +312,12 @@ class _Counts:
         self._c: Dict[str, int] = {}
         for _ts, key in events:
             self._c[key] = self._c.get(key, 0) + 1
+
+    @classmethod
+    def from_counts(cls, counts: Dict[str, int]) -> "_Counts":
+        self = cls([])
+        self._c = dict(counts)
+        return self
 
     def exact(self, *keys: str) -> int:
         return sum(self._c.get(k, 0) for k in keys)
@@ -384,8 +526,8 @@ def build_measurement(tenant_id: str, window: str = "7d") -> Dict[str, Any]:
     since_dt = _now() - timedelta(days=days)
     since_date = since_dt.strftime("%Y-%m-%d")
 
-    audit_events, chain_len = read_audit_events(tenant_id, since_dt)
-    counts = _Counts(audit_events)
+    buckets, chain_len = _window_buckets(tenant_id, since_dt)
+    counts = _Counts.from_counts(_merge(buckets))
     learning = _learning_metrics(tenant_id, since_date)
 
     health = _component_health(counts, learning, chain_len)
@@ -397,7 +539,7 @@ def build_measurement(tenant_id: str, window: str = "7d") -> Dict[str, Any]:
     mean_drift = round(sum(active_drifts) / len(active_drifts), 4) if active_drifts else 0.0
 
     # Real trend from the meta-convergence history buckets over the window.
-    hist = build_history(tenant_id, "meta_convergence", window)
+    hist = _history_points(buckets, learning, "meta_convergence", days)
     if len(hist) >= 2:
         span = max(1, WINDOW_DAYS.get(window, 7))
         delta = round(hist[-1]["score"] - hist[0]["score"], 2)
@@ -471,28 +613,39 @@ def build_history(tenant_id: str, loop: str, window: str = "today") -> List[Dict
     """
     days = WINDOW_DAYS.get(window, 1)
     since_dt = _now() - timedelta(days=days)
-    audit_events, _chain_len = read_audit_events(tenant_id, since_dt)
-    if not audit_events:
+    buckets, _chain_len = _window_buckets(tenant_id, since_dt)
+    if not buckets:
         return []
-
-    # Bucket granularity: hourly for <=1 day, daily otherwise.
-    hourly = days <= 1
-    buckets: Dict[str, List[Tuple[datetime, str]]] = {}
-    for ts, key in audit_events:
-        label = ts.strftime("%Y-%m-%dT%H:00" if hourly else "%Y-%m-%d")
-        buckets.setdefault(label, []).append((ts, key))
-
     learning = _learning_metrics(tenant_id, since_dt.strftime("%Y-%m-%d"))
+    return _history_points(buckets, learning, loop, days)
+
+
+def _history_points(
+    hour_buckets: Dict[int, Dict[str, int]],
+    learning: Dict[str, Any],
+    loop: str,
+    days: int,
+) -> List[Dict[str, Any]]:
+    """Score each hour (window <= 1 day) or day bucket with the snapshot model."""
+    hourly = days <= 1
+    labelled: Dict[str, Dict[str, int]] = {}
+    first_ts: Dict[str, int] = {}
+    for hour in sorted(hour_buckets):
+        dt = datetime.fromtimestamp(hour, tz=timezone.utc)
+        label = dt.strftime("%Y-%m-%dT%H:00" if hourly else "%Y-%m-%d")
+        tgt = labelled.setdefault(label, {})
+        first_ts.setdefault(label, hour)
+        for k, v in hour_buckets[hour].items():
+            tgt[k] = tgt.get(k, 0) + v
+
     points: List[Dict[str, Any]] = []
-    for label in sorted(buckets):
-        ev = buckets[label]
-        counts = _Counts(ev)
-        health = _component_health(counts, learning, len(ev))
+    for label in sorted(labelled):
+        counts = _Counts.from_counts(labelled[label])
+        health = _component_health(counts, learning, counts.total())
         h = health.get(loop, {"active": False, "contribution": 0.0, "drift": 0.0})
-        bucket_dt = ev[0][0]
         points.append({
             "timestamp": label,
-            "unix_time": int(bucket_dt.timestamp()),
+            "unix_time": first_ts[label],
             "score": _score(h),
             "convergence_rate": _meta(counts, learning)["convergence_rate"],
             "drift": h["drift"],

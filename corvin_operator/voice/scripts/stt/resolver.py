@@ -18,6 +18,12 @@ environments, or a data-residency policy forbidding OpenAI — no separate
 sending audio off-box even when a key exists) set
 ``CORVIN_STT_CHAIN=local,openai`` (or pin via ``CORVIN_STT_PROVIDER=local``).
 
+A cloud provider is used only when the turn tenant's L35 egress policy admits
+its host (``egress_gate``, engine id ``stt_openai``): a denied provider is
+skipped in a chain and refused when pinned. ``CORVIN_STT_CHAIN`` that is set
+but names no known provider raises ``STTProviderUnavailable`` - it never
+falls back to the cloud-first default.
+
 A failed ``transcribe()`` call falls through to the next provider in
 the chain for ``STTProviderUnavailable`` / ``STTTranscriptionFailed``,
 and also for ``STTTimeout`` as long as another provider remains in the
@@ -35,7 +41,9 @@ to its own built-in default — there is no caller intent to violate.
 """
 from __future__ import annotations
 
+import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Iterable, Optional
@@ -61,15 +69,72 @@ _PROVIDERS: dict[str, type[STTProvider]] = {
 }
 
 
+#: Providers that send the audio off the host, and the egress-gate engine id
+#: (``egress_gate.DEFAULT_ENGINE_HOSTS``) that names where it goes.
+_CLOUD_ENGINE_IDS: dict[str, str] = {"openai": "stt_openai"}
+_CLOUD_FALLBACK_HOSTS: dict[str, str] = {"openai": "api.openai.com"}
+
+_log = logging.getLogger("corvin.stt.resolver")
+
+
 def _chain_from_env() -> tuple[str, ...]:
     raw = os.environ.get("CORVIN_STT_CHAIN", "")
     if not raw.strip():
         return DEFAULT_CHAIN
     names = tuple(p.strip() for p in raw.split(",") if p.strip())
-    # Drop unknowns silently — typos shouldn't crash the resolver. The
-    # documented behaviour is "try every known name in order"; an
-    # unknown name simply isn't in _PROVIDERS so we skip it.
-    return tuple(n for n in names if n in _PROVIDERS) or DEFAULT_CHAIN
+    known = tuple(n for n in names if n in _PROVIDERS)
+    if not known:
+        # Round 3 (R3-NEW-27): a chain that was SET but names no known
+        # provider used to fall back to DEFAULT_CHAIN - cloud first. An
+        # operator who wrote ``CORVIN_STT_CHAIN=lokal`` to keep audio on the
+        # box got every voice message sent to OpenAI instead. A chain the
+        # operator set is never replaced by a different one.
+        raise STTProviderUnavailable(
+            f"CORVIN_STT_CHAIN names no known STT provider; known: {sorted(_PROVIDERS)}"
+        )
+    # An unknown name next to a known one is still skipped: the remaining
+    # chain is a subset of what the operator asked for, never a superset.
+    return known
+
+
+def _turn_tenant(tenant_id: str | None) -> str:
+    return tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+
+def _cloud_egress_refusal(name: str, tenant_id: str | None) -> str | None:
+    """L35 check before audio leaves the host (R3-NEW-6).
+
+    ``None`` when provider *name* may be used for this tenant, else a short
+    reason. Local providers are never asked. A tenant without an egress policy
+    has no gate (``load_egress_gate_for_tenant`` answers ``None``) and passes,
+    exactly like every engine spawn. A gate that cannot be loaded or raises
+    anything but a decision refuses the cloud provider: the on-box model is the
+    fallback, and "the check broke" must not read as "allowed".
+    """
+    engine_id = _CLOUD_ENGINE_IDS.get(name)
+    if engine_id is None:
+        return None
+    try:
+        try:
+            import egress_gate as _eg  # type: ignore[import-not-found]
+        except ImportError:
+            shared = Path(__file__).resolve().parents[3] / "bridges" / "shared"
+            if str(shared) not in sys.path:
+                sys.path.insert(0, str(shared))
+            import egress_gate as _eg  # type: ignore[import-not-found]
+        gate = _eg.load_egress_gate_for_tenant(_turn_tenant(tenant_id))
+        if gate is None:
+            return None
+        host = _eg.DEFAULT_ENGINE_HOSTS.get(engine_id) or _CLOUD_FALLBACK_HOSTS[name]
+        try:
+            gate.validate_or_raise(host, engine_id=engine_id)
+        except _eg.EgressDenied:
+            return "egress policy denies the provider host"
+        return None
+    except Exception as exc:  # noqa: BLE001 - fail closed for the cloud provider
+        _log.warning("STT egress check for %s failed (%s); provider not used",
+                     name, type(exc).__name__)
+        return f"egress check unavailable ({type(exc).__name__})"
 
 
 def available_providers() -> list[str]:
@@ -190,12 +255,16 @@ def provider_status() -> dict[str, dict]:
     return status
 
 
-def resolve(name: str | None = None) -> STTProvider:
+def resolve(name: str | None = None, *, tenant_id: str | None = None) -> STTProvider:
     """Pick a provider, honouring env override + chain defaults.
 
     Raises ``STTProviderUnavailable`` if no provider in the chain is
     available. Callers that need a specific provider pass *name*
     explicitly (same semantics as the env override).
+
+    ``tenant_id`` is the tenant of the turn whose audio is transcribed; its
+    L35 egress policy decides whether a cloud provider may be picked. Without
+    it the process tenant (``CORVIN_TENANT_ID``, else ``_default``) is used.
     """
     explicit = name or os.environ.get("CORVIN_STT_PROVIDER")
     if explicit:
@@ -204,6 +273,12 @@ def resolve(name: str | None = None) -> STTProvider:
             raise STTProviderUnavailable(
                 f"unknown STT provider {explicit!r}; "
                 f"known: {sorted(_PROVIDERS)}"
+            )
+        refusal = _cloud_egress_refusal(explicit, tenant_id)
+        if refusal:
+            raise STTProviderUnavailable(
+                f"STT provider {explicit!r} is not permitted: {refusal}. "
+                f"No fallback because the provider was pinned."
             )
         instance = cls()
         if not instance.is_available():
@@ -219,6 +294,10 @@ def resolve(name: str | None = None) -> STTProvider:
     for n in chain:
         cls = _PROVIDERS.get(n)
         if cls is None:
+            continue
+        refusal = _cloud_egress_refusal(n, tenant_id)
+        if refusal:
+            failures.append(f"{n}: {refusal}")
             continue
         try:
             instance = cls()
@@ -238,16 +317,22 @@ def transcribe(
     lang: str | None = None,
     timeout_s: float | None = None,
     provider: str | None = None,
+    tenant_id: str | None = None,
 ) -> TranscriptResult:
     """High-level entry: resolve + call + fall through to next on failure.
 
     ``provider=<name>`` pins the choice and disables fallback (mirror
     of the env-override semantics in ``resolve``).
+
+    ``tenant_id``: the tenant of the turn (see :func:`resolve`). A cloud
+    provider the tenant's L35 egress policy denies is skipped - the chain
+    continues with the next (local) provider - and is refused outright when
+    it was pinned.
     """
     explicit = provider or os.environ.get("CORVIN_STT_PROVIDER")
     if explicit:
         # Pinned — no fallback by contract.
-        p = resolve(explicit)
+        p = resolve(explicit, tenant_id=tenant_id)
         return p.transcribe(audio_path, lang=lang, timeout_s=timeout_s)
 
     chain = _chain_from_env()
@@ -257,6 +342,10 @@ def transcribe(
     for idx, n in enumerate(chain):
         cls = _PROVIDERS.get(n)
         if cls is None:
+            continue
+        refusal = _cloud_egress_refusal(n, tenant_id)
+        if refusal:
+            failures.append(f"{n}: {refusal}")
             continue
         try:
             instance = cls()

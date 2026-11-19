@@ -58,6 +58,15 @@ class LayerForgeResult:
         }
 
 
+def _reason_fingerprint(reason: str) -> str:
+    """``sha256:<16 hex>;len:<n>`` of an operator's free-text reason. Bounded
+    and content-free: what the audit chain may carry in place of the prose."""
+    import hashlib
+
+    digest = hashlib.sha256(reason.encode("utf-8", "replace")).hexdigest()[:16]
+    return f"sha256:{digest};len:{len(reason)}"
+
+
 class LayerForgeOrchestrator:
     def __init__(self, tenant_id: str, *, repo_root: Path = REPO_ROOT, actor: str = "cli",
                  observer: "Callable[[str, str, str, dict], None] | None" = None):
@@ -283,47 +292,67 @@ class LayerForgeOrchestrator:
             version: Layer definition version
             to_status: Target status (accepted | deployed | superseded | proposed)
             override_review_flags: Set to True to override FLAGGED review verdict
-            override_reason: Human-readable reason for override (not stored for privacy)
+            override_reason: Human-readable reason; REQUIRED when a FLAGGED verdict is
+                overridden. Never stored: the audit record carries its fingerprint only
 
         Raises:
             LayerNotFoundError: definition not found
-            LayerPromotionError: definition already transitioned, or FLAGGED without override
+            LayerPromotionError: invalid transition, FLAGGED without override, or an
+                override without a reason - in every case nothing is recorded
             LayerForgeAuditError: audit chain write failed; nothing changed
         """
         self.registry._check_key(entry_id, version)
 
-        # Check if this definition is FLAGGED and override is required
-        definition = self.registry.get(entry_id, version)
-        is_flagged = definition.get("review_flagged", False)
-        flagged_list = definition.get("review_flags", [])
-
-        if is_flagged and not override_review_flags:
-            raise LayerPromotionError(
-                f"definition {entry_id}:{version} has FLAGGED review verdict; "
-                f"override required (use --override-review-flags)"
-            )
-
         with LayerPrimitive(entry_id, self._lock_dir).locked():
-            # If override is being applied, audit it
-            if is_flagged and override_review_flags:
-                try:
-                    self._audit("layer_forge.review_override_applied",
-                                entry_id=entry_id, version=version,
-                                override_reason=override_reason if override_reason else "N/A",
-                                overridden_flags=flagged_list, actor=self.actor)
-                    # Emit learning outcome event for override
-                    from .learning_integration import emit_override_outcome
-                    emit_override_outcome(
-                        tenant_id=self.tenant_id,
-                        entry_id=entry_id,
-                        version=version,
-                        override_reason=override_reason,
-                        overridden_flags=flagged_list,
-                    )
-                except audit.LayerForgeAuditError:
-                    raise  # propagate audit failures
+            # Everything below reads and decides UNDER the entry lock. The
+            # flag used to be read before the lock was taken, so a concurrent
+            # writer could change the definition between the check and the
+            # transition (review 2026-11-19 round 3, R3-NEW-17).
+            definition = self.registry.get(entry_id, version)
+            is_flagged = bool(definition.get("review_flagged", False))
+            flagged_list = definition.get("review_flags", [])
 
-            return self._transition_locked(entry_id, version, to_status)
+            if is_flagged and not override_review_flags:
+                raise LayerPromotionError(
+                    f"definition {entry_id}:{version} has FLAGGED review verdict; "
+                    f"override required (use --override-review-flags)"
+                )
+            overriding = is_flagged and override_review_flags
+            reason_text = (override_reason or "").strip()
+            if overriding and not reason_text:
+                raise LayerPromotionError(
+                    f"definition {entry_id}:{version}: an override of a FLAGGED "
+                    f"review needs a reason"
+                )
+
+            # The transition must be VALID before anything is recorded. The
+            # override record used to be written first; an invalid transition
+            # then raised (409) and left "review override applied" - plus its
+            # learning signal - in the chain for an override that never happened.
+            self.registry.check_transition(entry_id, version, to_status)
+
+            if overriding:
+                # The reason is operator prose: it never enters the chain. The
+                # record carries a fingerprint (short sha256 + length), enough
+                # to correlate with the operator's own notes, nothing to read.
+                self._audit("layer_forge.review_override_applied",
+                            entry_id=entry_id, version=version,
+                            override_reason=_reason_fingerprint(reason_text),
+                            overridden_flags=flagged_list, actor=self.actor)
+
+            out = self._transition_locked(entry_id, version, to_status)
+
+            if overriding:
+                # Learning signal only for an override that took effect.
+                from .learning_integration import emit_override_outcome
+                emit_override_outcome(
+                    tenant_id=self.tenant_id,
+                    entry_id=entry_id,
+                    version=version,
+                    override_reason=reason_text,
+                    overridden_flags=flagged_list,
+                )
+            return out
 
     def get(self, entry_id: str, version: str | None = None) -> dict:
         return self.registry.get(entry_id, version)

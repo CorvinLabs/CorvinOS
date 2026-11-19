@@ -28,6 +28,24 @@ from dataclasses import asdict, dataclass
 logger = logging.getLogger(__name__)
 
 
+def measurement_root() -> Path:
+    """``<corvin_home>/measurement`` — the one root the collector writes and every reader
+    (``api_server``, ``talent_score``, ``export_stats_to_website``) reads.
+
+    It was ``Path.home() / ".corvin"`` in each of them: on an install whose runtime root is
+    not ``~/.corvin`` (``CORVIN_HOME``, or the repo-local ``.corvin``) that is a different
+    directory from the one the services use, and a test run wrote into the operator's home.
+    Resolved through the canonical ``forge.paths.corvin_home``; where that package cannot be
+    imported (these modules also run as plain scripts) ``$CORVIN_HOME``, else ``~/.corvin``."""
+    try:
+        from corvin_operator.forge.forge.paths import corvin_home as _home  # noqa: PLC0415
+        return Path(_home()) / "measurement"
+    except Exception:  # noqa: BLE001 — script context without the package
+        env = (os.environ.get("CORVIN_HOME") or "").strip()
+        root = Path(os.path.expanduser(env)) if env else Path.home() / ".corvin"
+        return root / "measurement"
+
+
 @dataclass
 class PredictionRecord:
     """ADR-0270: Confidence prediction vs. actual outcome."""
@@ -105,8 +123,7 @@ class MeasurementCollector:
             return
 
         if queue_dir is None:
-            home = Path.home()
-            queue_dir = home / ".corvin" / "measurement" / datetime.utcnow().strftime("%Y-%m-%d")
+            queue_dir = measurement_root() / datetime.utcnow().strftime("%Y-%m-%d")
         else:
             # MEDIUM FIX M4: Validate queue_dir parameter
             queue_dir = Path(queue_dir) if not isinstance(queue_dir, Path) else queue_dir

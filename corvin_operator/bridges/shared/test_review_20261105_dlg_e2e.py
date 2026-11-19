@@ -598,7 +598,9 @@ def test_rd4_gateway_task_and_workflow_envs_keep_the_engine_key(sandbox, apikey_
 
 def test_rd4_a2a_refuses_a_capable_origin_and_audits(sandbox, apikey_host, tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_DX_SHIM_MODE", "stream")
-    res = _spawn_a2a()   # every tool allowed
+    # Every tool class granted. Stated as an explicit empty deny list: since R3-BR-8 a
+    # MISSING deny list means "no policy" and gets the deny-everything default.
+    res = _spawn_a2a(disallowed_tools=[])
     assert res.status == "rejected" and res.reason_code == "gate", (res.status, res.error)
     assert _calls(tmp_path) == [], "the engine ran with the host key for a capable origin"
     recs = [r for r in _chain(sandbox)
@@ -659,7 +661,7 @@ sys.path.insert(0, REPO + "/corvin_operator/forge")
 sys.path.insert(0, REPO + "/corvin_operator/bridges/shared")
 sys.path.insert(0, REPO)
 import house_rules
-house_rules._house_rules_classifier = lambda task, rules, auth, **kw: ("", 0.0, "test clear")
+house_rules._house_rules_classifier = lambda task, rules, auth, **kw: ("", 0.99, "test clear")
 import a2a_worker, spawn_gates
 out = {"tenant": a2a_worker._receiver_tenant("_default")}
 out["l34"] = spawn_gates.check_l34("claude_code", "_default", prompt="summarise the notes",

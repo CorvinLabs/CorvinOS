@@ -13,6 +13,9 @@ import { http, HttpResponse } from "msw";
 import { server } from "../fixtures/server";
 import ControlIntentRouterPage from "@/pages/control-intent-router";
 import ControlPlaneOverridesPage from "@/pages/control-plane-overrides";
+import ControlPlanePluginsPage from "@/pages/control-plane-plugins";
+import ControlPlaneSubsystemsPage from "@/pages/control-plane-subsystems";
+import ControlPlaneSnapshotsPage from "@/pages/control-plane-snapshots";
 
 function renderPage(el: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -41,6 +44,86 @@ describe("Intent Router page", () => {
     expect(screen.queryByText(/Failed to load/)).not.toBeInTheDocument();
     await new Promise((r) => setTimeout(r, 3500)); // one refetchInterval
     expect(hits).toBe(1);
+  });
+
+  it("offers no reset: no backend route resets router statistics", async () => {
+    server.use(
+      http.get("/v1/console/control-plane/intent-router/stats", () =>
+        HttpResponse.json({ timestamp: "2026-11-19T00:00:00Z", uptime_seconds: 1, paths: [], recent_requests: [] }),
+      ),
+    );
+    renderPage(<ControlIntentRouterPage />);
+    expect(await screen.findByText(/Auto-Refresh/)).toBeInTheDocument();
+    expect(screen.queryByText(/Reset Stats/)).not.toBeInTheDocument();
+  });
+});
+
+// The three routers below answer 501 on every route (defused simulations). The
+// pages used to turn that into an empty list: "No plugins found".
+const NOT_IMPLEMENTED = { detail: { status: "not_implemented", reason: "defused" } };
+
+describe("Control-plane pages on a 501 backend", () => {
+  it("plugins: says 'not available on this build', never 'No plugins found'", async () => {
+    server.use(
+      http.get("/v1/console/control-plane/plugins", () =>
+        HttpResponse.json(NOT_IMPLEMENTED, { status: 501 })),
+    );
+    renderPage(<ControlPlanePluginsPage />);
+    expect(await screen.findByTestId("control-plane-plugins-unavailable")).toHaveTextContent(
+      /not available on this build/i,
+    );
+    expect(screen.queryByText(/No plugins found/)).not.toBeInTheDocument();
+  });
+
+  it("subsystems: says so and stops polling", async () => {
+    let hits = 0;
+    server.use(
+      http.get("/v1/console/control-plane/subsystems", () => {
+        hits += 1;
+        return HttpResponse.json(NOT_IMPLEMENTED, { status: 501 });
+      }),
+    );
+    renderPage(<ControlPlaneSubsystemsPage />);
+    expect(await screen.findByTestId("control-plane-subsystems-unavailable")).toHaveTextContent(
+      /not available on this build/i,
+    );
+    expect(screen.queryByText(/No subsystems found/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Graceful Shutdown/)).not.toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 5600)); // one refetchInterval
+    expect(hits).toBe(1);
+  }, 10_000);
+
+  it("snapshots: says so and offers no create action", async () => {
+    server.use(
+      http.get("/v1/console/control-plane/snapshots", () =>
+        HttpResponse.json(NOT_IMPLEMENTED, { status: 501 })),
+    );
+    renderPage(<ControlPlaneSnapshotsPage />);
+    expect(await screen.findByTestId("control-plane-snapshots-unavailable")).toHaveTextContent(
+      /not available on this build/i,
+    );
+    expect(screen.queryByText(/No snapshots yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Create Snapshot/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Atomicity Guarantee/)).not.toBeInTheDocument();
+  });
+
+  it("a real failure shows the server's reason, not the empty state", async () => {
+    server.use(
+      http.get("/v1/console/control-plane/plugins", () =>
+        HttpResponse.json({ detail: "registry unreadable" }, { status: 500 })),
+    );
+    renderPage(<ControlPlanePluginsPage />);
+    expect(await screen.findByText("registry unreadable")).toBeInTheDocument();
+    expect(screen.queryByText(/No plugins found/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("control-plane-plugins-unavailable")).not.toBeInTheDocument();
+  });
+
+  it("an empty list that WAS read still reads as empty", async () => {
+    server.use(
+      http.get("/v1/console/control-plane/plugins", () => HttpResponse.json([])),
+    );
+    renderPage(<ControlPlanePluginsPage />);
+    expect(await screen.findByText(/No plugins found/)).toBeInTheDocument();
   });
 });
 

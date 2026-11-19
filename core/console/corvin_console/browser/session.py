@@ -381,12 +381,17 @@ class BrowserSession:
         nav_timeout_ms: int = 30_000,
         cdp_endpoint: str | None = None,
         consent_ok: "Callable[[], bool] | None" = None,
+        host_gate: "Callable[[str], tuple[bool, str]] | None" = None,
     ) -> None:
         self.session_id = session_id
         self.tenant_id = tenant_id
         self._home = home
         self._allowlist = allowlist
         self._forbidden = forbidden
+        # SEC-13: the tenant's real L35 gate (spec.egress), consulted for every
+        # host this session navigates to or requests. None = the tenant has no
+        # egress policy. Passed to every check_egress() call below.
+        self._host_gate = host_gate
         # ADR-0189: ephemeral, per-session hosts extracted from the user's own
         # task text — never persisted, never merged into self._allowlist (that
         # field's mere presence disables the cross-host confirm entirely, see
@@ -679,6 +684,52 @@ class BrowserSession:
         except AttributeError:  # pragma: no cover — Playwright < 1.48
             logger.warning("browser: route_web_socket unavailable — WS egress ungated")
 
+    def _egress_decision_cached(self, url: str):
+        """``check_egress`` using only what is already known - no L35 gate call.
+
+        Returns ``(decision, complete)``. ``complete`` is False when the tenant's
+        L35 gate has no cached verdict for the host, i.e. the real gate still
+        has to be asked. Pure: no I/O, no audit write."""
+        gate = self._host_gate
+        if gate is None:
+            return _cmp.check_egress(url, allowlist=self._allowlist,
+                                     forbidden=self._forbidden), True
+        peek = getattr(gate, "peek", None)
+        if not callable(peek):
+            return None, False
+        missed: list[str] = []
+
+        def _peek_gate(host: str) -> "tuple[bool, str]":
+            hit = peek(host)
+            if hit is None:
+                missed.append(host)
+                return True, ""
+            return hit
+
+        decision = _cmp.check_egress(url, allowlist=self._allowlist,
+                                     forbidden=self._forbidden, host_gate=_peek_gate)
+        return decision, not missed
+
+    async def _egress_decision(self, url: str):
+        """``check_egress`` for an ASYNC caller.
+
+        Review 2026-11-19 round 2 (R2-SEC-6). The tenant's L35 gate writes one
+        hash-chained audit record per host verdict. Round 1 called it straight
+        from the per-request network handler, i.e. ON the event loop: a page
+        pulling from 50 hosts was 50 synchronous chain writes (flock + fsync)
+        between two awaits of the console's only loop - the shape CLAUDE.md
+        "Console Event Loop Stays Free" forbids. A cached verdict is answered in
+        place; an uncached one is fetched through an AWAITED ``asyncio.to_thread``
+        (never fire-and-forget: the request waits for its verdict, so nothing is
+        let through before the gate answered, and every verdict is still
+        audited - allow and deny alike)."""
+        decision, complete = self._egress_decision_cached(url)
+        if complete:
+            return decision
+        return await asyncio.to_thread(
+            _cmp.check_egress, url, allowlist=self._allowlist,
+            forbidden=self._forbidden, host_gate=self._host_gate)
+
     def _route_web_socket(self, ws) -> None:
         """Per-WebSocket egress gate. Allowed → proxy to the real server;
         disallowed (off-allowlist, private/metadata, forbidden) → close. Same
@@ -695,8 +746,17 @@ class BrowserSession:
                 check_url = "https://" + check_url[len("wss://"):]
             elif check_url.startswith("ws://"):
                 check_url = "http://" + check_url[len("ws://"):]
-            if _cmp.check_egress(check_url, allowlist=self._allowlist,
-                                 forbidden=self._forbidden).allowed:
+            # This callback is synchronous (Playwright calls it that way), so it
+            # cannot await the off-loop gate. A cached L35 verdict - the usual
+            # case: the page's own requests to that host came first - is used in
+            # place; only a socket to a host with NO cached verdict asks the gate
+            # here (one chain write per new host per verdict TTL, R2-SEC-6).
+            decision, complete = self._egress_decision_cached(check_url)
+            if not complete:
+                decision = _cmp.check_egress(check_url, allowlist=self._allowlist,
+                                             forbidden=self._forbidden,
+                                             host_gate=self._host_gate)
+            if decision.allowed:
                 ws.connect_to_server()
             else:
                 ws.close()
@@ -715,8 +775,7 @@ class BrowserSession:
             if scheme in ("data", "blob", "about", "javascript", "filesystem"):
                 await route.continue_()
                 return
-            if _cmp.check_egress(url, allowlist=self._allowlist,
-                                 forbidden=self._forbidden).allowed:
+            if (await self._egress_decision(url)).allowed:
                 await route.continue_()
             else:
                 await route.abort()
@@ -765,7 +824,7 @@ class BrowserSession:
                 await new_page.wait_for_load_state("load", timeout=self._nav_timeout)
             new_page.set_default_timeout(self._nav_timeout)
             url = new_page.url
-            decision = _cmp.check_egress(url, allowlist=self._allowlist, forbidden=self._forbidden)
+            decision = await self._egress_decision(url)
             host = decision.host
             if not decision.allowed and url not in ("about:blank", ""):
                 # Attach mode (review finding): the tab may be one the USER opened
@@ -985,7 +1044,7 @@ class BrowserSession:
         is held. Fail-closed: a denied destination is parked on about:blank and
         the action refused, exactly like navigate()'s redirect guard."""
         page = self._require_page()
-        fdec = _cmp.check_egress(page.url, allowlist=self._allowlist, forbidden=self._forbidden)
+        fdec = await self._egress_decision(page.url)
         if not fdec.allowed:
             try:
                 await page.goto("about:blank")
@@ -1093,7 +1152,7 @@ class BrowserSession:
     async def navigate(self, url: str, *, confirm_cross_host: bool = False) -> Observation:
         self._guard_active("navigate")
         await self._ensure_started()
-        decision = _cmp.check_egress(url, allowlist=self._allowlist, forbidden=self._forbidden)
+        decision = await self._egress_decision(url)
         if not decision.allowed:
             _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                               action="navigate", host=decision.host, ok=False,
@@ -1144,7 +1203,7 @@ class BrowserSession:
             # FINAL landing url against the same policy; a denied redirect is
             # parked on about:blank and refused (fail-closed).
             final = page.url
-            fdec = _cmp.check_egress(final, allowlist=self._allowlist, forbidden=self._forbidden)
+            fdec = await self._egress_decision(final)
             if not fdec.allowed:
                 try:
                     await page.goto("about:blank")

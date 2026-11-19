@@ -37,6 +37,15 @@ def verify_audit_durability(tenant_id: str = "_default") -> tuple[bool, str]:
     This is a fail-closed, non-overridable check: if the audit chain is corrupted,
     the application will not boot. This ensures GDPR Art. 30, 32 compliance.
 
+    Review 2026-11-19 (SEC-17): this verified ``<tenant_home>/audit.jsonl`` - the
+    legacy "tenant_root" sibling no writer appends to. On every real install
+    that file is absent, so the check answered ``new_audit_chain`` and "verified"
+    nothing, while its log line claimed the chain was verified. It now verifies
+    THE tenant chain (``tenant_audit_chain(tenant_id)``, the file the ADR-0232
+    tripwire also checks) with the canonical incremental verifier, and reports
+    exactly what it looked at. A chain file that is absent although a chain was
+    anchored for its path is a failure, not a fresh install.
+
     Args:
         tenant_id: Tenant to verify (default: "_default")
 
@@ -49,31 +58,56 @@ def verify_audit_durability(tenant_id: str = "_default") -> tuple[bool, str]:
         SystemExit: if chain is corrupted (fail-closed)
     """
     try:
-        from corvin_operator.forge.forge.paths import tenant_home as get_tenant_home  # type: ignore
+        from corvin_operator.forge.forge.paths import tenant_audit_chain  # type: ignore
 
-        tenant_dir = Path(get_tenant_home(tenant_id))
-        audit_file = tenant_dir / "audit.jsonl"
+        audit_file = Path(tenant_audit_chain(tenant_id))
 
-        if not audit_file.exists():
+        if not audit_file.exists() or audit_file.stat().st_size == 0:
+            anchored = ""
+            try:
+                from core.compliance.corvin_compliance_reports import tripwire as _tw
+                anchored = _tw._anchored_chain_identity(audit_file)
+            except Exception:  # noqa: BLE001 - tripwire not importable in this layout
+                anchored = ""
+            if anchored:
+                logger.critical(
+                    f"AUDIT CHAIN MISSING: {audit_file} is absent or empty, but a chain "
+                    f"was anchored for this path. Boot aborted (fail-closed)."
+                )
+                sys.exit(1)
             logger.info(f"Audit chain not yet created: {audit_file}")
             return True, "new_audit_chain"
 
         # Use the CANONICAL bridge audit verifier — the SAME one the boot
-        # tripwire uses (``audit.verify_audit``). The core ``audit.jsonl`` is
-        # written in the CLAG hash-chain schema (ts/hash/mac/prev_hash/
-        # instance_sig); the ``core.audit.AuditChain`` loader expects a
-        # different schema (actor/action/resource/self_hash) and raises
-        # KeyError('actor') on a real CLAG record. Reusing the canonical
-        # verifier rather than re-implementing chain logic is exactly the rule
-        # the tripwire docstring states — a second hash-chain re-implementation
-        # is a bug, not defence in depth.
-        import audit  # type: ignore[import-not-found]
+        # tripwire uses. The core chain is written in the CLAG hash-chain schema
+        # (ts/hash/mac/prev_hash/instance_sig); the ``core.audit.AuditChain``
+        # loader expects a different schema and raises KeyError('actor') on a
+        # real CLAG record. Reusing the canonical verifier rather than
+        # re-implementing chain logic is exactly the rule the tripwire docstring
+        # states. The incremental form re-hashes the already-proven prefix bytes
+        # instead of re-walking a multi-hundred-MB chain on every boot; a
+        # missing witness falls back to a full walk, never to trust.
+        from core.compliance.corvin_compliance_reports import tripwire as _tripwire
+        audit = _tripwire._audit_module()   # the bridge audit module, sys.path handled
+        if audit is None:
+            raise RuntimeError("bridge audit module not importable")
 
-        is_valid, problems = audit.verify_audit(audit_file)
+        incremental = getattr(audit, "verify_audit_incremental", None)
+        if callable(incremental):
+            is_valid, problems, _total = incremental(audit_file)
+        else:
+            is_valid, problems = audit.verify_audit(audit_file)
 
-        if not is_valid:
+        # Same split as tripwire.audit_chain_intact: a problem WITHOUT a line
+        # number describes the chain's current state (anchor / truncation) and
+        # refuses the boot; a line-numbered one is a permanent historical break
+        # in an append-only file, which the ADR-0232 tripwire seals and reports
+        # on every boot - refusing here would stop the trail it protects.
+        structural = sorted({str(pr.get("issue") or pr.get("reason"))
+                             for pr in problems if "line" not in pr})
+        if not is_valid and structural:
             logger.critical(
-                f"AUDIT CHAIN CORRUPTED: {len(problems)} problem record(s). "
+                f"AUDIT CHAIN CORRUPTED: current-state problem(s) {structural}. "
                 f"File: {audit_file}. "
                 f"This is a GDPR Art. 30, 32 compliance failure. "
                 f"Boot aborted (fail-closed)."
@@ -81,7 +115,13 @@ def verify_audit_durability(tenant_id: str = "_default") -> tuple[bool, str]:
             # FAIL-CLOSED: non-overridable
             sys.exit(1)
 
-        msg = f"verified ({len(problems)} problems)"
+        if not is_valid:
+            msg = (f"{len(problems)} historical break(s) - NOT verified clean; "
+                   "sealed and reported by the ADR-0232 boot tripwire")
+            logger.critical(f"Audit chain {audit_file}: {msg}")
+            return True, msg
+
+        msg = "verified (0 problems)"
         logger.info(f"Audit chain verified: {audit_file} — {msg}")
         return True, msg
 

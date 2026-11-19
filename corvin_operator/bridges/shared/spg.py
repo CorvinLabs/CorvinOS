@@ -49,9 +49,10 @@ def _emit(event_type: str, channel: str, chat_key: str, details: dict) -> None:
         if _audit_path is not None:
             path = _audit_path()
         else:
-            corvin_home = Path(os.environ.get("CORVIN_HOME", Path.home() / ".corvin"))
-            tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
-            path = corvin_home / "tenants" / tenant_id / "global" / "audit.jsonl"
+            # SEC-4 (2026-11-19): never a hand-composed sibling chain - the
+            # shared resolver, or no record at all.
+            from paths import tenant_audit_chain  # type: ignore[import-not-found]
+            path = tenant_audit_chain(os.environ.get("CORVIN_TENANT_ID") or "_default")
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_audit(
             path, event_type,

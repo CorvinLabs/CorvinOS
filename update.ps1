@@ -572,7 +572,29 @@ function Get-Rev {
 $PrevRev = Get-Rev
 $script:BackupRef = ""
 $script:Stashed = $false
+$script:StashSha = ""
 $script:ZipSwapped = $false
+
+# The autostash is identified by its COMMIT, never by position. "git stash
+# push" exits 0 without creating an entry when there is nothing it can stash
+# (a tree that is dirty only inside a submodule shows up in "git status" and
+# stashes nothing). Stashed was set anyway, and the later pop / apply + drop
+# took stash@{0} -- somebody's older, unrelated stash.
+function Get-StashTip {
+    if ((Invoke-Git @("rev-parse", "-q", "--verify", "refs/stash")) -ne 0) { return "" }
+    return ([string]($script:LastOutput | Select-Object -First 1)).Trim()
+}
+function Remove-AutoStash {
+    if (-not $script:StashSha) { return }
+    if ((Invoke-Git @("stash", "list", "--format=%H %gd")) -ne 0) { return }
+    foreach ($line in @($script:LastOutput)) {
+        $parts = ([string]$line).Trim() -split ' ', 2
+        if ($parts.Count -eq 2 -and $parts[0] -eq $script:StashSha) {
+            $null = Invoke-Git @("stash", "drop", "-q", $parts[1])
+            return
+        }
+    }
+}
 
 # Managed tree -> exactly origin/$Branch. git when it works; the codeload zip
 # otherwise (no git on the desktop, or git's OpenSSL rejecting a corporate
@@ -661,8 +683,14 @@ function Update-Checkout {
     }
     $null = Invoke-Git @("status", "--porcelain", "--untracked-files=no")
     if (@($script:LastOutput | Where-Object { $_ }).Count -gt 0) {
+        $stashBefore = Get-StashTip
         if ((Invoke-Git @("stash", "push", "-q", "-m", "corvin-update autostash $Stamp")) -ne 0) { return $false }
-        $script:Stashed = $true
+        $stashAfter = Get-StashTip
+        # Only when refs/stash moved did the push create OUR entry.
+        if ($stashAfter -and $stashAfter -ne $stashBefore) {
+            $script:StashSha = $stashAfter
+            $script:Stashed = $true
+        }
     }
     if ((Invoke-Git @("merge-base", "--is-ancestor", "HEAD", "origin/$Branch")) -eq 0) {
         if ((Invoke-Git @("merge", "-q", "--ff-only", "origin/$Branch")) -ne 0) { return $false }
@@ -680,8 +708,8 @@ function Update-Checkout {
     # tree clean and the stash in place -- never conflict markers in files the
     # build below would choke on.
     if ($script:Stashed) {
-        if ((Invoke-Git @("stash", "apply", "-q")) -eq 0) {
-            $null = Invoke-Git @("stash", "drop", "-q")
+        if ((Invoke-Git @("stash", "apply", "-q", $script:StashSha)) -eq 0) {
+            Remove-AutoStash
             $script:Stashed = $false
             Write-Ok "local changes re-applied on top of the update"
         } else {
@@ -702,6 +730,20 @@ if ($ConsoleOnly) {
     if (-not $fetched) {
         if ($script:Stopped) { foreach ($t in $script:RestartTasks) { try { Start-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction Stop } catch { } } }
         Send-UpdateProgress delivery failed "download failed"
+        # A failure after the autostash must not end in "nothing changed" with
+        # the working tree emptied into a stash nobody was told about.
+        if ($script:Stashed) {
+            if ((Invoke-Git @("stash", "apply", "-q", $script:StashSha)) -eq 0) {
+                Remove-AutoStash
+                $script:Stashed = $false
+                Write-Warn "the update failed -- your local changes were put back in the working tree"
+            } else {
+                # Half-applied result of OUR stash only: the autostash had just emptied the tree.
+                $null = Invoke-Git @("reset", "-q", "--hard", "HEAD")
+                Write-Warn "the update failed and your local changes could not be re-applied -- changes are in git stash (git stash apply $($script:StashSha))"
+                Stop-Update "could not download the update -- code unchanged, but your uncommitted changes are in git stash (see $LogFile)"
+            }
+        }
         Stop-Update "could not download the update -- nothing changed (see $LogFile)"
     }
     if ($Kind -ne "checkout") { $null = New-Item -ItemType File -Path (Join-Path $Src ".corvin-managed") -Force }
@@ -1257,7 +1299,7 @@ if ($VerifyOk) {
     Write-Host "CorvinOS is up to date and running." -ForegroundColor Green
     Write-Host "  $BaseUrl/console/   (reload the tab: Ctrl+Shift+R)"
     if ($script:BackupRef) { Write-Host "  previous code kept on branch: $($script:BackupRef)" }
-    if ($script:Stashed) { Write-Host "  your local changes: git stash list  (re-apply: git stash pop)" }
+    if ($script:Stashed) { Write-Host "  your local changes: git stash list  (re-apply: git stash apply $($script:StashSha))" }
     $null = Remove-Tree "$Src.prev"
     Exit-SetupLock
     exit 0

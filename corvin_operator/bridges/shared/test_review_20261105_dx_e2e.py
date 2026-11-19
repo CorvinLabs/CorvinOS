@@ -117,7 +117,7 @@ def sandbox(tmp_path, monkeypatch):
     spawn_gates._l34_cache.clear()
     import house_rules
     monkeypatch.setattr(house_rules, "_house_rules_classifier",
-                        lambda task, rules, auth, **kw: ("", 0.0, "test clear"))
+                        lambda task, rules, auth, **kw: ("", 0.99, "test clear"))
     return home
 
 

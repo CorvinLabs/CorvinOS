@@ -118,6 +118,221 @@ def default_vault_path() -> Path:
     return Path(os.path.expanduser(cfg_home)) / "corvin-voice" / "secrets.json"
 
 
+# -- per-tenant vaults (review 2026-11-19, R3-NEW-3) ------------------------
+#
+# The file above is HOST-global: one JSON for every tenant of the process. A
+# datasource manifest of tenant B naming ``secrets: ["PGPASSWORD"]`` therefore
+# received tenant A's plaintext. Each tenant now has its own vault next to it:
+#
+#     <vault dir>/tenants/<tenant_id>/secrets.json
+#
+# It lives under the same directory on purpose: the L10 path gate already
+# refuses writes to any ``secrets.json`` below the vault directory, and the
+# location is outside every worker cwd (``<tenant_home>/sessions/...``).
+#
+# Tenant file format (the host-global file keeps its flat ``{NAME: value}``)::
+#
+#     {"version": 1,
+#      "secrets":  {"PGPASSWORD": "..."},
+#      "bindings": {"PGPASSWORD": "db.internal"}}
+#
+# ``bindings`` ties a secret to the ONE target it may be sent to. It is set by
+# the writer (``set_secret(..., bind_to=...)``) or, when the writer did not
+# name one, by the first resolution (trust on first use). A later request for
+# the same name with another target is refused - a connection re-registered
+# with ``host: attacker.example`` does not get the password.
+#
+# Migration: the host-global file stays readable for the PROCESS tenant only
+# (``CORVIN_TENANT_ID`` or ``_default``), never for another tenant, and a
+# tenant entry always wins over it.
+
+_TENANT_VAULT_VERSION = 1
+
+
+class SecretBindingError(VaultError):
+    """A secret was requested for a target other than the one it is bound to."""
+
+
+def process_tenant_id() -> str:
+    """The tenant this process runs as (``CORVIN_TENANT_ID`` or ``_default``)."""
+    from .paths import _resolve_tenant_id  # noqa: PLC0415
+
+    return _resolve_tenant_id(None)
+
+
+def _checked_tenant(tenant_id: str) -> str:
+    from .paths import _validate_tenant_id  # noqa: PLC0415
+
+    try:
+        return _validate_tenant_id(tenant_id)
+    except ValueError as exc:
+        raise VaultError(f"invalid tenant id for the secret vault: {exc}") from exc
+
+
+def tenant_vault_path(tenant_id: str) -> Path:
+    """``<vault dir>/tenants/<tenant_id>/secrets.json`` (no filesystem side effect)."""
+    return default_vault_path().parent / "tenants" / _checked_tenant(tenant_id) / "secrets.json"
+
+
+def normalise_binding(target: str | None) -> str:
+    """Canonical form of a binding target (a host name, lower case, no trailing dot)."""
+    if not isinstance(target, str):
+        return ""
+    return target.strip().lower().rstrip(".")[:255]
+
+
+class _VaultLock:
+    """Exclusive advisory lock for one vault directory (read-modify-write)."""
+
+    def __init__(self, directory: Path) -> None:
+        self._dir = directory
+        self._fd: int | None = None
+
+    def __enter__(self) -> "_VaultLock":
+        self._dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._dir.chmod(0o700)
+        except OSError:
+            pass
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        self._fd = os.open(str(self._dir / ".secrets.lock"), flags, 0o600)
+        try:
+            import fcntl  # noqa: PLC0415
+
+            fcntl.flock(self._fd, fcntl.LOCK_EX)
+        except ImportError:  # pragma: no cover - Windows without the shim
+            pass
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._fd is None:
+            return
+        try:
+            import fcntl  # noqa: PLC0415
+
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+        except Exception:  # noqa: BLE001
+            pass
+        os.close(self._fd)
+        self._fd = None
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    import tempfile  # noqa: PLC0415
+
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".secrets.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _read_tenant_file(path: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """``(secrets, bindings)`` of a tenant vault file; both empty when absent."""
+    if not path.exists():
+        return {}, {}
+    if path.is_symlink():
+        raise VaultError(f"vault {path} is a symlink")
+    _check_mode(path)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise VaultError(f"vault {path} is not valid JSON: {exc}") from exc
+    if not isinstance(raw, dict) or not isinstance(raw.get("secrets", {}), dict) \
+            or not isinstance(raw.get("bindings", {}), dict):
+        raise VaultError(f"vault {path} is not a tenant vault object")
+    secrets: dict[str, str] = {}
+    for k, v in raw.get("secrets", {}).items():
+        if not is_valid_key(k) or not isinstance(v, str):
+            raise VaultError(f"vault {path} contains an invalid entry {k!r}")
+        secrets[k] = v
+    bindings = {
+        k: normalise_binding(v) for k, v in raw.get("bindings", {}).items()
+        if is_valid_key(k) and isinstance(v, str) and normalise_binding(v)
+    }
+    return secrets, bindings
+
+
+def _write_tenant_file(path: Path, secrets: dict[str, str], bindings: dict[str, str]) -> None:
+    _atomic_write_json(path, {
+        "version": _TENANT_VAULT_VERSION,
+        "secrets": dict(sorted(secrets.items())),
+        "bindings": dict(sorted(bindings.items())),
+    })
+
+
+def _legacy_for(tenant_id: str) -> dict[str, str]:
+    """The host-global vault, for the process tenant only; ``{}`` for any other."""
+    if tenant_id != process_tenant_id():
+        return {}
+    return load_vault(default_vault_path())
+
+
+def load_tenant_vault(tenant_id: str) -> dict[str, str]:
+    """``{name: value}`` visible to *tenant_id*: its own vault, plus - for the
+    process tenant only - the host-global one (a tenant entry wins)."""
+    tid = _checked_tenant(tenant_id)
+    own, _ = _read_tenant_file(tenant_vault_path(tid))
+    merged = dict(_legacy_for(tid))
+    merged.update(own)
+    return merged
+
+
+def _resolve_for_tenant(
+    refs: list[str], tenant_id: str, bind_to: str | None,
+) -> tuple[dict[str, str], list[str]]:
+    tid = _checked_tenant(tenant_id)
+    path = tenant_vault_path(tid)
+    target = normalise_binding(bind_to)
+    with _VaultLock(path.parent):
+        own, bindings = _read_tenant_file(path)
+        visible = dict(_legacy_for(tid))
+        visible.update(own)
+        resolved: dict[str, str] = {}
+        missing: list[str] = []
+        new_bindings = dict(bindings)
+        for r in refs:
+            if r not in visible:
+                missing.append(r)
+                continue
+            if target:
+                bound = bindings.get(r)
+                if bound and bound != target:
+                    raise SecretBindingError(
+                        f"secret {r!r} is bound to another target and is not released "
+                        f"for {target!r}; store the credential again to re-bind it")
+                if not bound:
+                    new_bindings[r] = target  # trust on first use
+            resolved[r] = visible[r]
+        if new_bindings != bindings and not missing:
+            _write_tenant_file(path, own, new_bindings)
+    return resolved, missing
+
+
+def secret_binding(key: str, *, tenant_id: str) -> str:
+    """The target *key* is bound to in *tenant_id*'s vault (``""`` when unbound)."""
+    try:
+        _, bindings = _read_tenant_file(tenant_vault_path(tenant_id))
+    except VaultError:
+        return ""
+    return bindings.get(key, "")
+
+
 # -- load + lookup ---------------------------------------------------------
 
 def _check_mode(path: Path) -> None:
@@ -199,8 +414,17 @@ def resolve_secrets(
     refs: list[str],
     *,
     vault_path: Path | None = None,
+    tenant_id: str | None = None,
+    bind_to: str | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     """Look up *refs* in the vault.
+
+    With ``tenant_id`` the lookup is confined to that tenant's vault (plus the
+    host-global file for the process tenant only) and, when ``bind_to`` names a
+    target, to secrets bound to that target (``SecretBindingError`` otherwise;
+    an unbound secret is bound on first use). Without ``tenant_id`` it reads
+    the host-global file - the forge runner's tool-secret path, which is
+    governed by the persona ACL, not by a tenant.
 
     Returns ``(resolved, missing)`` where:
       - ``resolved`` maps env-var-name → plaintext value for every ref
@@ -214,6 +438,8 @@ def resolve_secrets(
     """
     if not refs:
         return {}, []
+    if tenant_id is not None and vault_path is None:
+        return _resolve_for_tenant(list(refs), tenant_id, bind_to)
     vault = load_vault(vault_path)
     resolved: dict[str, str] = {}
     missing: list[str] = []
@@ -225,50 +451,58 @@ def resolve_secrets(
     return resolved, missing
 
 
-def set_secret(key: str, value: str, *, vault_path: Path | None = None) -> Path:
+def set_secret(
+    key: str,
+    value: str,
+    *,
+    vault_path: Path | None = None,
+    tenant_id: str | None = None,
+    bind_to: str | None = None,
+) -> Path:
     """Store ``value`` under ``key`` in the vault (create/replace, atomic, mode 0600).
 
     The writer half of :func:`load_vault`: the vault is what the compute runner and
     the forge runner read, so a credential saved here is the one a datasource-bound
     run actually receives. Existing entries are kept; a vault that is group/world
     readable or malformed is refused (``VaultError``) rather than rewritten.
-    Returns the vault path.
-    """
-    import tempfile
+    The read-modify-write runs under an exclusive lock, so two concurrent writers
+    cannot drop each other's entry. Returns the vault path.
 
+    With ``tenant_id`` the value goes into that tenant's own vault and can never
+    replace another tenant's (or the host-global) entry. Storing a value resets
+    the secret's target binding to ``bind_to`` (or to "unbound, bind on first use").
+    """
     if not is_valid_key(key):
         raise SecretRefError(f"secret name {key!r} is not a valid env-var name")
     if not isinstance(value, str) or not value:
         raise VaultError("secret value must be a non-empty string")
+    if tenant_id is not None and vault_path is None:
+        p = tenant_vault_path(tenant_id)
+        with _VaultLock(p.parent):
+            secrets, bindings = _read_tenant_file(p)
+            secrets[key] = value
+            target = normalise_binding(bind_to)
+            if target:
+                bindings[key] = target
+            else:
+                bindings.pop(key, None)
+            _write_tenant_file(p, secrets, bindings)
+        return p
     p = vault_path or default_vault_path()
-    current = load_vault(p) if p.exists() else {}
-    current[key] = value
-    p.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        p.parent.chmod(0o700)
-    except OSError:
-        pass
-    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".secrets.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(current, fh, indent=2)
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, p)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    with _VaultLock(p.parent):
+        current = load_vault(p) if p.exists() else {}
+        current[key] = value
+        _atomic_write_json(p, current)
     return p
 
 
-def secret_names(*, vault_path: Path | None = None) -> list[str]:
-    """Names (never values) of the secrets in the vault; ``[]`` when there is none."""
+def secret_names(*, vault_path: Path | None = None, tenant_id: str | None = None) -> list[str]:
+    """Names (never values) of the secrets in the vault; ``[]`` when there is none.
+
+    With ``tenant_id``: the names visible to that tenant only."""
     try:
+        if tenant_id is not None and vault_path is None:
+            return sorted(load_tenant_vault(tenant_id))
         return sorted(load_vault(vault_path))
     except VaultError:
         return []

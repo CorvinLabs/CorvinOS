@@ -444,10 +444,10 @@ def _version_lt(a: str, b: str) -> bool:
 
 def _icon(r: RuleCheckResult) -> str:
     if r.status == "pass":
-        return "✓"
+        return "PASS"
     if r.status == "warn":
-        return "⚠"
-    return "✗"
+        return "WARN"
+    return "FAIL"
 
 
 def _has_multiple_frameworks(results: list[RuleCheckResult]) -> bool:

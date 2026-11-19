@@ -188,10 +188,9 @@ async function pollTick() {
   for (const env of envelopes) {
     try {
       const sender = env.envelope?.source || '';
-      if (!auth.rateAllow(sender)) {
-        log(`rate limit exceeded for ${sender}`);
-        continue;
-      }
+      // Rate limiting lives in handleEnvelope (after the auth gate, with the
+      // configured per-hour limit); a limit-less rateAllow(sender) here never
+      // limited anything and booked every sender twice (R3-NEW-14).
       const msgId = await handleEnvelope(env);
       if (msgId) {
         try { announce({ from: sender, chat_id: sender }, 'text'); } catch {}

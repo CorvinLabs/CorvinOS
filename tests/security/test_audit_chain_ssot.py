@@ -459,3 +459,197 @@ def test_incident_opened_lands_in_the_tenant_chain(home: Path):
         OUT["host"] = (home / "global" / "forge" / "audit.jsonl").exists()
     """, home)
     assert out == {"canonical": True, "host": False}, out
+
+
+# ── Review 2026-11-19 (SEC-4): no writer composes the TENANT-level sibling ────
+#
+# ``<home>/tenants/<tid>/global/audit.jsonl`` (no ``forge`` component) is the
+# "tenant_global" legacy chain. Five writers still composed it by hand - the MCP
+# manager, the ``corvin_mcp`` CLI, SPG's fallback, the compute .awp exporter and
+# importer - and the WDAT report read, verified and wrote it. A record there is
+# not in the audit trail: the boot tripwire verifies ``tenant_audit_chain()``,
+# and every compliance report reads that file. The scan is AST-based (any ``/``
+# chain whose literals END in ``"global" / "audit.jsonl"``), so a docstring or a
+# comment naming the legacy file does not trip it.
+
+_TENANT_SIBLING_READERS = {
+    "scripts/e2e_full_audit_fixture.py": "builds a throwaway fixture home, never a live root",
+    "corvinOS/installer/core.py": "uninstall cleanup UNLINKS the legacy sibling (no write); open - "
+                                  "deleting a historical chain file is reported, not owned by this round",
+    "scripts/e2e_adr0118_fixture.py": "builds a throwaway fixture home, never a live root",
+    "scripts/stream_c_data_integrity_check.py": "one-off integrity READER of the legacy file",
+    "scripts/rotate_corvin_keys_blocker3.py": "one-off rotation script; open - not owned by this review round",
+    "scripts/migrate_workflows_to_plugin.py": "one-off migration script; open - not owned by this review round",
+}
+
+
+def _tenant_sibling_lines(src: str) -> list[int]:
+    try:
+        tree = _ast.parse(src)
+    except SyntaxError:
+        return []
+    global_dirs: set[str] = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Assign) and isinstance(node.value, _ast.BinOp):
+            _base, lits, _w = _div_chain(node.value)
+            if lits[-1:] == ["global"]:
+                global_dirs |= {t.id for t in node.targets if isinstance(t, _ast.Name)}
+    hits = []
+    for node in _ast.walk(tree):
+        if not (isinstance(node, _ast.BinOp) and isinstance(node.op, _ast.Div)):
+            continue
+        base, lits, _w = _div_chain(node)
+        if lits[-2:] == ["global", "audit.jsonl"]:
+            hits.append(node.lineno)
+        elif isinstance(base, _ast.Name) and base.id in global_dirs and lits == ["audit.jsonl"]:
+            hits.append(node.lineno)
+    return sorted(set(hits))
+
+
+def test_tenant_sibling_scanner_positive_control():
+    assert _tenant_sibling_lines('p = home / "tenants" / tid / "global" / "audit.jsonl"\n') == [1]
+    assert _tenant_sibling_lines('p = Path(h) / "tenants" / t / "global" / "audit.jsonl"\n') == [1]
+    assert _tenant_sibling_lines('g = tenant_dir / "global"\np = g / "audit.jsonl"\n') == [2]
+    assert _tenant_sibling_lines(
+        'p = home / "tenants" / tid / "global" / "forge" / "audit.jsonl"\n') == []
+    assert _tenant_sibling_lines('p = tenant_audit_chain(tid)\n') == []
+    assert _tenant_sibling_lines('"""<tenant>/global/audit.jsonl is the legacy file."""\n') == []
+
+
+def test_no_production_writer_composes_the_tenant_sibling_chain():
+    scanned = 0
+    offenders = []
+    for d in _SCAN_DIRS:
+        for p in sorted((REPO / d).rglob("*.py")):
+            if _is_test_source(p) or "node_modules" in p.parts:
+                continue
+            scanned += 1
+            rel = p.relative_to(REPO).as_posix()
+            if rel in _TENANT_SIBLING_READERS:
+                continue
+            for n in _tenant_sibling_lines(p.read_text(encoding="utf-8", errors="replace")):
+                offenders.append(f"{rel}:{n}")
+    for rel in ("corvin_operator/mcp_manager/mcp_manager/compliance.py",
+                "corvin_operator/voice/scripts/corvin_mcp.py",
+                "corvin_operator/bridges/shared/spg.py",
+                "corvin_operator/bridges/shared/wdat_report.py",
+                "corvin_operator/bridges/shared/compute_awp_exporter.py",
+                "corvin_operator/bridges/shared/compute_awp_importer.py"):
+        assert (REPO / rel).is_file(), rel  # the scan reached the modules the review named
+    assert scanned > 500, scanned
+    assert not offenders, (
+        "hand-built <tenant>/global/audit.jsonl - resolve tenant_audit_chain(tid) instead "
+        "(a READER of the historical file goes in _TENANT_SIBLING_READERS with the reason):\n"
+        + "\n".join(offenders))
+
+
+def test_tenant_sibling_exemptions_are_still_needed():
+    stale = [rel for rel in _TENANT_SIBLING_READERS
+             if not _tenant_sibling_lines((REPO / rel).read_text(encoding="utf-8"))]
+    assert not stale, f"exemption no longer needed, remove it: {stale}"
+
+
+# ── Round 2 (R2-SEC-10): the same legacy path written as ONE string ──────────
+#
+# The scan above follows ``/`` chains only, so a path spelled as a single literal
+# - ``"~/.corvin/tenants/_default/global/audit.jsonl"`` (the EU-AI-Act checker
+# read exactly that), ``"~/.corvin/audit.jsonl"`` as a default argument - went
+# through it. A string literal (never a docstring) that names a file
+# ``audit.jsonl`` under a ``.corvin`` root WITHOUT the ``forge`` component is a
+# hand-written legacy chain path: under a hard-wired home, and not the file any
+# writer appends to.
+
+#: Known offenders, each owned by another cluster of this review. Shrink-only:
+#: the stale check below fails as soon as one is fixed.
+_STRING_LEGACY_CHAIN_OPEN = {
+    "core/compliance/phase_c_gates/learning_stability_gate.py":
+        "default argument `~/.corvin/audit.jsonl` - open, owned by the compliance cluster",
+    "core/compliance/phase_c_gates/old_code_unreachability_gate.py":
+        "default argument `~/.corvin/audit.jsonl` - open, owned by the compliance cluster",
+    "core/compliance/phase_c_gates/tenant_isolation_gate.py":
+        "default argument `~/.corvin/audit.jsonl` - open, owned by the compliance cluster",
+    "scripts/run-stats-server-real-data.py":
+        "one-off stats script reading `~/.corvin/audit.jsonl` - open, not owned by this round",
+}
+
+
+def _string_legacy_chain_lines(src: str) -> list[int]:
+    try:
+        tree = _ast.parse(src)
+    except SyntaxError:
+        return []
+    doc: set[int] = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Expr) and isinstance(node.value, _ast.Constant):
+            doc.add(id(node.value))            # docstrings and bare string statements
+    hits = []
+    for node in _ast.walk(tree):
+        if not (isinstance(node, _ast.Constant) and isinstance(node.value, str)) or id(node) in doc:
+            continue
+        v = node.value.strip().replace("\\", "/")
+        if "\n" in v or len(v) > 240 or " " in v:
+            continue                           # prose, not a path
+        if v.endswith("audit.jsonl") and ".corvin/" in v and "/forge/" not in v:
+            hits.append(node.lineno)
+    return sorted(set(hits))
+
+
+def test_string_legacy_chain_scanner_positive_control():
+    f = _string_legacy_chain_lines
+    assert f('p = "~/.corvin/tenants/_default/global/audit.jsonl"\n') == [1]
+    assert f('def g(path: str = "~/.corvin/audit.jsonl"): pass\n') == [1]
+    # Known limit, stated: an f-string splits the path into several constants, none
+    # of which carries both the ".corvin/" root and the file name.
+    assert f('p = f"~/.corvin/tenants/{t}/global/audit.jsonl"\n') == []
+    assert f('p = "~/.corvin/tenants/_default/global/forge/audit.jsonl"\n') == []
+    assert f('"""reads ~/.corvin/audit.jsonl (legacy)."""\n') == []
+    assert f('x = "the file ~/.corvin/audit.jsonl is legacy"\n') == []
+    assert f('LABELS = {"global/audit.jsonl": "tenant hash chain"}\n') == []
+
+
+def test_no_production_code_names_the_legacy_chain_as_one_string():
+    scanned = 0
+    offenders = []
+    for d in _SCAN_DIRS:
+        for p in sorted((REPO / d).rglob("*.py")):
+            if _is_test_source(p) or "node_modules" in p.parts:
+                continue
+            scanned += 1
+            rel = p.relative_to(REPO).as_posix()
+            if rel in _STRING_LEGACY_CHAIN_OPEN:
+                continue
+            for n in _string_legacy_chain_lines(p.read_text(encoding="utf-8", errors="replace")):
+                offenders.append(f"{rel}:{n}")
+    # The scan reached the module the review named (its literal is gone now).
+    assert (REPO / "corvin_operator/bridges/shared/compliance/eu_ai_act_audit.py").is_file()
+    assert scanned > 500, scanned
+    assert not offenders, (
+        "a legacy audit-chain path written as one string - resolve tenant_audit_chain(tid):\n"
+        + "\n".join(offenders))
+
+
+def test_string_legacy_chain_open_list_only_shrinks():
+    stale = [rel for rel in _STRING_LEGACY_CHAIN_OPEN
+             if not (REPO / rel).is_file()
+             or not _string_legacy_chain_lines((REPO / rel).read_text(encoding="utf-8"))]
+    assert not stale, f"fixed - remove from _STRING_LEGACY_CHAIN_OPEN: {stale}"
+
+
+def test_mcp_spawn_blocked_lands_in_the_tenant_chain(home: Path):
+    """E2E through the real emitter: the record is in THE chain, not a sibling."""
+    code = textwrap.dedent("""
+        import sys
+        sys.path.insert(0, %r)
+        from mcp_manager import compliance
+        compliance._emit_spawn_blocked("tool-x", "sha256_mismatch", "_default")
+    """) % str(REPO / "corvin_operator" / "mcp_manager")
+    env = {**os.environ, "CORVIN_HOME": str(home)}
+    env.pop("FORGE_ROOT", None)
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[-2000:]
+    canonical = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+    sibling = home / "tenants" / "_default" / "global" / "audit.jsonl"
+    assert canonical.is_file(), "no record reached the tenant chain"
+    events = [json.loads(l)["event_type"] for l in canonical.read_text().splitlines() if l.strip()]
+    assert "mcp_plugin.spawn_blocked" in events, events
+    assert not sibling.exists(), "the hand-composed sibling chain was written"

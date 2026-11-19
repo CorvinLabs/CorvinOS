@@ -103,9 +103,11 @@ def _emit_spawn_blocked(tool_id: str, reason: str, tid: str) -> None:
         if str(_forge) not in sys.path:
             sys.path.insert(0, str(_forge))
         from forge.security_events import write_event  # type: ignore[import-not-found]
-        _home_str = os.environ.get("CORVIN_HOME")
-        _home = Path(_home_str).expanduser() if _home_str else (Path.home() / ".corvin")
-        audit_path = _home / "tenants" / tid / "global" / "audit.jsonl"
+        # SEC-4 (2026-11-19): THE tenant chain - a blocked MCP spawn recorded in
+        # a hand-composed sibling file is not in the audit trail at all.
+        from forge.paths import tenant_audit_chain  # type: ignore[import-not-found]
+        audit_path = tenant_audit_chain(tid)
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
         write_event(audit_path, "mcp_plugin.spawn_blocked", details={
             "tool_id": tool_id,
             "tenant_id": tid,

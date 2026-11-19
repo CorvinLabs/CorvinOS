@@ -14,6 +14,11 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Tuple
 
+try:
+    from .measurement_hooks import measurement_root
+except ImportError:  # run as a plain script / imported top-level
+    from measurement_hooks import measurement_root
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,7 +27,7 @@ class TalentScoreCalculator:
 
     def __init__(self, queue_root: Path = None):
         if queue_root is None:
-            queue_root = Path.home() / ".corvin" / "measurement"
+            queue_root = measurement_root()
         self.queue_root = queue_root
 
     def read_jsonl_file(self, filepath: Path, limit: Optional[int] = None) -> List[Dict]:
@@ -230,7 +235,7 @@ class TalentScoreCalculator:
                 ctx["status"] = "SOLID"
             elif ctx["accuracy"] < 0.75:
                 ctx["rank"] = rank
-                ctx["medal"] = "⚠️"
+                ctx["medal"] = ""
                 ctx["status"] = "NEEDS_TRAINING"
             elif ctx["accuracy"] < 0.70:
                 ctx["rank"] = rank
@@ -238,7 +243,7 @@ class TalentScoreCalculator:
                 ctx["status"] = "STRUGGLING"
             else:
                 ctx["rank"] = rank
-                ctx["medal"] = "📌"
+                ctx["medal"] = ""
                 ctx["status"] = "ACTIVE"
 
             # Compute feedback percentage
@@ -279,7 +284,7 @@ class TalentScoreCalculator:
                     "type": "high_feedback",
                     "title": "Strong Feedback Signal",
                     "description": f"7+ helpful feedback records this hour",
-                    "badge": "✅ Learning Accelerated",
+                    "badge": "Learning Accelerated",
                 })
 
         # Event 3: Context milestone
@@ -300,9 +305,9 @@ class TalentScoreCalculator:
                 events.append({
                     "timestamp": datetime.utcnow().isoformat(),
                     "type": "warning",
-                    "title": f"⚠️ {struggling[0]['id']} Needs Training",
+                    "title": f"{struggling[0]['id']} Needs Training",
                     "description": f"Accuracy dropped below 75% ({struggling[0]['accuracy']*100:.0f}%)",
-                    "badge": "⚠️ Attention Needed",
+                    "badge": "Attention Needed",
                 })
 
         # Event 5: Budget efficiency
@@ -314,7 +319,7 @@ class TalentScoreCalculator:
                     "type": "efficiency",
                     "title": "Budget-Complexity Alignment Tuned",
                     "description": f"Match score {avg_match*100:.0f}% — allocation well-calibrated",
-                    "badge": "✅ System Tuned",
+                    "badge": "System Tuned",
                 })
 
         return sorted(events, key=lambda e: e["timestamp"], reverse=True)
@@ -491,7 +496,7 @@ class TalentScoreCalculator:
                 elif ctx["feedback_pct"] >= 75:
                     narratives.append({
                         "type": "feedback_win",
-                        "icon": "✅",
+                        "icon": "",
                         "title": f"Learning Signal: {ctx['id']}",
                         "description": f"Context '{ctx['id']}' has {ctx['feedback_pct']:.0f}% helpful feedback — strong learning signal",
                         "importance": "medium",

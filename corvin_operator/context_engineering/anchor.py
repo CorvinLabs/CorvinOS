@@ -127,16 +127,22 @@ def _legacy_safe_key(session_key: str) -> str:
     return s
 
 
-def _safe_key(session_key: str) -> str:
-    """``<sanitised chat key>`` plus ``_<seq>`` for a ``#<seq>`` /new epoch.
-    A long chat key is truncated with a digest of the CHAT part only, and the
-    epoch stays outside it — so ``erasure_handlers.CELAnchorHandler`` can match
-    every epoch of a chat from the chat key alone (review R6-2). Identical to
-    the old name for every key of 100 chars or less."""
+def _split_epoch(session_key: str) -> "tuple[str, str]":
     key = str(session_key or "")
     base, sep, epoch = key.rpartition("#")
     if not (sep and epoch.isdigit()):
-        base, epoch = key, ""
+        return key, ""
+    return base, epoch
+
+
+def _lossy_safe_key(session_key: str) -> str:
+    """The pre-2026-11-19 name: every character outside ``[A-Za-z0-9_.-]`` becomes ``_``.
+
+    LOSSY - ``email:a+b@x.com``, ``email:a_b@x.com`` and ``email:a:b@x.com`` all became
+    ``email_a_b_x.com`` and shared one anchor store (one chat's anchored goal and facts in
+    the other chat's brief). Kept as the name of the keys :func:`_is_canonical_key` proves
+    collision-free, and to find a store written under the old name."""
+    base, epoch = _split_epoch(session_key)
     s = re.sub(r"[^A-Za-z0-9_.-]", "_", base).strip("_")
     if not s:
         return f"_nosession_{epoch}" if epoch else "_nosession"
@@ -146,6 +152,84 @@ def _safe_key(session_key: str) -> str:
     return f"{s}_{epoch}" if epoch else s
 
 
+#: Session keys whose old name is provably theirs alone. Two shapes:
+#:
+#: * ``<channel>:<chat>`` with an alphanumeric channel and a chat id of
+#:   ``[A-Za-z0-9.-]`` plus at most one ``@<domain>`` (a domain holds a letter, so it is
+#:   never read as a ``/new`` epoch): Discord/Telegram ids, WhatsApp JIDs, plain e-mail
+#:   addresses. The only characters the old name rewrote are that one ``:`` and that one
+#:   ``@``, and neither part holds a ``_`` - so the name maps back to exactly one key.
+#: * a bare ``[A-Za-z0-9.-]+`` id (console chat sids): the name IS the key.
+#:
+#: Everything else (a ``_``, ``+``, ``/``, a second ``:`` or ``@`` ...) can share its old
+#: name with another key and gets a digest of the raw key appended.
+_CANONICAL_KEY_RE = re.compile(
+    r"[A-Za-z0-9]+:[A-Za-z0-9.-]+(?:@[A-Za-z0-9.-]*[A-Za-z][A-Za-z0-9.-]*)?"
+    r"|[A-Za-z0-9.-]+")
+#: Decimal digits of the digest that tells a non-canonical key's store from the other keys
+#: sharing its old name (66 bits).
+_DIGEST_DIGITS = 20
+
+
+def _is_canonical_key(base: str) -> bool:
+    return bool(_CANONICAL_KEY_RE.fullmatch(base))
+
+
+def _key_digest(base: str) -> str:
+    raw = hashlib.sha256(base.encode("utf-8", "surrogatepass")).digest()
+    return str(int.from_bytes(raw[:9], "big") % 10 ** _DIGEST_DIGITS).zfill(_DIGEST_DIGITS)
+
+
+def _safe_key(session_key: str) -> str:
+    """The store name of a session key: collision-free (R3-NEW-16).
+
+    * a canonical key (:data:`_CANONICAL_KEY_RE`) keeps the name it always had, so no
+      existing store of a Discord, Telegram, WhatsApp, plain e-mail or console chat moves;
+    * any other key is ``<old name>_<20 decimal digits of sha256(chat part)>``, and a
+      ``#<seq>`` /new epoch is appended to those digits.
+
+    Why DECIMAL, directly followed by the epoch: ``erasure_handlers.CELAnchorHandler`` (a
+    mirror of this function in another package) matches a subject's stores as
+    ``<old name>(_<digits>)?`` (review R6-2: every epoch from the chat key alone). A digest
+    written as digits in the epoch position is matched by that rule as it stands, so an
+    Art. 17 request still finds the store of a key this function renamed. The digest has a
+    fixed width and an epoch is a ledger sequence number, so ``<digest>`` and
+    ``<digest><epoch>`` never read as each other; a canonical key's own epoch never has 20
+    digits. (That rule also matches the stores of the OTHER keys sharing the old name -
+    which, until this change, were the same file.)"""
+    base, epoch = _split_epoch(session_key)
+    if not base or _is_canonical_key(base):
+        return _lossy_safe_key(session_key)
+    return f"{_lossy_safe_key(base)}_{_key_digest(base)}{epoch}"
+
+
+def _lossy_store_is_this_chats(path: Path, session_key: str) -> bool:
+    """True when every entry of an old-name store names the chat itself as its author.
+
+    The old name can belong to several keys, and an entry carries no chat key - only the
+    ``sender`` of the turn that wrote it. In a private chat the sender IS the chat id, so
+    a store whose entries ALL carry ``sender == <chat id>`` is this chat's. An entry
+    without a sender, or with another one (a group chat, or the other chat that shared
+    the name), proves nothing: the store is left where it is, untouched."""
+    base, _ = _split_epoch(session_key)
+    chat = base.split(":", 1)[1] if ":" in base else base
+    if not chat:
+        return False
+    try:
+        seen = 0
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            entry = json.loads(line)
+            if not isinstance(entry, dict) or str(entry.get("sender") or "") != chat:
+                return False
+            seen += 1
+        return seen > 0
+    except (OSError, ValueError):
+        return False
+
+
 def _store_path(tenant_id: str, session_key: str) -> Path:
     # tenant_id is ALWAYS explicit → forge.paths.tenant_home never falls back to
     # the CORVIN_TENANT_ID env var here (CLAUDE.md § Multi-tenant Axis).
@@ -153,11 +237,28 @@ def _store_path(tenant_id: str, session_key: str) -> Path:
     root = Path(tenant_home(tenant_id)) / "cel_anchors"
     p = root / f"{_safe_key(session_key)}.jsonl"
     legacy = root / f"{_legacy_safe_key(session_key)}.jsonl"
-    if legacy != p and legacy.is_file() and not p.exists():
-        try:
-            legacy.rename(p)          # one-time move to the erasable name
-        except OSError:
-            pass
+    lossy = root / f"{_lossy_safe_key(session_key)}.jsonl"
+    if p == lossy:
+        # A key that keeps its old name: only the pre-R6 one-time move to the erasable name.
+        if legacy != p and legacy.is_file() and not p.exists():
+            try:
+                legacy.rename(p)
+            except OSError:
+                pass
+    elif not p.exists():
+        # A key that got a digest name: its old store moves only when it is provably this
+        # chat's - another chat may have written into the same old name, and then neither
+        # adopts it (the old file stays where it is, untouched).
+        for old in dict.fromkeys((lossy, legacy)):
+            if old.is_file() and _lossy_store_is_this_chats(old, session_key):
+                try:
+                    old.rename(p)
+                    pend = old.with_suffix(".pending.jsonl")
+                    if pend.is_file() and not p.with_suffix(".pending.jsonl").exists():
+                        pend.rename(p.with_suffix(".pending.jsonl"))
+                except OSError:
+                    pass
+                break
     return p
 
 

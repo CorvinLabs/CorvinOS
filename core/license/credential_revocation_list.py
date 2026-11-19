@@ -67,7 +67,8 @@ class CredentialRevocationList:
             credential_id: Credential to check
 
         Returns:
-            True if valid, False if revoked/expired
+            True if valid, False if revoked, expired or UNKNOWN (never
+            registered with :meth:`register_credential`)
 
         Raises:
             RuntimeError: If audit chain write fails (fail-closed)
@@ -123,6 +124,21 @@ class CredentialRevocationList:
                     except Exception as e:
                         raise RuntimeError(f"Audit chain write failed for grace period alert: {e}")
                     self._grace_notified.add(credential_id)
+
+            else:
+                # Unknown credential: fail-closed. Until 2026-11-19 an id that
+                # was never registered fell through to "valid" - any made-up
+                # credential id passed the check.
+                try:
+                    self._write_audit_event(
+                        "credential_unknown",
+                        credential_id,
+                        {"reason": "not_registered"},
+                        start_time,
+                    )
+                except Exception as e:
+                    raise RuntimeError(f"Audit chain write failed for unknown credential: {e}")
+                return False
 
         # **AUDIT-FIRST:** Write credential_verified event (passed all checks)
         try:

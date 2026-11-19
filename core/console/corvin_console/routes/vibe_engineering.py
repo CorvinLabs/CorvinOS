@@ -12,8 +12,10 @@ rooted at the authenticated `rec.tenant_id`.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
+from collections import deque
 import re
 from pathlib import Path
 from typing import Annotated, Any
@@ -21,6 +23,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import auth as session_auth
+from ..chain_tail import DEFAULT_MAX_SCAN_BYTES, iter_chain_tail, scan_window
 from ..deps import require_session, require_csrf
 
 try:
@@ -107,29 +110,46 @@ def _audit_path(tenant_id: str) -> "Path | None":
     if _forge_paths is None:
         return None
     try:
-        return Path(_forge_paths.tenant_global_dir(tenant_id)) / "forge" / "audit.jsonl"
+        # The ONE resolver of the tenant chain - never composed by hand.
+        return Path(_forge_paths.tenant_audit_chain(tenant_id))
     except Exception:  # noqa: BLE001
         return None
 
 
-def _read_decisions(tenant_id: str, limit: int) -> list[dict]:
+def _scan_info(tenant_id: str, *, found: int | None = None, limit: int | None = None,
+               max_scan_bytes: int = DEFAULT_MAX_SCAN_BYTES) -> dict[str, Any]:
+    """What the tail scan behind a response covered (BLOCKING: a stat + one read).
+
+    For a "newest ``limit``" query the answer is complete as soon as ``limit``
+    records were found, however large the chain is; pass both to say so.
+    """
+    p = _audit_path(tenant_id)
+    if p is None:
+        return {"truncated": False, "scanned_bytes": 0, "total_bytes": 0, "covers_since": None}
+    scan = scan_window(p, max_scan_bytes=max_scan_bytes)
+    if found is not None and limit is not None and found >= limit:
+        scan["truncated"] = False
+    return scan
+
+
+def _read_decisions(
+    tenant_id: str, limit: int, *, max_scan_bytes: int = DEFAULT_MAX_SCAN_BYTES,
+) -> list[dict]:
     """Last `limit` cel.decision records from the hash-chained audit log, most
     recent first. Each carries the chain hash + the content-free details. Empty
-    on any error or when the feature never ran (the legitimate empty-state)."""
+    on any error or when the feature never ran (the legitimate empty-state).
+
+    BLOCKING: streams the last ``max_scan_bytes`` of the chain line by line.
+    Async handlers call it through an awaited ``asyncio.to_thread``; it used to
+    ``read_text().splitlines()`` the whole chain on the event loop."""
     p = _audit_path(tenant_id)
-    if p is None or not p.exists():
+    if p is None or limit <= 0:
         return []
-    out: list[dict] = []
+    out: deque[dict] = deque(maxlen=limit)
     try:
-        # Whole-file scan is fine at single-operator scale; bounded by `limit`
-        # at the end. (A tail-read is the optimisation if the log grows large.)
-        for ln in p.read_text(encoding="utf-8").splitlines():
-            if '"cel.decision"' not in ln:
-                continue
-            try:
-                e = json.loads(ln)
-            except (json.JSONDecodeError, ValueError):
-                continue
+        for e in iter_chain_tail(
+            p, max_scan_bytes=max_scan_bytes, needles=('"cel.decision"',),
+        ):
             if e.get("event_type") != "cel.decision":
                 continue
             d = e.get("details", {}) or {}
@@ -148,7 +168,7 @@ def _read_decisions(tenant_id: str, limit: int) -> list[dict]:
             })
     except Exception:  # noqa: BLE001
         return []
-    return list(reversed(out))[:max(0, limit)]
+    return list(reversed(out))
 
 
 @router.get("/traces")
@@ -163,7 +183,9 @@ async def get_vibe_traces(
     if not 1 <= limit <= 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
 
-    decisions = _read_decisions(rec.tenant_id, limit)
+    decisions = await asyncio.to_thread(_read_decisions, rec.tenant_id, limit)
+    scan = await asyncio.to_thread(
+        _scan_info, rec.tenant_id, found=len(decisions), limit=limit)
     by_session: dict[str, dict[str, Any]] = {}
     for d in decisions:
         sid = d["session_id"]
@@ -173,7 +195,7 @@ async def get_vibe_traces(
         by_session.values(),
         key=lambda s: s["turns"][0].get("ts") or 0, reverse=True)
     return {"tenant_id": rec.tenant_id, "sessions": sessions,
-            "available": _forge_paths is not None}
+            "available": _forge_paths is not None, "scan": scan}
 
 
 @router.get("/explain/{brief_sha256}")
@@ -393,7 +415,8 @@ async def put_pipeline(
         _write_pipeline_config(rec.tenant_id, normalised)
     except _ty.TenantYamlUnreadable:
         from .. import audit as console_audit  # noqa: PLC0415
-        console_audit.action_failed(
+        await asyncio.to_thread(
+            console_audit.action_failed,
             tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
             action="cel.pipeline_update", target_kind="tenant_config",
             target_id="spec.context_engineering.pipeline", reason="tenant-yaml-unreadable",
@@ -803,6 +826,73 @@ def _parse_bound(raw: str | None) -> float | None:
 # Endpoint
 # ─────────────────────────────────────────────────────────────────────────────
 
+_AUDIT_QUERY_MAX_LIMIT = 1000
+
+
+def _scan_audit_events(
+    audit_path: "Path | None",
+    tenant_id: str,
+    *,
+    since_ts: float | None,
+    until_ts: float | None,
+    wanted_types: "set[str] | None",
+    wanted_skills: "set[str] | None",
+    limit: int,
+    max_scan_bytes: int = DEFAULT_MAX_SCAN_BYTES,
+) -> list[dict[str, Any]]:
+    """The newest ``limit`` matching events of ``tenant_id``'s chain, oldest
+    first, mapped to the AuditQueryResult event shape.
+
+    BLOCKING — call through ``asyncio.to_thread``. Streams the last
+    ``max_scan_bytes`` of the file; only ``limit`` mapped events are ever held.
+    """
+    if audit_path is None or limit <= 0:
+        return []
+    events: deque[dict[str, Any]] = deque(maxlen=limit)
+    for event in iter_chain_tail(audit_path, max_scan_bytes=max_scan_bytes):
+        # ── Tenant isolation (fail-closed): a record that names a DIFFERENT
+        # tenant is dropped, never relabelled. A record with no tenant_id
+        # lives in this tenant's own chain file and is attributed to it.
+        record_tenant = event.get("tenant_id")
+        if isinstance(record_tenant, str) and record_tenant:
+            if record_tenant != tenant_id:
+                continue
+        else:
+            record_tenant = tenant_id
+
+        details = event.get("details") or {}
+        mapped_type = _map_event_type(event.get("event_type", "unknown"))
+
+        if wanted_types is not None and mapped_type not in wanted_types:
+            continue
+        if wanted_skills is not None:
+            skill_id = details.get("skill_id") if isinstance(details, dict) else None
+            if skill_id not in wanted_skills:
+                continue
+        if since_ts is not None or until_ts is not None:
+            ts = _event_ts(event)
+            if since_ts is not None and ts < since_ts:
+                continue
+            if until_ts is not None and ts > until_ts:
+                continue
+
+        events.append({
+            "id": event.get("event_id", ""),
+            "type": mapped_type,
+            "timestamp": event.get("timestamp", ""),
+            "hash": (event.get("hash") or "")[:16],
+            "prev_hash": (event.get("prev_hash") or "")[:16],
+            # The hash the WRITER stamped — never derived at read time.
+            "lom_hash": _recorded_lom_hash(details),
+            "lom": _record_lom_label(details),
+            "tenant_id": record_tenant,
+            "event_type": event.get("event_type", ""),
+            "details": details,
+            "severity": event.get("severity", "INFO"),
+        })
+    return list(events)
+
+
 @router.get("/audit")
 async def get_audit_chain(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -853,69 +943,20 @@ async def get_audit_chain(
         {s.strip() for s in _skills_param.split(",") if s.strip()} if _skills_param else None
     )
 
-    events = []
-    if audit_path is not None and audit_path.exists():
-        try:
-            # Read real audit events from hash-chained log
-            with open(audit_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(event, dict):
-                        continue
+    # ``events[-limit:]`` with limit=0 returned the WHOLE chain; clamp instead.
+    limit = max(1, min(int(limit), _AUDIT_QUERY_MAX_LIMIT))
 
-                    # ── Tenant isolation (fail-closed): a record that names a
-                    # DIFFERENT tenant is dropped, never relabelled. A record
-                    # with no tenant_id lives in this tenant's own chain file
-                    # and is attributed to it.
-                    record_tenant = event.get("tenant_id")
-                    if isinstance(record_tenant, str) and record_tenant:
-                        if record_tenant != rec.tenant_id:
-                            continue
-                    else:
-                        record_tenant = rec.tenant_id
-
-                    details = event.get("details") or {}
-                    mapped_type = _map_event_type(event.get("event_type", "unknown"))
-
-                    if wanted_types is not None and mapped_type not in wanted_types:
-                        continue
-                    if wanted_skills is not None:
-                        skill_id = details.get("skill_id") if isinstance(details, dict) else None
-                        if skill_id not in wanted_skills:
-                            continue
-                    if since_ts is not None or until_ts is not None:
-                        ts = _event_ts(event)
-                        if since_ts is not None and ts < since_ts:
-                            continue
-                        if until_ts is not None and ts > until_ts:
-                            continue
-
-                    # Map real audit event to AuditQueryResult format
-                    events.append({
-                        "id": event.get("event_id", ""),
-                        "type": mapped_type,
-                        "timestamp": event.get("timestamp", ""),
-                        "hash": (event.get("hash") or "")[:16],
-                        "prev_hash": (event.get("prev_hash") or "")[:16],
-                        # The hash the WRITER stamped — never derived at read time.
-                        "lom_hash": _recorded_lom_hash(details),
-                        "lom": _record_lom_label(details),
-                        "tenant_id": record_tenant,
-                        "event_type": event.get("event_type", ""),
-                        "details": details,
-                        "severity": event.get("severity", "INFO"),
-                    })
-        except OSError:
-            # Graceful degradation if audit file unreadable
-            pass
-
-    # Limit to requested amount
-    events = events[-limit:] if events else []
+    # Blocking chain scan: awaited off the event loop, bounded to the file tail.
+    events = await asyncio.to_thread(
+        _scan_audit_events, audit_path, rec.tenant_id,
+        since_ts=since_ts, until_ts=until_ts, wanted_types=wanted_types,
+        wanted_skills=wanted_skills, limit=limit,
+    )
+    # A filtered query (time range, type, skill) can miss older matches even
+    # when the newest ``limit`` were not reached; an unfiltered one that filled
+    # ``limit`` is complete.
+    scan = await asyncio.to_thread(
+        _scan_info, rec.tenant_id, found=len(events), limit=limit)
 
     # Build graph structure
     nodes = [
@@ -962,6 +1003,8 @@ async def get_audit_chain(
             },
         },
         "nextCursor": None,
-        "hasMore": False,
+        # Older matching records exist outside the scanned tail of the chain.
+        "hasMore": bool(scan["truncated"]),
         "snapshotFreshness_ms": 0,
+        "scan": scan,
     }

@@ -138,7 +138,7 @@ class M21ArtifactRegistrationE2E(unittest.TestCase):
         orig = getattr(_hr, "_house_rules_classifier", None)
         self.addCleanup(setattr, _hr, "_house_rules_classifier", orig)
         _hr._house_rules_classifier = (  # type: ignore[assignment]
-            lambda task, rules, auth, **kw: ("", 0.0, "test clear"))
+            lambda task, rules, auth, **kw: ("", 0.99, "test clear"))
 
         limits_mod = types.ModuleType("license.limits")
 

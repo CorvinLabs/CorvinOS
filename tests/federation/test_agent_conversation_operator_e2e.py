@@ -53,7 +53,7 @@ def test_interjection_is_written_before_the_next_turn_and_reaches_its_prompt(tal
     after = [m["speaker"] for m in msgs[msgs.index(op[1]) - 1:msgs.index(op[1]) + 2]]
     assert after[1] == "operator" and after[2] in ("local", "peer")
     assert done["turns"] == 4                             # operator lines are not agent turns
-    assert any("operator: Prefer snake_case." in p for _, p in _Talk.prompts[2:])
+    assert any("[operator]\n| Prefer snake_case." in p for _, p in _Talk.prompts[2:])
 
     audit = [e for e in _conv_events(pair) if "operator_message" in str(e.get("event_type"))]
     assert len(audit) == 1

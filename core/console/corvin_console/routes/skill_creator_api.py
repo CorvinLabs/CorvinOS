@@ -322,7 +322,12 @@ async def generate_skill(
             pack = resolve_pack(req.attachment_ids, tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint)
 
         # A refine sends the base skill's body to the engine too — it is gated with the request.
+        # R3-BR-2: the attachment block is part of what the engine receives, so it is part
+        # of what the gates judge (it used to be appended after this check).
         gate_text = user_request + ("\n\n" + base["body"] if base else "")
+        if pack:
+            from .forge_intake_api import pack_prompt_block  # noqa: PLC0415
+            gate_text += pack_prompt_block(pack)
         try:
             forge_runs.check_spawn_gates(
                 gate_text, tenant_id=rec.tenant_id,
@@ -372,7 +377,8 @@ async def generate_skill(
         def progress(phase: str, pct: int, message: str) -> None:
             forge_runs.update_run(sync_run_id, phase=phase, progress=pct, message=message)
 
-        kwargs = _skill_spawn_kwargs(sync_run_id, rec.tenant_id, user_request, base, pack)
+        kwargs = _skill_spawn_kwargs(sync_run_id, rec.tenant_id, user_request, base, pack,
+                                     sid_fingerprint=rec.sid_fingerprint)
         try:
             result = await asyncio.to_thread(kwargs["work"], progress)
         except BaseException as exc:
@@ -673,16 +679,24 @@ def _spawn_generation_task(user_request: str, tenant_id: str,
     forge_runs.spawn(
         run_id=run_id, kind="skill", tenant_id=tenant_id,
         sid_fingerprint=sid_fingerprint,
-        **_skill_spawn_kwargs(run_id, tenant_id, user_request, base, attachment_pack),
+        **_skill_spawn_kwargs(run_id, tenant_id, user_request, base, attachment_pack,
+                              sid_fingerprint=sid_fingerprint or ""),
     )
     return run_id
 
 
 def _skill_spawn_kwargs(run_id: str, tenant_id: str, user_request: str,
                         base: Optional[Dict[str, str]],
-                        attachment_pack: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                        attachment_pack: Optional[Dict[str, Any]] = None, *,
+                        sid_fingerprint: str = "") -> Dict[str, Any]:
     """The ``forge_runs.spawn`` arguments of a skill run — shared by the POST
-    and by the resume of a run a console restart interrupted."""
+    and by the resume of a run a console restart interrupted.
+
+    Every engine call of the run passes the four console pre-spawn gates (review
+    R3-BR-2): one generation makes about a dozen calls, and only the first one's
+    text is the request the route gated - the rest carries what the model wrote in
+    between. A resumed run is gated the same way (the route's check ran in another
+    process)."""
     def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
         def on_iteration(k: int, loss: float, spec: Any) -> None:
             forge_runs.emit_event(run_id, "iteration", f"LDD iteration {k}: loss {loss:.3f}",
@@ -691,10 +705,14 @@ def _skill_spawn_kwargs(run_id: str, tenant_id: str, user_request: str,
 
         if base:  # a refine starts from an existing skill: that body is the PREVIOUS version for the run's diff
             forge_runs.snapshot(run_id, "previous version", {"SKILL.md": str(base.get("body", ""))})
+        from skill_creator.autonomous import console_spawn_gate  # noqa: PLC0415
+        from skill_creator.llm_client import LatchedSpawnGate, run_gated  # noqa: PLC0415
+        gate = LatchedSpawnGate(console_spawn_gate(tenant_id, sid_fingerprint or "resumed-run"))
         orchestrator = SkillCreatorOrchestrator(
             progress_cb=progress,
             iteration_cb=on_iteration,
             registry_root=str(_registry_root(tenant_id)),
+            spawn_gate=gate,
         )
         _update_run(run_id, engine=orchestrator.engine_id,
                     model=str(getattr(getattr(orchestrator, "client", None), "model", None) or "unknown"),
@@ -703,7 +721,13 @@ def _skill_spawn_kwargs(run_id: str, tenant_id: str, user_request: str,
         if attachment_pack:  # the redacted projection, never the raw file (ADR-2254)
             from .forge_intake_api import pack_prompt_block  # noqa: PLC0415
             engine_request += pack_prompt_block(attachment_pack)
-        artifact = asyncio.run(orchestrator.create_skill(engine_request, base=base))
+        try:
+            artifact = run_gated(
+                gate, lambda: asyncio.run(orchestrator.create_skill(engine_request, base=base)))
+        except Exception as exc:
+            if exc is gate.refusal:
+                raise forge_runs.GenerationRefused(str(exc)) from exc
+            raise
         _record_stats(artifact)
         return {
             "target_id": artifact.spec.name,
@@ -738,7 +762,8 @@ def _skill_spawn_kwargs(run_id: str, tenant_id: str, user_request: str,
 forge_runs.register_resumer(
     "skill", lambda run_id, rec: _skill_spawn_kwargs(
         run_id, rec["tenant_id"], rec["resume"]["user_request"], rec["resume"].get("base"),
-        rec["resume"].get("attachment_pack")))
+        rec["resume"].get("attachment_pack"),
+        sid_fingerprint=str(rec.get("sid_fingerprint") or "")))
 
 
 def _operator_hint(exc: Exception) -> str:

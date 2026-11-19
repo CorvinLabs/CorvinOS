@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import artifact_review as ar
+from . import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -121,10 +122,15 @@ class PluginCreatorOrchestrator:
 
     def __init__(self, *, tenant_id: str,
                  progress_cb: Optional[Callable[[str, int, str], None]] = None,
-                 client: Any = None, output_root: Optional[Path] = None):
+                 client: Any = None, output_root: Optional[Path] = None,
+                 spawn_gate: Optional[Callable[[str], None]] = None):
         self.tenant_id = tenant_id
         self.progress_cb = progress_cb
-        self.client = client if client is not None else ar.resolve_engine()
+        self.client = client if client is not None else ar.resolve_engine(self.tenant_id)
+        # ``spawn_gate(text)`` runs before EVERY engine call of this orchestrator (plan,
+        # test generation, reviewers) and raises to refuse (review R3-BR-2).
+        self.spawn_gate = spawn_gate
+        self.client = llm_client.gated_client(self.client, spawn_gate)
         self.engine_id = ar.engine_id(self.client)
         self._output_root = output_root
 

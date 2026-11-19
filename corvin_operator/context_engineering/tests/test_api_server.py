@@ -13,9 +13,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from api_server import app, MeasurementReader
 
 
+TEST_KEY = "test-key-0123456789abcdef"
+
+
 @pytest.fixture
-def client():
-    """Flask test client."""
+def client(monkeypatch):
+    """Flask test client that sends the operator's API key (R3-NEW-36: every request
+    needs it — there is no built-in key and no loopback exemption)."""
+    monkeypatch.setenv("CORVIN_TELEMETRY_API_KEY", TEST_KEY)
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        client.environ_base["HTTP_X_API_KEY"] = TEST_KEY
+        yield client
+
+
+@pytest.fixture
+def anon_client():
+    """Flask test client without a key (remote_addr is 127.0.0.1, as for any local caller)."""
     app.config["TESTING"] = True
     with app.test_client() as client:
         yield client
@@ -233,3 +247,64 @@ class TestAPIEndpoints:
 
         assert data["track"] == "ADR-0273 Attention Budget"
         assert "stats" in data
+
+
+class TestAPIKeyGate:
+    """R3-NEW-36: no default key, no loopback bypass, constant-time compare, generic errors."""
+
+    PATHS = ["/health", "/api/v1/measurements/latest", "/api/v1/talent/score"]
+
+    def test_no_key_configured_serves_nothing(self, anon_client, monkeypatch):
+        monkeypatch.delenv("CORVIN_TELEMETRY_API_KEY", raising=False)
+        for path in self.PATHS:
+            for headers in ({}, {"X-API-Key": "local-dev-only"}, {"X-API-Key": ""}):
+                r = anon_client.get(path, headers=headers)
+                assert r.status_code == 503, (path, headers, r.status_code)
+
+    def test_former_default_key_is_refused_even_when_configured(self, anon_client, monkeypatch):
+        monkeypatch.setenv("CORVIN_TELEMETRY_API_KEY", "local-dev-only")
+        r = anon_client.get("/health", headers={"X-API-Key": "local-dev-only"})
+        assert r.status_code == 503
+
+    def test_short_key_is_not_a_key(self, anon_client, monkeypatch):
+        monkeypatch.setenv("CORVIN_TELEMETRY_API_KEY", "abc")
+        assert anon_client.get("/health", headers={"X-API-Key": "abc"}).status_code == 503
+
+    def test_loopback_caller_without_key_is_unauthorized(self, anon_client, monkeypatch):
+        monkeypatch.setenv("CORVIN_TELEMETRY_API_KEY", TEST_KEY)
+        for path in self.PATHS:
+            r = anon_client.get(path, environ_base={"REMOTE_ADDR": "127.0.0.1"})
+            assert r.status_code == 401, (path, r.status_code)
+            r = anon_client.get(path, headers={"X-API-Key": TEST_KEY[:-1]})
+            assert r.status_code == 401
+            r = anon_client.get(path, headers={"X-API-Key": TEST_KEY + "x"})
+            assert r.status_code == 401
+
+    def test_positive_control_right_key_is_served(self, anon_client, monkeypatch):
+        monkeypatch.setenv("CORVIN_TELEMETRY_API_KEY", TEST_KEY)
+        r = anon_client.get("/health", headers={"X-API-Key": TEST_KEY})
+        assert r.status_code == 200
+
+    def test_compare_is_constant_time_primitive(self):
+        import inspect
+        import api_server
+        src = inspect.getsource(api_server.validate_api_key)
+        assert "compare_digest" in src and "!=" not in src
+
+    def test_error_body_never_carries_the_exception_text(self, client, monkeypatch):
+        import api_server
+
+        def _boom():
+            raise RuntimeError("/home/operator/.corvin/secret-path leaked")
+        monkeypatch.setattr(api_server, "get_talent_calculator", _boom)
+        for path in ("/api/v1/talent/score", "/api/v1/talent/ranking", "/api/v1/talent/insights",
+                     "/api/v1/talent/story"):
+            r = client.get(path)
+            assert r.status_code == 500, path
+            assert r.json == {"error": "internal error"}, r.json
+
+    def test_default_queue_root_is_under_corvin_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "ch"))
+        import talent_score
+        assert MeasurementReader().queue_root == tmp_path / "ch" / "measurement"
+        assert talent_score.TalentScoreCalculator().queue_root == tmp_path / "ch" / "measurement"

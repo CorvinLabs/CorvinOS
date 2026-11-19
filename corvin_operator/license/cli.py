@@ -33,32 +33,32 @@ _log = logging.getLogger(__name__)
 
 # ── CLI Commands ───────────────────────────────────────────────────
 
+#: Exit status of a subcommand this build does not implement. Non-zero: a script that
+#: runs it must not read "nothing happened" as success.
+_NOT_AVAILABLE = 1
+
+
 def cmd_activate_request(args) -> int:
-    """Send activation request (generate pubkey, print code URL)."""
-    try:
-        # Phase 1.2: Generate ephemeral keypair, send to authority
-        # For now, stub: print placeholder code URL
-        code_url = "https://license.corvin-labs.com/activate?session=stub-placeholder"
-        print(f"Activation code: {code_url}")
-        print("(Open this URL to claim your license)")
-        return 0
-    except Exception as e:
-        _log.error("Activation request failed: %s", e)
-        return 1
+    """Activation request — NOT IMPLEMENTED in this build.
+
+    No keypair is generated and no session is opened with the licence authority, so there
+    is no URL to print. It used to print a made-up one ("...activate?session=stub-placeholder",
+    "Open this URL to claim your license") and exit 0."""
+    print("ERROR: activation requests are not available in this build; nothing was sent.")
+    print("Import a licence file instead: corvin-license credential import <file>")
+    return _NOT_AVAILABLE
 
 
 def cmd_activate_redeem(args, code: str) -> int:
-    """Redeem an activation code (PoP, store credential)."""
-    try:
-        # Phase 1.2: Verify code, receive licence JWT, store to global/license/license.key
-        # Stub: print placeholder message
-        print(f"Redeeming code: {code}")
-        print("✅ License stored to ~/.corvin/global/license/license.key")
-        print("Tier: member | Expires: 2027-01-01")
-        return 0
-    except Exception as e:
-        _log.error("Activation redeem failed: %s", e)
-        return 1
+    """Code redemption — NOT IMPLEMENTED in this build.
+
+    Nothing is verified, redeemed or stored. The code is a credential-like value and is
+    never echoed (stdout ends up in shell history captures and CI logs)."""
+    # Name the path the resolver gives for THIS install (CORVIN_HOME may not be ~/.corvin).
+    dest = corvin_home() / "global" / "license" / "license.key"
+    print("ERROR: code redemption is not available in this build; nothing was redeemed or stored.")
+    print(f"Import a licence file instead: corvin-license credential import <file> (target: {dest})")
+    return _NOT_AVAILABLE
 
 
 def cmd_status(args) -> int:
@@ -95,10 +95,10 @@ def cmd_deactivate(args) -> int:
         license_path = corvin_home() / "global" / "license" / "license.key"
         if license_path.exists():
             license_path.unlink()
-            print("✅ License removed; reverted to FREE tier")
+            print("OK: License removed; reverted to FREE tier")
             return 0
         else:
-            print("ℹ️  No active license to deactivate")
+            print("NOTE: No active license to deactivate")
             return 0
     except Exception as e:
         _log.error("Deactivation failed: %s", e)
@@ -127,15 +127,18 @@ def cmd_crl_import(args, filepath: str) -> int:
     try:
         crl_path = Path(filepath)
         if not crl_path.exists():
-            print(f"❌ File not found: {filepath}")
+            print(f"ERROR: File not found: {filepath}")
             return 1
 
-        # Phase 1.2: Parse delta, merge via merge_crl_delta()
-        delta_data = json.loads(crl_path.read_text(encoding="utf-8"))
-        print(f"✅ Imported CRL delta: {len(delta_data.get('pages', []))} pages")
-        return 0
+        # The merge into the local revocation list is NOT IMPLEMENTED in this build. It used
+        # to parse the file, print "Imported CRL delta: N pages" and exit 0 while nothing was
+        # merged — an operator who imported a revocation believed it was in force.
+        json.loads(crl_path.read_text(encoding="utf-8"))   # still reject an unreadable file
+        print("ERROR: CRL import is not available in this build; nothing was merged.")
+        return _NOT_AVAILABLE
     except Exception as e:
-        _log.error("CRL import failed: %s", e)
+        _log.error("CRL import failed: %s", type(e).__name__)
+        print("ERROR: the CRL file could not be read; nothing was merged.")
         return 1
 
 
@@ -144,7 +147,7 @@ def cmd_credential_import(args, filepath: str) -> int:
     try:
         cred_path = Path(filepath)
         if not cred_path.exists():
-            print(f"❌ File not found: {filepath}")
+            print(f"ERROR: File not found: {filepath}")
             return 1
 
         # Phase 1.2: Parse credential type, validate, store
@@ -153,9 +156,9 @@ def cmd_credential_import(args, filepath: str) -> int:
             dest = corvin_home() / "global" / "license" / "license.key"
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(content, encoding="utf-8")
-            print(f"✅ Imported licence JWT to {dest}")
+            print(f"OK: Imported licence JWT to {dest}")
         else:
-            print(f"❌ Unknown credential format")
+            print(f"ERROR: Unknown credential format")
             return 1
 
         return 0
@@ -252,7 +255,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         elif args.code:
             return cmd_activate_redeem(args, args.code)
         else:
-            print("❌ activate: specify --request or <code>")
+            print("ERROR: activate: specify --request or <code>")
             return 1
 
     elif args.command == "status":
@@ -265,21 +268,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.offline_request:
             return cmd_bind_offline_request(args)
         else:
-            print("❌ bind: --offline-request is required")
+            print("ERROR: bind: --offline-request is required")
             return 1
 
     elif args.command == "crl":
         if args.crl_command == "import":
             return cmd_crl_import(args, args.file)
         else:
-            print("❌ crl: specify 'import <file>'")
+            print("ERROR: crl: specify 'import <file>'")
             return 1
 
     elif args.command == "credential":
         if args.cred_command == "import":
             return cmd_credential_import(args, args.file)
         else:
-            print("❌ credential: specify 'import <file>'")
+            print("ERROR: credential: specify 'import <file>'")
             return 1
 
     else:

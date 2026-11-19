@@ -13,18 +13,36 @@ override records landed in ``_default``'s chain; approve/reject did not check
 the override's tenant at all, so a session of tenant B could decide tenant A's
 request. The chain writer is now resolved per call for the tenant the record is
 ABOUT, and every decision path refuses a cross-tenant override id.
+
+Event loop (review 2026-11-19 round 3, R3-NEW-26): the ``async def`` methods
+used to write the audit chain (lock + fsync) and scan the whole chain file on
+the caller's event loop. Each is now a thin wrapper that awaits
+``asyncio.to_thread`` around a synchronous ``*_sync`` core; state is guarded by
+a lock because those cores run on worker threads.
+
+Approvers: nothing in production calls ``add_approver`` - there is no
+approver registry yet. ``has_approvers()`` lets a caller say "approval is not
+available on this install" instead of answering every decision with 403.
 """
 
+import asyncio
+import json
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Set
-from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+from datetime import datetime, timezone
 import logging
 
 from core.compliance.audit_chain_writer import AuditEvent
 from core.compliance.audit_chain_provider import get_audit_chain_writer
 
 logger = logging.getLogger(__name__)
+
+#: Tail window of the chain ``read_audit_log`` scans. Override events older
+#: than this are not listed; the result says so (``window.truncated``).
+AUDIT_LOG_MAX_SCAN_BYTES = 32 * 1024 * 1024
 
 
 class OverrideType(Enum):
@@ -68,6 +86,18 @@ class PermissionError(Exception):
     pass
 
 
+def _locked(fn):
+    """Run a method under the authority's state lock."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return fn(self, *args, **kwargs)
+
+    return wrapper
+
+
 class OverrideAuthority:
     """Manages operator overrides with approval gates.
 
@@ -101,6 +131,8 @@ class OverrideAuthority:
         self.overrides: Dict[str, OverrideRequest] = {}
         self.approvers: Set[str] = set()
         self._request_counter = 0
+        # The *_sync cores run on worker threads (asyncio.to_thread).
+        self._lock = threading.RLock()
 
     @property
     def audit_chain(self):
@@ -122,6 +154,18 @@ class OverrideAuthority:
         return override
 
     async def request_override(
+        self,
+        override_type: OverrideType,
+        target_id: str,
+        reason: str,
+        requestor_id: str,
+        tenant_id: str,
+    ) -> Dict:
+        """See :meth:`request_override_sync` (runs it on a worker thread)."""
+        return await asyncio.to_thread(self.request_override_sync, override_type, target_id, reason, requestor_id, tenant_id)
+
+    @_locked
+    def request_override_sync(
         self,
         override_type: OverrideType,
         target_id: str,
@@ -191,6 +235,13 @@ class OverrideAuthority:
         }
 
     async def approve_override(
+        self, override_id: str, approver_id: str, tenant_id: str
+    ) -> Dict:
+        """See :meth:`approve_override_sync` (runs it on a worker thread)."""
+        return await asyncio.to_thread(self.approve_override_sync, override_id, approver_id, tenant_id)
+
+    @_locked
+    def approve_override_sync(
         self, override_id: str, approver_id: str, tenant_id: str
     ) -> Dict:
         """Approve an override (admin only).
@@ -266,6 +317,13 @@ class OverrideAuthority:
         }
 
     async def reject_override(
+        self, override_id: str, approver_id: str, rejection_reason: str, tenant_id: str
+    ) -> Dict:
+        """See :meth:`reject_override_sync` (runs it on a worker thread)."""
+        return await asyncio.to_thread(self.reject_override_sync, override_id, approver_id, rejection_reason, tenant_id)
+
+    @_locked
+    def reject_override_sync(
         self, override_id: str, approver_id: str, rejection_reason: str, tenant_id: str
     ) -> Dict:
         """Reject an override request.
@@ -406,6 +464,11 @@ class OverrideAuthority:
         self.approvers.discard(user_id)
         logger.info(f"Removed approver: {user_id}")
 
+    def has_approvers(self) -> bool:
+        """True when at least one approver is registered. With none, no
+        override can ever be approved or denied on this install."""
+        return bool(self.approvers)
+
     def is_approver(self, user_id: str) -> bool:
         """Check if user is an authorized approver.
 
@@ -457,6 +520,11 @@ class OverrideAuthority:
         return self.get_override_status(override_id, tenant_id)
 
     async def interrupt_override(self, override_id: str, tenant_id: str) -> Dict:
+        """See :meth:`interrupt_override_sync` (runs it on a worker thread)."""
+        return await asyncio.to_thread(self.interrupt_override_sync, override_id, tenant_id)
+
+    @_locked
+    def interrupt_override_sync(self, override_id: str, tenant_id: str) -> Dict:
         """Interrupt/cancel a pending override.
 
         Args:
@@ -518,44 +586,94 @@ class OverrideAuthority:
             "previous_status": override.approval_status,
         }
 
-    async def get_audit_log(self, tenant_id: str) -> List[Dict]:
-        """Get audit trail for all overrides in a tenant.
+    def read_audit_log(
+        self, tenant_id: str, *, max_scan_bytes: int = AUDIT_LOG_MAX_SCAN_BYTES,
+    ) -> Dict[str, Any]:
+        """Override events of ``tenant_id`` from the tail of its audit chain.
 
-        Args:
-            tenant_id: Tenant scope
+        BLOCKING file I/O - call through ``asyncio.to_thread`` (or use
+        :meth:`get_audit_log`). Returns::
 
-        Returns:
-            List of audit events for the tenant (from core audit chain)
+            {"events": [...],            # oldest first
+             "corrupt_lines": int,       # unparseable lines inside the window
+             "complete": bool,           # False: unreadable file, corrupt
+                                         # lines, or a truncated window
+             "window": {"truncated", "scanned_bytes", "total_bytes"}}
 
-        Note: This reads from the immutable core audit chain, so events
-        are guaranteed to be hash-chained and tamper-resistant.
+        The scan covers the last ``max_scan_bytes`` of the file, streamed line
+        by line. An unparseable line is COUNTED and the scan goes on. Before
+        2026-11-19 the first corrupt line ended the loop inside an
+        ``except: pass`` and the events read up to it were returned as if they
+        were the whole trail.
         """
-        import json
-        from pathlib import Path
-
-        # Get the audit chain file path
         from corvin_operator.bridges.shared.paths import tenant_audit_chain
-        chain_path = tenant_audit_chain(tenant_id)
+        chain_path = Path(tenant_audit_chain(tenant_id))
 
-        if not chain_path.exists():
-            return []
-
-        events = []
+        events: List[Dict] = []
+        corrupt = 0
+        total = scanned = 0
+        readable = True
         try:
-            with open(chain_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    event = json.loads(line)
-                    # Filter to override-related events for this tenant
-                    details = event.get("details") or {}
-                    ev_tenant = details.get("tenant_id", event.get("tenant_id"))
-                    if (ev_tenant == tenant_id and
-                        event.get("event_type", "").startswith("override_")):
-                        events.append(event)
-        except (json.JSONDecodeError, IOError):
-            # If chain is corrupted, return empty (audit chain should be verified
-            # separately by boot tripwire; we don't fail here)
-            pass
+            fh = chain_path.open("rb")
+        except FileNotFoundError:
+            fh = None
+        except OSError:
+            fh = None
+            readable = False
+        if fh is not None:
+            with fh:
+                try:
+                    total = fh.seek(0, 2)
+                    start = max(0, total - max_scan_bytes)
+                    scanned = total - start
+                    skip_partial = False
+                    if start > 0:
+                        fh.seek(start - 1)
+                        skip_partial = fh.read(1) != b"\n"
+                    fh.seek(start)
+                    for raw in fh:
+                        if skip_partial:
+                            skip_partial = False
+                            continue
+                        if not raw.endswith(b"\n"):
+                            break  # record still being appended
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        try:
+                            event = json.loads(line.decode("utf-8", errors="replace"))
+                        except ValueError:
+                            corrupt += 1
+                            continue
+                        if not isinstance(event, dict):
+                            corrupt += 1
+                            continue
+                        details = event.get("details") or {}
+                        ev_tenant = details.get("tenant_id", event.get("tenant_id"))
+                        if (ev_tenant == tenant_id
+                                and str(event.get("event_type", "")).startswith("override_")):
+                            events.append(event)
+                except OSError:
+                    readable = False
+        truncated = total > max_scan_bytes
+        if corrupt:
+            logger.warning(
+                "override audit log: %d unparseable line(s) in the scanned window of tenant %s",
+                corrupt, tenant_id)
+        return {
+            "events": events,
+            "corrupt_lines": corrupt,
+            "complete": readable and corrupt == 0 and not truncated,
+            "window": {
+                "truncated": truncated,
+                "scanned_bytes": scanned,
+                "total_bytes": total,
+            },
+        }
 
-        return events
+    async def get_audit_log(self, tenant_id: str) -> List[Dict]:
+        """Override events of the tenant (list form of :meth:`read_audit_log`,
+        read on a worker thread). Use :meth:`read_audit_log` when the caller
+        must know whether the list is complete."""
+        result = await asyncio.to_thread(self.read_audit_log, tenant_id)
+        return result["events"]

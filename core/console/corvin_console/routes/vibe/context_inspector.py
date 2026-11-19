@@ -17,6 +17,7 @@ Loads real data from the tenant's audit chain under ``CORVIN_HOME``
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Optional
 import json
 import logging
@@ -27,6 +28,7 @@ from pydantic import BaseModel
 
 from ... import _bootstrap
 from ... import auth as session_auth
+from ...chain_tail import DEFAULT_MAX_SCAN_BYTES, iter_chain_tail, scan_window
 from ...deps import require_session
 
 _forge_paths = _bootstrap.forge_paths
@@ -38,7 +40,8 @@ router = APIRouter(prefix="/vibe", tags=["vibe"])
 
 def _audit_chain_path(tenant_id: str) -> Path:
     """The tenant's core audit chain, resolved under ``CORVIN_HOME``."""
-    return _forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
+    # The ONE resolver of the tenant chain - never composed by hand.
+    return Path(_forge_paths.tenant_audit_chain(tenant_id))
 
 
 @router.get("/health", summary="Check that the vibe module is mounted")
@@ -68,6 +71,12 @@ class ContextLayersResponse(BaseModel):
     preserved: ContextLayer
     injected: list[ContextLayer]
     merged: ContextLayer
+    # What the tail scan covered. When ``truncated`` and ``source`` is
+    # "example", the task's records may simply be older than the scanned window.
+    scan: Dict[str, Any] = {}
+    # "audit" = built from this tenant's chain records; "example" = no record
+    # of the task was found and the layers below are a structural placeholder.
+    source: str = "audit"
 
 
 class TaskListResponse(BaseModel):
@@ -75,6 +84,9 @@ class TaskListResponse(BaseModel):
     tasks: list[Dict[str, Any]]
     total: int
     latest_task_id: Optional[str] = None
+    # What the tail scan covered. ``truncated``: the chain is larger than the
+    # scanned window - tasks whose records are all older are not listed.
+    scan: Dict[str, Any] = {}
 
 
 @router.get(
@@ -96,29 +108,9 @@ async def list_tasks(
     tenant_id = rec.tenant_id
 
     try:
-        chain_paths = [_audit_chain_path(tenant_id)]
-
-        seen_tasks = {}
-        for chain_path in chain_paths:
-            if not chain_path.exists():
-                continue
-
-            with chain_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        event = json.loads(line)
-                        # Look for any event with a task_id field
-                        task_id = event.get("task_id")
-                        if task_id and task_id not in seen_tasks:
-                            seen_tasks[task_id] = {
-                                "task_id": task_id,
-                                "timestamp": event.get("timestamp_utc", ""),
-                                "event_type": event.get("event_type", "unknown"),
-                            }
-                    except json.JSONDecodeError:
-                        pass  # Skip malformed lines
+        # Blocking chain scan: awaited off the event loop, tail-bounded.
+        seen_tasks = await asyncio.to_thread(_scan_task_ids, tenant_id)
+        scan = await asyncio.to_thread(scan_window, _audit_chain_path(tenant_id))
 
         # Sort by timestamp descending (latest first)
         tasks = sorted(
@@ -134,7 +126,8 @@ async def list_tasks(
         return TaskListResponse(
             tasks=tasks,
             total=len(seen_tasks),
-            latest_task_id=latest_task_id
+            latest_task_id=latest_task_id,
+            scan=scan,
         )
 
     except OSError as e:
@@ -142,33 +135,47 @@ async def list_tasks(
         raise HTTPException(status_code=500, detail="failed to read audit chain")
 
 
-def _load_context_from_audit(tenant_id: str, task_id: str) -> Dict[str, Any]:
+def _scan_task_ids(
+    tenant_id: str, *, max_scan_bytes: int = DEFAULT_MAX_SCAN_BYTES,
+) -> Dict[str, Dict[str, Any]]:
+    """``{task_id: first record seen}`` over the tail of the tenant chain.
+
+    BLOCKING — call through ``asyncio.to_thread``. Streams the last
+    ``max_scan_bytes`` line by line; lines without a ``task_id`` key are
+    skipped before JSON parsing.
+    """
+    seen_tasks: Dict[str, Dict[str, Any]] = {}
+    for event in iter_chain_tail(
+        _audit_chain_path(tenant_id), max_scan_bytes=max_scan_bytes,
+        needles=('"task_id"',),
+    ):
+        task_id = event.get("task_id")
+        if isinstance(task_id, str) and task_id and task_id not in seen_tasks:
+            seen_tasks[task_id] = {
+                "task_id": task_id,
+                "timestamp": event.get("timestamp_utc", ""),
+                "event_type": event.get("event_type", "unknown"),
+            }
+    return seen_tasks
+
+
+def _load_context_from_audit(
+    tenant_id: str, task_id: str, *, max_scan_bytes: int = DEFAULT_MAX_SCAN_BYTES,
+) -> Optional[Dict[str, Any]]:
     """Load real context data from audit chain.
 
     Searches for ANY events related to the task_id (all event types supported).
     Groups by event_type to reconstruct 4-layer model.
     """
     try:
-        chain_paths = [_audit_chain_path(tenant_id)]
-
-        task_events = []
-        for chain_path in chain_paths:
-            if not chain_path.exists():
-                continue
-
-            with chain_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        event = json.loads(line)
-                        if event.get("task_id") == task_id:
-                            task_events.append(event)
-                    except json.JSONDecodeError:
-                        pass
-
-            if task_events:
-                break  # Found events, don't search other paths
+        # BLOCKING: streams the chain tail; callers await asyncio.to_thread.
+        task_events = [
+            event for event in iter_chain_tail(
+                _audit_chain_path(tenant_id), max_scan_bytes=max_scan_bytes,
+                needles=('"task_id"',),
+            )
+            if event.get("task_id") == task_id
+        ]
 
         if not task_events:
             return None
@@ -210,7 +217,8 @@ async def get_task_context_layers(
 
     try:
         # Try to load real data from audit chain
-        audit_data = _load_context_from_audit(tenant_id, task_id)
+        audit_data = await asyncio.to_thread(_load_context_from_audit, tenant_id, task_id)
+        scan = await asyncio.to_thread(scan_window, _audit_chain_path(tenant_id))
 
         if audit_data:
             # Real data found: use it to build response
@@ -253,6 +261,8 @@ async def get_task_context_layers(
 
             return ContextLayersResponse(
                 task_id=task_id,
+                scan=scan,
+                source="audit",
                 original=ContextLayer(
                     name="original",
                     version="1.0",
@@ -296,6 +306,8 @@ async def get_task_context_layers(
         logger.info(f"No audit data for task {task_id}, returning example structure")
         return ContextLayersResponse(
             task_id=task_id,
+            scan=scan,
+            source="example",
             original=ContextLayer(
                 name="original",
                 version="1.0",

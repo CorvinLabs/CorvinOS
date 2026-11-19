@@ -25,9 +25,13 @@ RESERVED_TENANT_NAMES = frozenset({
     "localhost", "local", "test", "internal", "reserved",
 })
 
-# Session ID: max 128 chars. Must pass length and format checks.
-# [PSEUDOCODE] Allows: UUIDs, channel-specific IDs (discord/123, slack/456)
+# Session ID: max 128 chars, ONE path segment. Allows UUIDs, snowflake ids and
+# chat ids as the bridges deliver them - including a leading hyphen, which is
+# how Telegram numbers groups and supergroups (``-1001234567890``). A ``/`` is
+# never part of it (``discord/123`` is channel + session, two segments), and
+# neither is a leading dot, so ``.`` and ``..`` cannot be named.
 SESSION_ID_MAX_LEN = 128
+SESSION_ID_REGEX = r"[A-Za-z0-9_-][A-Za-z0-9_.@+=-]{0,127}"
 
 # Channel ID: alphanumeric + underscores. Max 64 chars.
 # [PSEUDOCODE] Examples: "discord", "slack", "teams", "telegram"
@@ -128,6 +132,20 @@ def validate_session_id(session_id: str) -> str:
             f"session_id contains null byte: {session_id!r}"
         )
 
+    # Shape (fail-closed). ``fullmatch`` over a positive character class: the
+    # checks above were a denylist, so ``"."`` (the directory itself), a
+    # trailing newline, control characters, ``:`` (NTFS streams / drive
+    # prefixes) and shell metacharacters all passed and reached
+    # ``tenant_session_dir``. Accepted: UUIDs, snowflake ids and
+    # channel-style ids built from letters, digits, ``_ . - @ + =`` — not
+    # dots only and not a leading dot. A leading hyphen IS accepted: Telegram
+    # group chat ids are negative numbers (``-100...``); refusing them cut
+    # every Telegram group off from its session directory.
+    if not re.fullmatch(SESSION_ID_REGEX, session_id) or not session_id.strip("."):
+        raise ValueError(
+            f"session_id contains invalid characters: {session_id!r}"
+        )
+
     return session_id
 
 
@@ -156,7 +174,8 @@ def validate_channel_id(channel: str) -> str:
         raise ValueError("channel cannot be empty or whitespace-only")
 
     # Format check: lowercase alphanumeric + underscores, 1-64 chars
-    if not re.match(CHANNEL_ID_REGEX, channel):
+    # fullmatch: ``re.match`` with ``$`` also matches before a final newline.
+    if not re.fullmatch(CHANNEL_ID_REGEX, channel):
         raise ValueError(
             f"channel contains invalid characters: {channel!r}. "
             f"Only lowercase alphanumeric and underscores allowed (1-64 chars)."
@@ -171,6 +190,7 @@ __all__ = [
     "validate_channel_id",
     "TENANT_ID_REGEX",
     "CHANNEL_ID_REGEX",
+    "SESSION_ID_REGEX",
     "SESSION_ID_MAX_LEN",
     "RESERVED_TENANT_NAMES",
 ]

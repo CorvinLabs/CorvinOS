@@ -116,6 +116,7 @@ class TestReceiveWebhookNoAuth(unittest.TestCase):
         must re-register the channel with a secret."""
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
             webhooks_route._rate_hits.clear()
+            webhooks_route._unauth_hits.clear()
             _register_channel(webhooks_route, tid, "open-channel")
             resp = client.post(
                 f"/v1/console/webhook/{tid}/open-channel",
@@ -147,7 +148,7 @@ class TestReceiveWebhookNoAuth(unittest.TestCase):
                 content=oversized,
                 headers={"content-type": "application/octet-stream"},
             )
-            self.assertNotEqual(resp.status_code, 200, resp.text)
+            self.assertNotIn(resp.status_code, (200, 202), resp.text)
 
     def test_rate_limit_per_hour_field_is_enforced(self):
         """R2-C3 (was: BLIND SPOT — the field was decorative). The stored limit
@@ -156,6 +157,7 @@ class TestReceiveWebhookNoAuth(unittest.TestCase):
         regardless of the (here unset) secret."""
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
             webhooks_route._rate_hits.clear()
+            webhooks_route._unauth_hits.clear()
             _register_channel(webhooks_route, tid, "throttled",
                               hmac_secret_env="NO_SUCH_ENV_VAR_SET", rate_limit_per_hour=1)
             first = client.post(f"/v1/console/webhook/{tid}/throttled", content=b"{}")
@@ -211,7 +213,7 @@ class TestReceiveWebhookHmac(unittest.TestCase):
                 content=payload,
                 headers={"X-Hub-Signature-256": self._sign(payload)},
             )
-            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertEqual(resp.status_code, 202, resp.text)
 
     def test_oversized_body_is_refused_before_hmac_verification(self):
         """R2-C3 (was: BLIND SPOT — full buffering before the 401). The capped
@@ -219,6 +221,7 @@ class TestReceiveWebhookHmac(unittest.TestCase):
         and never reaches the signature compare."""
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
             webhooks_route._rate_hits.clear()
+            webhooks_route._unauth_hits.clear()
             _register_channel(webhooks_route, tid, "signed", hmac_secret_env=self._env_var,
                               rate_limit_per_hour=10_000)
             oversized = b"b" * (4 * 1024 * 1024)
@@ -263,13 +266,14 @@ class TestReceiveWebhookAudit(unittest.TestCase):
     def _audit_case(self, env_var: str):
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
             webhooks_route._rate_hits.clear()
+            webhooks_route._unauth_hits.clear()
             _register_channel(webhooks_route, tid, "open-channel", hmac_secret_env=env_var)
             secret_payload = b'{"super_secret_field": "should-not-be-logged"}'
             sig = "sha256=" + hmac.new(b"s3cr3t", secret_payload, hashlib.sha256).hexdigest()
             resp = client.post(f"/v1/console/webhook/{tid}/open-channel",
                                content=secret_payload,
                                headers={"X-Hub-Signature-256": sig})
-            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertEqual(resp.status_code, 202, resp.text)
 
             chain_path = home / "tenants" / tid / "global" / "forge" / "audit.jsonl"
             self.assertTrue(chain_path.exists(), "expected the audit chain file to be written")

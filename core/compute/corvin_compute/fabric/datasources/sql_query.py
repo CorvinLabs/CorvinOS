@@ -48,6 +48,42 @@ _FORBIDDEN = re.compile(
 )
 
 
+# Function calls a read-only statement may not make (review 2026-11-19, R3-NEW-29).
+# The keyword list above only knew a handful of names; ``query_to_xml('select
+# pg_read_file(...)')``, ``pg_terminate_backend``, ``lo_get``, ``GET_LOCK`` and
+# ``set_config`` all passed it. A read-only transaction does not stop any of them:
+# they read server files, run a second statement from a string, kill sessions,
+# take locks or change settings without writing a row.
+_DENIED_FUNCTION_PREFIXES = (
+    "pg_", "lo_", "dblink", "query_to_xml", "table_to_xml", "cursor_to_xml",
+    "schema_to_xml", "database_to_xml", "xpath", "ts_stat", "ts_rewrite", "crosstab",
+    "connectby", "sys_", "xp_", "sp_",
+)
+_DENIED_FUNCTIONS = frozenset({
+    "set_config", "get_lock", "release_lock", "release_all_locks", "is_free_lock",
+    "is_used_lock", "load_file", "sleep", "benchmark", "nextval", "setval", "lastval",
+    "currval", "master_pos_wait", "source_pos_wait", "wait_for_executed_gtid_set",
+    "wait_until_sql_thread_after_gtids", "load_extension", "readfile", "writefile",
+    "edit", "fts3_tokenizer", "zeroblob", "randomblob", "lowrite", "loread",
+    "updatexml", "extractvalue", "txid_current", "copy",
+})
+_CALL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_$]*)\s*\(")
+MAX_SQLITE_VALUE_BYTES = 1_000_000
+
+
+def denied_function(name: str) -> bool:
+    """True when a call of *name* is refused in a chat query."""
+    low = name.lower()
+    return low in _DENIED_FUNCTIONS or low.startswith(_DENIED_FUNCTION_PREFIXES)
+
+
+def _refuse_denied_calls(text: str) -> None:
+    for match in _CALL_RE.finditer(text):
+        if denied_function(match.group(1)):
+            raise QueryRefused(
+                f"function {match.group(1).upper()!r} is not allowed in a read-only query")
+
+
 def validate_select(sql: str) -> str:
     """Return the statement without a trailing ``;`` or raise :class:`QueryRefused`."""
     if not isinstance(sql, str) or not sql.strip():
@@ -59,11 +95,27 @@ def validate_select(sql: str) -> str:
         text = text[:-1].rstrip()
     if "\x00" in text:
         raise QueryRefused("invalid character")
+    # Quoting forms the scrubber below cannot follow would let it disagree with
+    # the server about where a literal ends, hiding code inside a "string":
+    # PostgreSQL dollar quoting, backslash-escaped quotes (E'..', MySQL default).
+    if re.search(r"\$[A-Za-z0-9_]*\$", text):
+        raise QueryRefused("dollar-quoted strings are not allowed in a query")
+    if "\\'" in text or '\\"' in text:
+        raise QueryRefused("backslash-escaped quotes are not allowed in a query")
+    # Denied functions are refused wherever their call appears - including INSIDE a
+    # string literal, because several functions execute a statement passed as text.
+    _refuse_denied_calls(text)
     # Look at the statement with string literals and quoted identifiers blanked
     # out, so 'update' or 'C#' inside a value does not trip the guard.
     scrubbed = re.sub(r"'(?:[^']|'')*'", "''", text)
     scrubbed = re.sub(r'"(?:[^"]|"")*"', '""', scrubbed)
     scrubbed = re.sub(r"`[^`]*`", "``", scrubbed)
+    if re.search(r"\b(?:[EeBbXxNn]|[Uu]&)''", scrubbed):
+        raise QueryRefused("prefixed string literals (E'..', U&'..', X'..') are not allowed")
+    if "'" in scrubbed.replace("''", "") or '"' in scrubbed.replace('""', ""):
+        raise QueryRefused("unterminated string literal or identifier")
+    if re.search(r'(?:""|``)\s*\(', scrubbed):
+        raise QueryRefused("a quoted identifier may not be called as a function")
     if ";" in scrubbed:
         raise QueryRefused("exactly one statement is allowed")
     if "--" in scrubbed or "/*" in scrubbed or "#" in scrubbed:
@@ -180,7 +232,7 @@ def _iter_cursor(cur: Any, max_rows: int):
         yield tuple(row.values()) if isinstance(row, dict) else row
 
 
-def _run_csv(raw: dict, sql: str, max_rows: int) -> dict[str, Any]:
+def _run_csv(raw: dict, sql: str, max_rows: int, timeout_s: int = 15) -> dict[str, Any]:
     cfg = raw.get("config") or {}
     path = Path(str(cfg.get("path") or "")).expanduser()
     if not path.is_file() or path.suffix.lower() not in (".csv", ".tsv"):
@@ -216,15 +268,37 @@ def _run_csv(raw: dict, sql: str, max_rows: int) -> dict[str, Any]:
                     f'AND "{n}" NOT GLOB \'*[^0-9.]*\''
                 )
             db.set_authorizer(_sqlite_read_only)
-            cur = db.execute(sql)
-            columns = [d[0] for d in (cur.description or [])]
-            return _package(columns, cur.fetchmany(max_rows + 1), max_rows, started)
+            # R3-NEW-28: the in-memory query had neither a time nor a size limit - a
+            # cross product kept running past ``timeout_s`` and one ``zeroblob()``
+            # allocated over a gigabyte. The progress handler aborts the statement at
+            # the deadline (it also fires while rows are fetched); the length limit
+            # caps every string/blob the statement can build.
+            deadline = time.monotonic() + timeout_s
+            db.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 5000)
+            if hasattr(db, "setlimit"):
+                db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_SQLITE_VALUE_BYTES)
+                db.setlimit(sqlite3.SQLITE_LIMIT_COMPOUND_SELECT, 50)
+                db.setlimit(sqlite3.SQLITE_LIMIT_EXPR_DEPTH, 200)
+            try:
+                cur = db.execute(sql)
+                columns = [d[0] for d in (cur.description or [])]
+                return _package(columns, cur.fetchmany(max_rows + 1), max_rows, started)
+            except sqlite3.OperationalError as exc:
+                if "interrupt" in str(exc).lower():
+                    raise RuntimeError(
+                        f"the query exceeded the {timeout_s} s time limit and was stopped") from exc
+                raise
+            except (sqlite3.DataError, MemoryError) as exc:
+                raise RuntimeError("the query builds a value larger than the size limit") from exc
         finally:
             db.close()
 
 
-def _sqlite_read_only(action: int, *_args: Any) -> int:
+def _sqlite_read_only(action: int, *args: Any) -> int:
     allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION}
+    if action == sqlite3.SQLITE_FUNCTION and len(args) > 1 and isinstance(args[1], str) \
+            and denied_function(args[1]):
+        return sqlite3.SQLITE_DENY
     return sqlite3.SQLITE_OK if action in allowed else sqlite3.SQLITE_DENY
 
 
@@ -246,7 +320,7 @@ def run_readonly_query(
     if adapter in ("mysql", "mariadb"):
         return _run_mysql(raw_manifest, env, statement, max_rows, timeout_s)
     if adapter == "local_file":
-        return _run_csv(raw_manifest, statement, max_rows)
+        return _run_csv(raw_manifest, statement, max_rows, timeout_s)
     raise RuntimeError(f"adapter {adapter!r} cannot be queried from chat in this build")
 
 

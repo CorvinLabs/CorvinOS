@@ -18,8 +18,10 @@ Access levels:
 """
 from __future__ import annotations
 
+import asyncio
 import mimetypes
 import os
+import secrets
 import time
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -175,6 +177,11 @@ def _access(rel_path: str) -> Literal["full", "read", "none"]:
     return "full"
 
 
+#: ``_write_protected_class`` verdict for a path whose resolved target is not
+#: under the tenant root.
+_OUTSIDE_ROOT = "outside_tenant_root"
+
+
 def _write_protected_class(root: Path, rel: str) -> str | None:
     """The protected-store component a WRITE (delete / upload / mkdir) would
     touch, judged on BOTH the raw and the symlink-resolved path, or None.
@@ -193,8 +200,14 @@ def _write_protected_class(root: Path, rel: str) -> str | None:
         return hit
     try:
         resolved_rel = (root / rel).resolve().relative_to(root.resolve())
-    except (ValueError, OSError):
-        return None
+    except ValueError:
+        # The resolved path leaves the tenant root (a symlink inside the tree
+        # that points outside). That used to return None - "nothing protected
+        # here" - and the write went through the link (review 2026-11-19
+        # round 3, R3-NEW-20). Outside the root is the most protected class.
+        return _OUTSIDE_ROOT
+    except (OSError, RuntimeError):
+        return _OUTSIDE_ROOT  # unresolvable (e.g. a link loop): fail closed
     return _scan(str(resolved_rel))
 
 
@@ -428,7 +441,8 @@ async def files_upload(
 
     acc = _effective_access(root, dir)
     if acc in ("none", "read"):
-        console_audit.action_denied(
+        await asyncio.to_thread(
+            console_audit.action_denied,
             tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
             action="files.upload", target_kind="file", target_id=acc, reason="protected",
         )
@@ -469,33 +483,64 @@ async def files_upload(
         )
 
     dest = dest_dir / safe_name
+    # R3-NEW-20: ``dest.open("wb")`` followed a symlink sitting at the
+    # destination name, so an upload "into files/" overwrote whatever the
+    # link pointed at - outside the tenant root included. Three guards:
+    #   * a link at the destination is refused (and audited),
+    #   * the bytes go into a fresh temp file in the same directory, created
+    #     with O_EXCL | O_NOFOLLOW (never an existing name, never a link),
+    #   * ``os.replace`` then swaps the NAME; it never writes through a link
+    #     that appeared in between.
+    if dest.is_symlink():
+        raise _deny(rec, "upload", "symlink")
+    if dest.is_dir():
+        raise HTTPException(status_code=http_status.HTTP_409_CONFLICT,
+                            detail="a directory with this name already exists")
+    tmp = dest_dir / f".upload-{secrets.token_hex(8)}.part"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     written = 0
+    committed = False
     try:
-        with dest.open("wb") as out:
+        try:
+            fd = os.open(tmp, flags, 0o600)
+        except OSError as exc:
+            raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="could not create the upload file") from exc
+        with os.fdopen(fd, "wb") as out:
             while True:
                 chunk = await file.read(65536)
                 if not chunk:
                     break
                 written += len(chunk)
                 if written > _MAX_UPLOAD_BYTES:
-                    dest.unlink(missing_ok=True)
                     raise HTTPException(
                         status_code=http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail=f"file exceeds {_MAX_UPLOAD_BYTES // 1024 // 1024} MB limit",
                     )
                 # Live quota check: abort mid-stream if total would exceed limit
                 if used + written > _TENANT_QUOTA_BYTES:
-                    dest.unlink(missing_ok=True)
                     raise HTTPException(
                         status_code=http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail=f"storage quota exceeded ({_TENANT_QUOTA_BYTES // 1024 // 1024 // 1024} GB limit)",
                     )
                 out.write(chunk)
+        try:
+            os.replace(tmp, dest)
+        except OSError as exc:
+            raise HTTPException(status_code=http_status.HTTP_409_CONFLICT,
+                                detail="destination could not be replaced") from exc
+        committed = True
     finally:
+        if not committed:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         await file.close()
 
     rel = str(dest.relative_to(root))
-    console_audit.action_performed(
+    await asyncio.to_thread(
+        console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="files.upload",

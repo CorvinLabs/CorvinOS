@@ -354,6 +354,257 @@ def _is_tenant_learning_path(path: str | Path) -> bool:
     return _is_tenant_learning_rel(abs_str[len(home_str):].lstrip(sep).split(sep))
 
 
+#: Out-of-tree audit-chain records kept beside the anchor key
+#: (``security_events``): the path-keyed chain identity, the tail anchors and
+#: the per-chain MAC markers. Deleting one of them turns a replaced or truncated
+#: chain back into one that verifies (review 2026-11-19 SEC-3).
+_CHAIN_MARKER_DIRS = ("chain_ids", "chain_tails", "mac_active_chains",
+                      # Round 2 (R2-SEC-4): the per-path chain witness (its retired
+                      # generations included). Removing it re-opens the window the
+                      # witness exists to close.
+                      "chain_witness",
+                      # ...and where `forge.chain_loss` moves a lost chain's identity
+                      # record and witness: the only remaining proof of that chain.
+                      "chain_ids_retired", "chain_witness_retired")
+#: Files beside the anchor key that belong to the chain's integrity.
+_CHAIN_KEY_FILE_PREFIXES = ("audit_anchor", "audit_mac_active")
+
+
+def _anchor_key_path() -> Path:
+    """Mirror of ``security_events._anchor_key_path`` (import-free hook)."""
+    env = os.environ.get("CORVIN_AUDIT_ANCHOR_KEY", "").strip()
+    return (Path(os.path.expanduser(env)) if env
+            else Path(os.path.expanduser("~/.config/corvin-voice/audit_anchor.key")))
+
+
+def _audit_key_dirs() -> list[str]:
+    """Every directory that can hold the anchor key and its marker trees, in
+    ``_abs`` comparison form: the configured key's parent, the default
+    location, the XDG voice dir and the vault's parent."""
+    out: list[str] = []
+    cfg_base = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
+    for cand in (lambda: _anchor_key_path().parent,
+                 lambda: Path(os.path.expanduser("~/.config/corvin-voice")),
+                 lambda: Path(os.path.expanduser(cfg_base)) / "corvin-voice",
+                 lambda: _vault_path().parent):
+        try:
+            r = str(_abs(cand())).rstrip(os.sep)
+        except Exception:  # noqa: BLE001
+            continue
+        if r and r not in out:
+            out.append(r)
+    return out
+
+
+def _is_audit_integrity_path(path: str | Path) -> bool:
+    """The hash-chained audit trail and the out-of-tree records that anchor it:
+    any ``audit.jsonl`` (and its rotation / lock siblings) under the corvin
+    home, the anchor key, the MAC sentinel, and ``chain_ids/`` /
+    ``chain_tails/`` / ``mac_active_chains/`` beside the key. Same class as the
+    session ledger: no command but a read may name one. Never raises
+    (unresolvable -> protected)."""
+    try:
+        abs_p = _abs(path)
+        abs_str = str(abs_p)
+        home_str = _ref(_corvin_home())
+    except Exception:  # noqa: BLE001
+        return True
+    sep = os.sep
+    name = abs_p.name
+    if abs_str.startswith(home_str + sep) and (name == "audit.jsonl" or name.startswith("audit.jsonl.")):
+        return True
+    try:
+        if abs_str == str(_abs(_anchor_key_path())):
+            return True
+    except Exception:  # noqa: BLE001
+        return True
+    for d in _audit_key_dirs():
+        if not abs_str.startswith(d + sep):
+            continue
+        rel = abs_str[len(d):].lstrip(sep).split(sep)
+        if rel and rel[0] in _CHAIN_MARKER_DIRS:
+            return True
+        if len(rel) == 1 and rel[0].startswith(_CHAIN_KEY_FILE_PREFIXES):
+            return True
+    return False
+
+
+def _is_strict_store_path(path: str | Path) -> bool:
+    """Ledger-class OR audit-integrity path: the stores where any non-read
+    command naming the path fails closed."""
+    return _is_ledger_store_path(path) or _is_audit_integrity_path(path)
+
+
+#: Repo-relative source files whose content IS a gate: the audit writer and its
+#: allowlists, the three ``tenant_audit_chain`` mirrors (a redirected mirror
+#: moves every record out of the verified chain) and the boot tripwire. A
+#: worker rewriting one of them disables the mechanism without touching the
+#: chain. Operator edits arrive through git (a worktree + merge), never through
+#: a session's write tool (review 2026-11-19 SEC-3).
+_PROTECTED_REPO_FILES = (
+    ("corvin_operator", "forge", "forge", "security_events.py"),
+    ("corvin_operator", "forge", "forge", "paths.py"),
+    ("corvin_operator", "bridges", "shared", "paths.py"),
+    ("core", "paths", "tenant.py"),
+    ("core", "paths", "__init__.py"),
+    ("core", "compliance", "corvin_compliance_reports", "tripwire.py"),
+    # Round 3 (R3-SEC-10): the pre-spawn gate dispatcher (L34 / L35 / L44 call
+    # sites) and the house-rules policy. A session that rewrites either one in
+    # its own checkout switches a gate off without touching the gate itself.
+    ("corvin_operator", "bridges", "shared", "spawn_gates.py"),
+    ("corvin_operator", "policy", "house_rules.yaml"),
+)
+#: Repo-relative trees protected as a whole: the hook directory (this gate, the
+#: launcher, hooks.json and the sibling gates).
+_PROTECTED_REPO_TREES = (
+    ("corvin_operator", "voice", "hooks"),
+)
+
+
+def _code_roots() -> list[Path]:
+    """Checkouts whose gate sources this hook protects: the checkout the hook
+    file sits in, and - when the hook runs from the plugin cache - the checkout
+    that contains the live runtime root (``<repo>/.corvin``)."""
+    roots: list[Path] = []
+    repo = _repo_root()
+    if repo is not None:
+        roots.append(repo)
+    try:
+        parent = _corvin_home().parent
+        if (parent / ".corvin_repo").exists() and parent not in roots:
+            roots.append(parent)
+    except Exception:  # noqa: BLE001
+        pass
+    return roots
+
+
+def _is_gate_source_path(abs_p: Path, abs_str: str) -> bool:
+    sep = os.sep
+    # The directory this very file runs from (the plugin-cache copy included):
+    # the gate, its launcher and hooks.json.
+    try:
+        self_dir = _ref(Path(__file__).resolve().parent)
+        if abs_str == self_dir or abs_str.startswith(self_dir + sep):
+            return True
+    except Exception:  # noqa: BLE001
+        return True
+    for root in _code_roots():
+        for rel in _PROTECTED_REPO_FILES:
+            if abs_str == _ref(root.joinpath(*rel)):
+                return True
+        for rel in _PROTECTED_REPO_TREES:
+            tree = _ref(root.joinpath(*rel))
+            if abs_str == tree or abs_str.startswith(tree + sep):
+                return True
+    return False
+
+
+def _claude_config_dirs() -> list[str]:
+    """``~/.claude`` and ``CLAUDE_CONFIG_DIR`` in ``_abs`` comparison form."""
+    out: list[str] = []
+    cands = [Path(os.path.expanduser("~/.claude"))]
+    env = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if env:
+        cands.append(Path(os.path.expanduser(env)))
+    for d in cands:
+        try:
+            r = str(_abs(d)).rstrip(os.sep)
+        except Exception:  # noqa: BLE001
+            continue
+        if r and r not in out:
+            out.append(r)
+    return out
+
+
+def _project_roots() -> list[str]:
+    """Directories whose ``.claude/`` Claude Code reads as PROJECT settings for
+    this session: the hook's working directory (the worker's cwd) and the
+    checkout(s) whose gate sources this hook protects."""
+    out: list[str] = []
+    cands: list = [lambda: Path(os.getcwd())]
+    cands.extend((lambda r=r: r) for r in _code_roots())
+    for c in cands:
+        try:
+            r = str(_abs(c())).rstrip(os.sep)
+        except Exception:  # noqa: BLE001
+            continue
+        if r and r not in out:
+            out.append(r)
+    return out
+
+
+def _is_claude_user_settings(abs_p: Path) -> bool:
+    """A Claude Code settings file that can register - or unregister - this hook.
+
+    * ``~/.claude/settings*.json`` (or under ``CLAUDE_CONFIG_DIR``);
+    * round 2 (R2-SEC-3): ``settings*.json`` in ANY ``.claude/`` directory at,
+      below or above the worker's cwd and below the checkout root. Project and
+      local settings (``<project>/.claude/settings.json`` /
+      ``settings.local.json``) are merged over the user file: a worker that
+      writes ``{"disableAllHooks": true}`` or its own ``hooks`` block there
+      removes the gate for the next tool call of the next session, and only the
+      user file was protected.
+
+    A worker write there removes the gate. Never raises (unresolvable -> True)."""
+    name = abs_p.name
+    if not (name.startswith("settings") and name.endswith(".json")):
+        return False
+    try:
+        parent = str(abs_p.parent).rstrip(os.sep)
+        if parent in _claude_config_dirs():
+            return True
+        if abs_p.parent.name != ".claude":
+            return False
+        proj = str(abs_p.parent.parent).rstrip(os.sep) or os.sep
+        sep = os.sep
+        for root in _project_roots():
+            if (proj == root or proj.startswith(root + sep)      # at / below cwd or checkout
+                    or root.startswith(proj.rstrip(sep) + sep)):  # an ancestor of it
+                return True
+    except Exception:  # noqa: BLE001
+        return True
+    return False
+
+
+def _is_claude_plugins_path(abs_str: str) -> bool:
+    """``~/.claude/plugins/**`` (round 2, R2-SEC-3): the plugin cache holds the
+    COPY of this hook that an installed ``voice`` plugin actually runs, its
+    launcher and ``hooks.json``, plus ``installed_plugins.json`` /
+    ``known_marketplaces.json`` that decide which copy is loaded."""
+    sep = os.sep
+    for d in _claude_config_dirs():
+        tree = d + sep + "plugins"
+        if abs_str == tree or abs_str.startswith(tree + sep):
+            return True
+    return False
+
+
+def _guard_roots() -> list[str]:
+    """Directories whose removal or move AS A WHOLE (or of an ancestor) takes a
+    guard with it although no protected leaf is named: the anchor-key
+    directories (wherever ``CORVIN_AUDIT_ANCHOR_KEY`` points - round 2,
+    R2-SEC-4), the Claude config dirs and the project ``.claude/`` dirs
+    (R2-SEC-3). ``rm -rf ~/.claude``, ``mv <key dir> /tmp/x`` and
+    ``rm -rf <cwd>/.claude`` named nothing ``is_protected_path`` knows."""
+    out: list[str] = []
+    for r in _audit_key_dirs() + _claude_config_dirs() + [
+            pr + os.sep + ".claude" for pr in _project_roots()]:
+        r = r.rstrip(os.sep)
+        if r and r not in out:
+            out.append(r)
+    return out
+
+
+def _removes_guard_root(abs_str: str) -> bool:
+    """True when *abs_str* IS a guard root or an ancestor of one."""
+    sep = os.sep
+    abs_str = abs_str.rstrip(sep) or sep
+    for g in _guard_roots():
+        if abs_str == g or g.startswith(abs_str.rstrip(sep) + sep):
+            return True
+    return False
+
+
 def is_protected_path(path: str | Path) -> bool:
     """True if writing to *path* should be blocked."""
     if not path:
@@ -385,6 +636,16 @@ def is_protected_path(path: str | Path) -> bool:
     # ADR-2325 item 5 — the encrypted personal knowledge base and its device keys. A worker write
     # could plant a ciphertext, a revocation sentinel or an index binding. Writes only.
     if _is_personal_kb_runtime(abs_p.parts):
+        return True
+    # Review 2026-11-19 SEC-3 - the audit chain's out-of-tree anchors, the gate
+    # sources and the settings file that registers this hook.
+    if _is_audit_integrity_path(abs_p):
+        return True
+    if _is_gate_source_path(abs_p, abs_str):
+        return True
+    if _is_claude_user_settings(abs_p):
+        return True
+    if _is_claude_plugins_path(abs_str):
         return True
 
     home = _corvin_home()
@@ -1004,7 +1265,36 @@ _OUTPUT_FLAG_CMDS = ("curl", "wget", "sort", "openssl", "pandoc", "gcc", "cc", "
                      "ffmpeg", "pdftotext", "dot", "plantuml")
 #: Read-only commands allowed after a `cd` INTO a ledger-class store.
 _READ_ONLY_CMDS = ("cd", "pushd", "popd", "cat", "less", "more", "head", "tail", "ls",
-                   "wc", "grep", "rg", "stat", "file", "jq", "echo", "pwd", "true")
+                   "wc", "grep", "rg", "stat", "file", "jq", "echo", "pwd", "true",
+                   # pure readers (no output-file argument; a redirect is
+                   # checked separately)
+                   "egrep", "fgrep", "zgrep", "zcat", "bzcat", "xzcat", "sha256sum",
+                   "sha1sum", "md5sum", "cksum", "b2sum", "diff", "cmp", "du", "cut",
+                   "od", "hexdump", "strings", "nl", "realpath", "readlink",
+                   "basename", "dirname", "test", "[", "printf", "tree", "column")
+#: Commands that rewrite a file argument IN PLACE whenever they run on one. The
+#: write-target extraction used to know `sed -i` (exact short form) only, so
+#: `sed --in-place`, `sed -Ei`, `perl -pi`, `gzip`, `sponge`, `shuf -o`,
+#: `vim -c`, `sqlite3 <db> 'delete ...'` on a protected file all passed
+#: (review 2026-11-19 SEC-2). Every path argument of these is a write target.
+_INPLACE_ALWAYS_CMDS = ("patch", "sponge", "sqlite3", "sqlite",
+                        "vi", "vim", "nvim", "view", "nano", "pico", "emacs",
+                        "emacsclient", "ed", "ex", "joe", "micro", "ne")
+#: PowerShell read cmdlets / aliases (compared lower-case; PowerShell tool only).
+_PS_READ_ONLY_CMDS = frozenset({
+    "get-content", "gc", "type", "get-childitem", "gci", "dir", "select-string", "sls",
+    "get-item", "gi", "test-path", "get-filehash", "measure-object", "write-output",
+    "write-host", "get-acl", "get-itemproperty", "resolve-path", "get-location",
+    "set-location", "sl", "push-location", "pop-location",
+})
+#: In-place (de)compressors: they replace the file unless told to write stdout
+#: or only to list / test.
+_COMPRESS_CMDS = ("gzip", "gunzip", "bzip2", "bunzip2", "xz", "unxz", "lzma", "unlzma",
+                  "zstd", "unzstd", "lz4", "unlz4", "compress", "uncompress", "pigz",
+                  "pbzip2", "lzip")
+_COMPRESS_READ_FLAGS = ("-c", "--stdout", "--to-stdout", "-l", "--list", "-t", "--test")
+#: git subcommands whose path arguments are rewritten / removed in the work tree.
+_GIT_PATH_WRITERS = ("checkout", "restore", "rm", "mv")
 #: The ledger / anchor / queue stores, as PATH fragments: a bare word
 #: ("session_ledger" in a commit message) is not a hint (R7-5), a path is.
 _LEDGER_HINTS = ("session_ledger/", ".corvin-ledger/", "cel_anchors/", "secrets/personal_kb/",
@@ -1012,6 +1302,17 @@ _LEDGER_HINTS = ("session_ledger/", ".corvin-ledger/", "cel_anchors/", "secrets/
 _PROTECTED_HINTS = ("forge", "skill-forge", "audit.jsonl", "policy.json",
                     ".corvin", *_LEDGER_HINTS,
                     "secrets.json", "corvin-voice",
+                    # Review 2026-11-19 SEC-3 - the gate sources, the chain's
+                    # out-of-tree anchors, the hook registration and the L44
+                    # policy. Path fragments, so a bare word in a message is
+                    # not a hint.
+                    "path_gate.py", "voice/hooks/", "hooks.json", "with_python.sh",
+                    "security_events.py", "tripwire.py", "core/paths/",
+                    "shared/paths.py", "audit_anchor", "audit_mac_active",
+                    "chain_ids/", "chain_tails/", "mac_active_chains/",
+                    "chain_witness/", "chain_witness_retired/", "chain_ids_retired/",
+                    ".claude/plugins",
+                    ".claude/settings", "house_rules.yaml", "house_rules.py",
                     # ADR-0012 — data-locality operator policy
                     "data_policy.yaml", "data_policy.yml",
                     "data_policy.json",
@@ -1200,6 +1501,23 @@ def _dir_at_or_under_corvin_home(d: str) -> bool:
     return any(abs_str == r or abs_str.startswith(r + sep) for r in roots)
 
 
+def _is_read_only_tree(d: str) -> bool:
+    """A directory after a ``cd`` into which only reads may follow: a
+    ledger-class / audit-integrity store or a protected tree of the RUNTIME root (``<home>/**/forge``, ``compute``,
+    ``memory``, ...). A relative name written there lands in the protected
+    store although the hook resolved it against its own cwd. Protected SOURCE
+    trees of a checkout are not included: ``cd <hooks dir> && pytest`` is a
+    test run, and a write to a file in it is still caught by its target."""
+    if _is_strict_store_path(d):
+        return True
+    try:
+        abs_str = str(_abs(d)).rstrip(os.sep)
+        home_str = _ref(_corvin_home())
+    except Exception:  # noqa: BLE001
+        return True
+    return abs_str.startswith(home_str + os.sep) and is_protected_path(abs_str)
+
+
 def _seg_chdirs_into_tree(seg: str) -> bool:
     """True when a segment changes the working directory INTO (at/under) the corvin
     tree via `cd`, `pushd`, or a wrapper chdir flag (`env -C/--chdir`,
@@ -1303,10 +1621,18 @@ def _touches_corvin_tree(target: str) -> bool:
         except Exception:  # noqa: BLE001
             pass
     # target == root, target under root, or target an ancestor of root
-    return any(abs_str == r
-               or abs_str.startswith(r + sep)
-               or r.startswith(abs_str + sep)
-               for r in roots)
+    if any(abs_str == r
+           or abs_str.startswith(r + sep)
+           or r.startswith(abs_str + sep)
+           for r in roots):
+        return True
+    # Round 2 (R2-SEC-3 / R2-SEC-4): the guard roots - equal or ancestor only.
+    # A path UNDER one of them is decided by is_protected_path above, so a
+    # session's own files below ~/.claude or beside a non-default key stay free.
+    try:
+        return _removes_guard_root(abs_str)
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _find_root_touches_protected(root: str) -> bool:
@@ -1341,7 +1667,7 @@ def _find_roots(arg_toks: list[str]) -> list[str]:
     return roots
 
 
-def _target_dir_flag(arg_toks: list[str]) -> str | None:
+def _target_dir_flag(arg_toks: list[str], abbrev: bool = True) -> str | None:
     """Resolve a -t <dir> / -t<dir> / --target-directory=<dir> destination, if any.
 
     GNU mv/cp/install/rsync all accept this; previously only `install` honoured
@@ -1352,17 +1678,902 @@ def _target_dir_flag(arg_toks: list[str]) -> str | None:
             return arg_toks[i + 1]
         if tok.startswith("--target-directory="):
             return tok.split("=", 1)[1]
+        # GNU prefix abbreviation: `cp --t=<dir>`, `mv --targ <dir>` (round 3).
+        # Not for rsync (popt, no abbreviations; `--timeout=` is not a directory).
+        if abbrev and len(tok) >= 3 and _long_opt_is(tok, "--target-directory"):
+            val = _long_opt_value(arg_toks, i)
+            if val is not None:
+                return val
         if tok.startswith("-t") and len(tok) > 2 and not tok.startswith("--"):
             return tok[2:]  # glued GNU short form -t<dir>
     return None
 
 
-def _bash_targets(cmd: str) -> tuple[list[str], bool]:
+def _short_cluster_has(tok: str, flag: str, arg_flags: str) -> bool:
+    """True when the short-option cluster *tok* (``-Ei``, ``-pi.bak``, ``-ni``)
+    carries *flag* before any option that consumes the rest of the cluster as
+    its argument (``-e SCRIPT`` glued as ``-es/i/x/``)."""
+    if not tok.startswith("-") or tok.startswith("--") or len(tok) < 2:
+        return False
+    for ch in tok[1:]:
+        if ch == flag:
+            return True
+        if ch in arg_flags:
+            return False
+    return False
+
+
+def _path_candidates(arg_toks: list[str]) -> list[str]:
+    """Every token that can name a path: the non-flag arguments plus the value
+    of ``--opt=value`` and of the glued short forms ``-o<path>`` / ``-C<dir>``."""
+    out: list[str] = []
+    for t in arg_toks:
+        if t.startswith("-"):
+            if "=" in t:
+                out.append(t.split("=", 1)[1])
+            elif len(t) > 2 and not t.startswith("--"):
+                out.append(t[2:])
+            continue
+        out.append(t)
+    return [c.strip("\"'") for c in out if c]
+
+
+def _inplace_write_candidates(cmd_name: str, arg_toks: list[str]) -> list[str]:
+    """Path arguments a command rewrites in place, or [] when this invocation
+    is not an in-place writer. Candidates are checked by the caller with
+    ``is_protected_path`` - a non-path argument (a sed script) resolves to an
+    unprotected path and is harmless."""
+    if cmd_name in _INPLACE_ALWAYS_CMDS:
+        return _path_candidates(arg_toks)
+    if cmd_name in _COMPRESS_CMDS:
+        if any(t in _COMPRESS_READ_FLAGS for t in arg_toks):
+            return []
+        return _path_candidates(arg_toks)
+    if cmd_name in ("sed", "gsed"):
+        if any(_long_opt_is(t, "--in-place")
+               or _short_cluster_has(t, "i", "efl") for t in arg_toks):
+            return _path_candidates(arg_toks)
+        # `w FILE` / `W FILE` / `s///w FILE` inside the script name a file sed
+        # truncates and writes (round 3). Loose on purpose: candidates only.
+        return [m.group(1) for t in arg_toks if not t.startswith("-")
+                for m in _SED_WRITE_TARGET_RE.finditer(t)]
+    if cmd_name in ("perl", "ruby"):
+        if any(_short_cluster_has(t, "i", "eEmMIxCd") for t in arg_toks):
+            return _path_candidates(arg_toks)
+        return []
+    if cmd_name in ("awk", "gawk", "mawk", "nawk"):
+        for i, t in enumerate(arg_toks):
+            nxt = arg_toks[i + 1] if i + 1 < len(arg_toks) else ""
+            if ((t in ("-i", "--include") and "inplace" in nxt)
+                    or (t.startswith(("-i", "--include=")) and "inplace" in t)):
+                return _path_candidates(arg_toks)
+        return []
+    if cmd_name == "yq":
+        if any(t in ("-i", "--inplace") or t.startswith("--inplace=")
+               or _short_cluster_has(t, "i", "") for t in arg_toks):
+            return _path_candidates(arg_toks)
+        return []
+    if cmd_name == "shuf":
+        return [arg_toks[i + 1] for i, t in enumerate(arg_toks)
+                if (t == "-o" or (_long_opt_is(t, "--output") and "=" not in t))
+                and i + 1 < len(arg_toks)] + [
+            t.split("=", 1)[1] for t in arg_toks
+            if _long_opt_is(t, "--output") and "=" in t] + [
+            t[2:] for t in arg_toks
+            if t.startswith("-o") and len(t) > 2 and not t.startswith("--")]
+    if cmd_name == "wget":
+        return [arg_toks[i + 1] for i, t in enumerate(arg_toks)
+                if t in ("-P", "--directory-prefix") and i + 1 < len(arg_toks)] + [
+            t.split("=", 1)[1] for t in arg_toks if t.startswith("--directory-prefix=")] + [
+            t[2:] for t in arg_toks if t.startswith("-P") and len(t) > 2]
+    if cmd_name == "xxd" and any(_short_cluster_has(t, "r", "") or t in ("-revert", "--revert")
+                                 for t in arg_toks):
+        return _path_candidates(arg_toks)
+    if cmd_name == "xxd" or cmd_name == "uniq":
+        # INPUT [OUTPUT]: only the second positional is written (R3-SEC-9).
+        nf = [t for t in _all_nonflag(arg_toks) if not _NUMERIC_ARG_RE.fullmatch(t)]
+        return nf[1:]
+    if cmd_name in ("split", "csplit"):
+        return _path_candidates(arg_toks)
+    return []
+
+
+# ----- reader invocations (review 2026-11-19 round 2, R2-SEC-5) ------------
+#
+# Round 1 made every non-read command that NAMES a strict store (the audit
+# chain, a ledger) fail closed. The read list was a list of command NAMES, so
+# every analysis tool an operator session uses on the chain was refused:
+# ``awk '{print $1}' audit.jsonl``, ``sort``, ``xxd | head``, ``perl -ne``,
+# ``tar czf /tmp/c.tgz audit.jsonl``, ``gzip -c``, ``python3 -m json.tool``, a
+# ``for`` loop over the file, ``cp <gate source> /tmp/x``. A command name does
+# not say whether an invocation writes; its ARGUMENTS do. The functions below
+# decide per invocation, conservatively: anything they cannot prove to be a read
+# stays a non-read and fails closed exactly as before.
+
+_AWK_NAMES = ("awk", "gawk", "mawk", "nawk")
+#: awk program text that writes or runs something: ``print > "f"``,
+#: ``print | "cmd"``, ``system(...)``, ``close(...)`` of an output.
+_AWK_WRITE_RE = re.compile(
+    r"\bsystem\s*\(|\bprintf?\b[^;}]*(?:>|\|)|\|\s*&"
+    # round 3: `"cmd" | getline` runs a command, `@load` / `@include` pull code in.
+    r"|\|\s*getline\b|@\s*(?:load|include|namespace)\b")
+#: perl / ruby one-liner text that can write, delete or run something.
+_SCRIPT_WRITE_RE = re.compile(
+    r">|\bopen\b|\bunlink\b|\brename\b|\btruncate\b|\bsystem\b|\bexec\b|`|\bqx\b"
+    r"|\bFile\b|\bIO\b|\bsyswrite\b|\bsysopen\b|\bmkdir\b|\brmdir\b|\bchmod\b|\bchown\b"
+    r"|\butime\b|\blink\b|\bsymlink\b|\bFileUtils\b|\bKernel\b|\brequire\b|\buse\b|\beval\b"
+    # perl's in-place switch set from inside the program, `do FILE`, sockets.
+    r"|\$\^I|INPLACE_EDIT|\bdo\b|\bsocket\b|\bspawn\b|\bfork\b")
+#: The file a sed ``w`` / ``W`` command (or ``s///w``) names - a write TARGET.
+#: Deliberately loose (any ``w<space>path``): it only adds candidates that are
+#: then checked with ``is_protected_path``. Whether a sed script is a pure read
+#: is decided by ``_sed_script_reads_only``, never by a regex (round 3,
+#: R3-SEC-1: ``$w F``, ``1,$w F``, ``0~1w F``, ``s/a/b/gw F``, ``1e cmd`` all
+#: slipped a regex that wanted ``^ ; { } \\s /`` before the command letter).
+_SED_WRITE_TARGET_RE = re.compile(r"[wW](?:\s+|(?=[/~]))([^\s;}]+)")
+#: A perl / ruby regex literal in OPERAND position (after ``if`` / ``unless`` /
+#: ``=~`` / ``(`` / ``&&`` / ``||`` / ``and`` / ``or`` or at the start) whose body
+#: is plain text: no ``(``, ``{``, ``@``, backslash or quote, so nothing in it
+#: can run. Removed before the write scan so ``print if /open/`` is a read
+#: (R3-SEC-9). A ``/`` after an operand is DIVISION (``1 / unlink / 1`` runs
+#: ``unlink``) and is never stripped.
+_SCRIPT_PLAIN_REGEX_RE = re.compile(
+    r"(?:^|(?<=\bif)|(?<=\bunless)|(?<==~)|(?<=!~)|(?<=\()|(?<=&&)|(?<=\|\|)"
+    r"|(?<=\band)|(?<=\bor))\s*/[A-Za-z0-9_ .^*+?|:,=-]*\$?/[a-z]*")
+_TAR_NAMES = ("tar", "gtar", "bsdtar")
+#: Keyword-only shell segments that run nothing themselves.
+_SHELL_NOOP_WORDS = frozenset({"done", "fi", "esac", "then", "else", "do", "{", "}", "(", ")"})
+#: Leading shell keywords after which the real command of the segment follows.
+_SHELL_LEAD_WORDS = frozenset({"do", "then", "else", "{", "!", "time", "if", "elif",
+                               "while", "until"})
+
+
+def _strip_shell_keywords(toks: list[str]) -> list[str]:
+    """Peel ``do`` / ``then`` / ``else`` / ``if`` / ``while`` ... so the token list
+    starts at the command the segment runs (``do wc -l "$f"`` -> ``wc -l "$f"``)."""
+    i = 0
+    while i < len(toks) and toks[i] in _SHELL_LEAD_WORDS:
+        i += 1
+    return toks[i:]
+
+
+def _for_loop_words(toks: list[str]) -> "list[str] | None":
+    """The word list of a ``for NAME in WORDS`` segment, or None if not one."""
+    if len(toks) >= 3 and toks[0] == "for" and toks[2] == "in":
+        return [t.strip("\"'") for t in toks[3:]]
+    return None
+
+
+def _loop_word_is_protected(word: str) -> bool:
+    """A ``for`` word that hands the loop body a protected path: a strict store
+    or protected file named literally, or a glob that matches one now (or, when
+    it matches nothing yet, names a chain / ledger by hint). NOT the whole
+    runtime tree: a session workdir lives under the corvin home, and
+    ``for f in *.txt; do mv "$f" out/; done`` there is ordinary work."""
+    word = (word or "").strip("\"'")
+    if not word or word.startswith("-"):
+        return False
+    if "$" in word or "`" in word:
+        return _looks_protected(word)
+    if any(c in word for c in "*?["):
+        import glob as _glob  # noqa: PLC0415
+        try:
+            matches = _glob.glob(str(_abs(word)), recursive=True)
+        except Exception:  # noqa: BLE001
+            return True
+        if matches:
+            return any(_is_strict_store_path(m) or is_protected_path(m) for m in matches)
+        low = word.lower()
+        return any(h in low for h in ("audit.jsonl", "audit_anchor", "chain_", *_LEDGER_HINTS))
+    return _is_strict_store_path(word) or is_protected_path(word)
+
+
+def _long_opt_name(tok: str) -> str:
+    """``--name`` of a long option token (``--name=value`` included), else ''."""
+    if tok.startswith("--") and len(tok) > 2:
+        return tok.split("=", 1)[0]
+    return ""
+
+
+def _long_opt_is(tok: str, *fulls: str) -> bool:
+    """True when *tok* is one of the long options *fulls* or a prefix of one.
+
+    GNU getopt_long accepts any unambiguous prefix: ``sed --in-pl`` and
+    ``sed --i`` are ``--in-place``, ``sort --outp`` is ``--output``,
+    ``tar --rem`` is ``--remove-files``. Comparing the exact spelling let every
+    abbreviation through (round 3, R3-SEC-1). An ambiguous prefix is refused by
+    the tool itself, so matching it here only errs towards a deny."""
+    name = _long_opt_name(tok)
+    return bool(name) and any(f.startswith(name) for f in fulls)
+
+
+def _long_opt_value(arg_toks: list[str], i: int) -> "str | None":
+    """Value of the long option at *i*: after ``=``, else the next token."""
+    t = arg_toks[i]
+    if "=" in t:
+        return t.split("=", 1)[1]
+    return arg_toks[i + 1] if i + 1 < len(arg_toks) else None
+
+
+def _has_unknown_long_opt(args: list[str], known: "frozenset[str]") -> bool:
+    """A long option that is not spelled exactly like a known harmless one.
+    That covers every abbreviation and every option this gate has not vetted:
+    the invocation is then not a proven read."""
+    for t in args:
+        if t == "--":
+            break
+        name = _long_opt_name(t)
+        if name and name not in known:
+            return True
+    return False
+
+
+_SED_READ_LONG = frozenset({"--quiet", "--silent", "--expression", "--regexp-extended",
+                            "--null-data", "--separate", "--unbuffered", "--line-length",
+                            "--posix", "--debug", "--sandbox", "--help", "--version"})
+_SORT_READ_LONG = frozenset({
+    "--check", "--unique", "--reverse", "--numeric-sort", "--key", "--field-separator",
+    "--ignore-case", "--stable", "--general-numeric-sort", "--human-numeric-sort",
+    "--month-sort", "--version-sort", "--random-sort", "--sort", "--merge",
+    "--zero-terminated", "--dictionary-order", "--ignore-leading-blanks",
+    "--ignore-nonprinting", "--buffer-size", "--parallel", "--batch-size", "--debug",
+    "--files0-from", "--random-source", "--help", "--version"})
+_UNIQ_READ_LONG = frozenset({"--count", "--repeated", "--all-repeated", "--skip-fields",
+                             "--group", "--ignore-case", "--skip-chars", "--unique",
+                             "--zero-terminated", "--check-chars", "--help", "--version"})
+_AWK_READ_LONG = frozenset({"--field-separator", "--assign", "--re-interval", "--posix",
+                            "--traditional", "--characters-as-bytes", "--sandbox",
+                            "--version", "--help", "--non-decimal-data", "--use-lc-numeric",
+                            "--bignum", "--csv", "--no-optimize", "--optimize"})
+_TAR_READ_LONG = frozenset({
+    "--create", "--list", "--diff", "--compare", "--file", "--gzip", "--gunzip", "--bzip2",
+    "--xz", "--zstd", "--lzma", "--lzip", "--lzop", "--auto-compress", "--verbose",
+    "--exclude", "--exclude-from", "--exclude-vcs", "--exclude-vcs-ignores",
+    "--exclude-caches", "--exclude-backups", "--directory", "--files-from", "--null",
+    "--totals", "--numeric-owner", "--owner", "--group", "--mode", "--mtime", "--sort",
+    "--format", "--transform", "--xform", "--dereference", "--hard-dereference",
+    "--one-file-system", "--no-recursion", "--recursion", "--absolute-names",
+    "--ignore-failed-read", "--warning", "--anchored", "--no-anchored", "--wildcards",
+    "--no-wildcards", "--checkpoint", "--verify", "--sparse", "--acls", "--no-acls",
+    "--xattrs", "--no-xattrs", "--selinux", "--no-selinux", "--blocking-factor",
+    "--record-size", "--strip-components", "--newer", "--after-date", "--newer-mtime",
+    "--full-time", "--utc", "--quoting-style", "--show-transformed-names", "--help",
+    "--version", "--posix", "--no-auto-compress", "--ignore-zeros", "--block-number",
+    "--to-stdout", "--label", "--seek", "--no-seek", "--force-local", "--pax-option",
+    "--clamp-mtime", "--no-same-owner", "--no-same-permissions"})
+#: tar options that delete, overwrite or run something although the mode is
+#: create / list (compared as PREFIXES, see ``_long_opt_is``).
+_TAR_SIDE_EFFECT_LONG = ("--remove-files", "--delete", "--unlink-first", "--recursive-unlink",
+                         "--to-command", "--checkpoint-action", "--use-compress-program",
+                         "--rsh-command", "--info-script", "--new-volume-script",
+                         "--index-file", "--listed-incremental", "--volno-file")
+_TAR_MODE_LONG = {"--create": "c", "--list": "t", "--extract": "x", "--get": "x",
+                  "--append": "r", "--update": "u", "--catenate": "A",
+                  "--concatenate": "A", "--delete": "D", "--diff": "d", "--compare": "d"}
+#: Short tar options that take an argument (old-style clusters consume the
+#: following words in this order: ``tar cfg ARCHIVE SNAPSHOT``).
+_TAR_ARG_LETTERS = "fbCTXgIKLNVFH"
+#: Short tar options a create / list / compare run may carry and still be a read.
+_TAR_READ_LETTERS = frozenset("ctdfvzjJaWhpPlSCTXbBioON")
+_CP_READ_LONG = frozenset({
+    "--archive", "--recursive", "--preserve", "--no-preserve", "--force", "--verbose",
+    "--no-clobber", "--update", "--dereference", "--no-dereference", "--parents",
+    "--reflink", "--sparse", "--target-directory", "--no-target-directory",
+    "--one-file-system", "--strip-trailing-slashes", "--help", "--version"})
+_COMPRESS_READ_LONG = frozenset({
+    "--stdout", "--to-stdout", "--list", "--test", "--keep", "--verbose", "--quiet",
+    "--decompress", "--uncompress", "--force", "--fast", "--best", "--threads",
+    "--no-name", "--name", "--long", "--ultra", "--help", "--version", "--robot",
+    "--format", "--check", "--memlimit", "--single-stream", "--no-sparse"})
+_ZIP_READ_LONG = frozenset({"--recurse-paths", "--quiet", "--verbose", "--junk-paths",
+                            "--symlinks", "--exclude", "--include"})
+#: Commands whose arguments carry a PROGRAM (a sed / awk / perl script): a
+#: protected path can sit inside such a token, relative to the cwd.
+_SCRIPT_ARG_CMDS = ("sed", "gsed", "awk", "gawk", "mawk", "nawk", "perl", "ruby")
+_NUMERIC_ARG_RE = re.compile(r"[+-]?(?:0[xX][0-9A-Fa-f]+|\d+)[kKmMgG]?")
+
+
+def _sed_scripts(args: list[str]) -> "list[str] | None":
+    """The script texts of a sed invocation (every ``-e`` / ``--expression``
+    value, else the first positional), or None when the option set is not one
+    a pure read can carry (``-i``, ``-f``, an unknown short option)."""
+    scripts: list[str] = []
+    positional: list[str] = []
+    explicit = False
+    i = 0
+    while i < len(args):
+        t = args[i]
+        if t == "--":
+            positional.extend(args[i + 1:])
+            break
+        if t.startswith("--"):
+            name = _long_opt_name(t)
+            if name == "--expression":
+                explicit = True
+                val = _long_opt_value(args, i)
+                if val is None:
+                    return None
+                scripts.append(val)
+                if "=" not in t:
+                    i += 1
+            elif name == "--line-length" and "=" not in t:
+                i += 1
+        elif t.startswith("-") and len(t) > 1:
+            cluster = t[1:]
+            for j, ch in enumerate(cluster):
+                if ch == "e":
+                    explicit = True
+                    rest = cluster[j + 1:]
+                    if rest:
+                        scripts.append(rest)
+                    elif i + 1 < len(args):
+                        scripts.append(args[i + 1])
+                        i += 1
+                    else:
+                        return None
+                    break
+                if ch == "l":
+                    if not cluster[j + 1:]:
+                        i += 1
+                    break
+                if ch not in "nEruzs":
+                    return None
+        else:
+            positional.append(t)
+        i += 1
+    if not explicit:
+        if not positional:
+            return None
+        scripts.append(positional[0])
+    return scripts
+
+
+def _sed_script_reads_only(script: str) -> bool:
+    """True when *script* is a sed program that can only print, delete or
+    transform the pattern space: addresses plus ``p P d D q Q n N l h H g G x =
+    z F``, ``s`` without the ``w`` / ``e`` flags, ``y``, labels and branches,
+    ``a`` / ``i`` / ``c`` text and ``r`` / ``R`` (which read). Any ``w``, ``W``
+    or ``e`` command, any ``s///w`` / ``s///e`` and anything this parser does
+    not recognise make it False.
+
+    A real parser, not a regex: the text inside ``/.../`` is an address or a
+    pattern, never a command, so ``/write w something/p`` is a read while
+    ``$w F``, ``1,$w F``, ``0~1w F``, ``s/a/b/gw F`` and ``1e cmd`` are not."""
+    s = script
+    n = len(s)
+    i = 0
+
+    def _delimited(i: int, d: str) -> int:
+        """Index after the next unescaped *d* from *i*, or -1."""
+        while i < n:
+            if s[i] == "\\":
+                i += 2
+                continue
+            if s[i] == d:
+                return i + 1
+            i += 1
+        return -1
+
+    def _digits(i: int) -> int:
+        while i < n and s[i].isdigit():
+            i += 1
+        return i
+
+    def _address(i: int) -> int:
+        """Index after one address at *i* (unchanged when there is none), -1 on error."""
+        if i < n and s[i].isdigit():
+            i = _digits(i)
+            if i < n and s[i] == "~":
+                i = _digits(i + 1)
+            return i
+        if i < n and s[i] == "$":
+            return i + 1
+        if i < n and s[i] in "/\\":
+            if s[i] == "\\":
+                i += 1
+                if i >= n:
+                    return -1
+            i = _delimited(i + 1, s[i])
+            if i < 0:
+                return -1
+            while i < n and s[i] in "IM":
+                i += 1
+            return i
+        return i
+
+    def _blank(i: int) -> int:
+        while i < n and s[i] in " \t":
+            i += 1
+        return i
+
+    def _to_eol(i: int) -> int:
+        while i < n and s[i] != "\n":
+            if s[i] == "\\":
+                i += 1
+            i += 1
+        return i
+
+    while True:
+        while i < n and s[i] in " \t\n;}":
+            i += 1
+        if i >= n:
+            return True
+        j = _address(i)
+        if j < 0:
+            return False
+        if j != i:
+            i = _blank(j)
+            if i < n and s[i] == ",":
+                i = _blank(i + 1)
+                if i < n and s[i] in "+~":
+                    i += 1
+                j = _address(i)
+                if j < 0 or j == i:
+                    return False
+                i = j
+        i = _blank(i)
+        while i < n and s[i] == "!":
+            i = _blank(i + 1)
+        if i >= n:
+            return False
+        c = s[i]
+        i += 1
+        if c == "{":
+            continue
+        if c == "#":
+            i = _to_eol(i)
+            continue
+        if c in ":btT":
+            while i < n and s[i] not in ";\n":
+                i += 1
+            continue
+        if c in "aicrR":
+            i = _to_eol(i)
+            continue
+        if c == "s" or c == "y":
+            if i >= n or s[i] in " \n\\":
+                return False
+            d = s[i]
+            i = _delimited(i + 1, d)
+            if i < 0:
+                return False
+            i = _delimited(i, d)
+            if i < 0:
+                return False
+            if c == "s":
+                while i < n and s[i] in "gpiIMm0123456789":
+                    i += 1
+        elif c in "qQlL":
+            i = _digits(_blank(i))
+        elif c not in "pPdDnNhHgGx=zF":
+            return False  # w, W, e, or something this parser does not know
+        i = _blank(i)
+        if i < n and s[i] not in ";\n}":
+            return False  # s///w FILE, s///e, trailing text after a command
+
+
+def _script_one_liner_reads_only(args: list[str]) -> bool:
+    """perl / ruby: every ``-e`` / ``-E`` program (also glued, ``-e'...'``) is
+    free of anything that writes, deletes or runs, and no other option loads
+    code or edits in place. No inline program -> not a proven read."""
+    has_inline = False
+    i = 0
+    while i < len(args):
+        t = args[i]
+        if t == "--":
+            break
+        if t.startswith("--"):
+            return False
+        if t.startswith("-") and len(t) > 1:
+            cluster = t[1:]
+            for j, ch in enumerate(cluster):
+                if ch in "eE":
+                    rest = cluster[j + 1:]
+                    if rest:
+                        code = rest
+                    elif i + 1 < len(args):
+                        code = args[i + 1]
+                        i += 1
+                    else:
+                        return False
+                    has_inline = True
+                    if _SCRIPT_WRITE_RE.search(_SCRIPT_PLAIN_REGEX_RE.sub(" 1 ", code)):
+                        return False
+                    break
+                if ch == "F":
+                    break  # -F<pattern>: the rest is the split pattern
+                if ch not in "nplawWcTtUuX0123456789":
+                    return False  # -i, -M, -m, -I, -r, -s, -x, -S, -d, -C ...
+        i += 1
+    return has_inline
+
+
+def _tar_parse(arg_toks: list[str]) -> "tuple[str | None, str, bool]":
+    """(archive file, mode letters, plain) of a tar invocation. ``plain`` is
+    False when a short option outside ``_TAR_READ_LETTERS`` is present (``g``
+    writes a snapshot file, ``I`` / ``F`` run a program, ``x`` extracts ...)."""
+    modes = ""
+    archive: "str | None" = None
+    plain = True
+    i = 0
+    first = True
+    while i < len(arg_toks):
+        t = arg_toks[i]
+        cluster = ""
+        old_style = False
+        if t.startswith("--"):
+            name = _long_opt_name(t)
+            for full, letter in _TAR_MODE_LONG.items():
+                if name and full.startswith(name):
+                    modes += letter
+            if name and "--file".startswith(name) and name != "--":
+                val = _long_opt_value(arg_toks, i)
+                if val is not None:
+                    archive = val
+                    if "=" not in t:
+                        i += 1
+        elif t.startswith("-") and len(t) > 1:
+            cluster = t[1:]
+        elif first and re.fullmatch(r"[A-Za-z]+", t):
+            cluster = t  # old style: `tar czf a.tgz`
+            old_style = True
+        if cluster:
+            for j, ch in enumerate(cluster):
+                if ch in "ctxruAd":
+                    modes += ch
+                if ch not in _TAR_READ_LETTERS:
+                    plain = False
+                if ch in _TAR_ARG_LETTERS:
+                    val = None
+                    if not old_style and cluster[j + 1:]:
+                        val = cluster[j + 1:]
+                    elif i + 1 < len(arg_toks):
+                        val = arg_toks[i + 1]
+                        i += 1
+                    if ch == "f" and val is not None:
+                        archive = val
+                    if not old_style:
+                        break
+        first = False
+        i += 1
+    return archive, modes, plain
+
+
+def _tar_has_side_effect_opt(arg_toks: list[str]) -> bool:
+    return any(_long_opt_is(t, *_TAR_SIDE_EFFECT_LONG) for t in arg_toks)
+
+
+def _tar_archive_file(arg_toks: list[str]) -> "tuple[str | None, str]":
+    """Compatibility wrapper around ``_tar_parse``."""
+    archive, modes, _plain = _tar_parse(arg_toks)
+    return archive, modes
+
+
+def _embedded_path_pieces(tok: str) -> list[str]:
+    """Path-shaped fragments INSIDE one argument: a sed ``w <file>``, an awk
+    string, ``exec=rm <file>`` in a tar checkpoint action. The pieces of the
+    token split at shell / script punctuation, plus - for a piece like
+    ``w/abs/file`` - the part from its first ``/`` on. The whole token itself
+    is not returned (the caller checks it)."""
+    out: list[str] = []
+    for piece in re.split(r"[\s\"'=,;(){}<>|&`]+", tok):
+        piece = piece.strip()
+        if not piece:
+            continue
+        if piece != tok:
+            out.append(piece)
+        if "/" in piece and not piece.startswith(("/", "~")):
+            out.append(piece[piece.index("/"):])
+    return out
+
+
+def _copy_source_readable(src: str) -> bool:
+    """A protected path a COPY tool may read: an audit chain file or a gate
+    source FILE named literally. Never a glob, a tree, the anchor key / its
+    marker trees or the secret vault - copying those out is not an analysis read
+    (the key forges the chain)."""
+    src = src.strip("\"'")
+    if not src or any(c in src for c in "*?[{"):
+        return False
+    try:
+        abs_p = _abs(src)
+        abs_str = str(abs_p)
+    except Exception:  # noqa: BLE001
+        return False
+    if any(abs_str == d or abs_str.startswith(d + os.sep) for d in _audit_key_dirs()):
+        return False
+    try:
+        if abs_p.is_dir():
+            return False
+    except OSError:
+        return False
+    name = abs_p.name
+    if name == "audit.jsonl" or name.startswith("audit.jsonl."):
+        return True
+    return _is_gate_source_path(abs_p, abs_str)
+
+
+def _write_dest_clean(dest: "str | None", rel_ok: bool = True) -> bool:
+    """True when *dest* is a concrete path OUTSIDE every protected tree.
+    ``rel_ok=False`` (after a ``cd`` the hook cannot follow) additionally
+    requires an absolute path: a relative name lands in the cd target."""
+    if not dest:
+        return False
+    dest = dest.strip("\"'")
+    if not dest or dest == "-":
+        return bool(dest)
+    if not rel_ok and not dest.startswith(("/", "~")):
+        return False
+    if "$" in dest or "`" in dest or any(c in dest for c in "*?["):
+        return False
+    return not _touches_corvin_tree(dest) and not is_protected_path(dest)
+
+
+def _is_reader_invocation(toks: list[str], rel_ok: bool = True) -> bool:
+    """True when this command invocation only READS its file arguments, any
+    output going to stdout or to a path outside the protected trees. *toks*
+    starts at the real command (wrappers and shell keywords peeled).
+    Conservative: unknown command or unprovable form -> False."""
+    if not toks:
+        return True
+    if len(toks) == 1 and toks[0] in _SHELL_NOOP_WORDS:
+        return True
+    name = toks[0].rsplit("/", 1)[-1]
+    args = toks[1:]
+    if name in _READ_ONLY_CMDS or name in ("tac", "rev", "fold", "expand", "paste", "comm",
+                                           "join", "tr", "numfmt", "seq", "date", "sleep",
+                                           "base64", "base32", "sha512sum", "sha224sum",
+                                           "sha384sum", "zstdcat", "lz4cat", "bat"):
+        if name in ("base64", "base32"):
+            return not any(t == "-o" or _long_opt_is(t, "--output")
+                           or (t.startswith("-o") and not t.startswith("--")) for t in args)
+        # The few "read" tools that can still write a file or run a program.
+        if name == "tree":
+            return not any(_short_cluster_has(t, "o", "LPIH") or _long_opt_is(t, "--output")
+                           for t in args)
+        if name == "rg":
+            return not any(_long_opt_name(t) in ("--pre", "--hostname-bin") for t in args)
+        if name in ("less", "more"):
+            return not any(_short_cluster_has(t, "o", "bhjkPpTtxyz#") or
+                           _short_cluster_has(t, "O", "bhjkPpTtxyz#")
+                           or _long_opt_is(t, "--log-file", "--LOG-FILE") for t in args)
+        if name in ("zstdcat", "lz4cat"):
+            if _has_unknown_long_opt(args, _COMPRESS_READ_LONG):
+                return False
+            if any(t.startswith("-") and not t.startswith("--") and "o" in t for t in args):
+                return False
+            return name != "lz4cat" or len(_all_nonflag(args)) <= 1
+        return True
+    if name in _AWK_NAMES:
+        if _has_unknown_long_opt(args, _AWK_READ_LONG):
+            return False
+        if any((t in ("-i", "--include") or t.startswith(("-i", "--include=")))
+               for t in args):
+            return False
+        if any(t in ("-f", "--file", "-E", "--exec", "-l", "--load") or t.startswith("--file=")
+               for t in args):
+            return False  # program / extension from a file: not inspected
+        # gawk options that WRITE a file: -o/--pretty-print, -p/--profile,
+        # -d/--dump-variables, -D/--debug (interactive, can write).
+        if any(t[:2] in ("-o", "-p", "-d", "-D") and not t.startswith("--")
+               or t.startswith(("--pretty-print", "--profile", "--dump-variables", "--debug"))
+               for t in args):
+            return False
+        return not any(_AWK_WRITE_RE.search(t) for t in args)
+    if name == "sort":
+        # `--output` spelled out (`=value` or next word) or `-o`: a read of the
+        # inputs when the output lies outside every protected tree. Every other
+        # long option that is not a vetted one - each ABBREVIATION of --output
+        # (`--out=`, `--outp`), --compress-program, --temporary-directory - makes
+        # the invocation unproven.
+        dests: list[str] = []
+        rest: list[str] = []
+        i = 0
+        while i < len(args):
+            t = args[i]
+            if t in ("-o", "--output"):
+                if i + 1 >= len(args):
+                    return False
+                dests.append(args[i + 1])
+                i += 2
+                continue
+            if t.startswith("--output="):
+                dests.append(t.split("=", 1)[1])
+            elif t.startswith("-o") and not t.startswith("--") and len(t) > 2:
+                dests.append(t[2:])
+            else:
+                rest.append(t)
+            i += 1
+        if _has_unknown_long_opt(rest, _SORT_READ_LONG):
+            return False
+        if any(t == "-T" or _short_cluster_has(t, "o", "kStT")
+               or _short_cluster_has(t, "T", "kSto") for t in rest):
+            return False
+        return all(_write_dest_clean(d, rel_ok) for d in dests)
+    if name in ("uniq", "xxd"):
+        if name == "xxd" and any(_short_cluster_has(t, "r", "") or t in ("-revert", "--revert")
+                                 for t in args):
+            return False
+        if name == "uniq" and _has_unknown_long_opt(args, _UNIQ_READ_LONG):
+            return False
+        # INPUT [OUTPUT]: the first positional is read. A second one is the
+        # output file - a read of INPUT as long as it lies outside every
+        # protected tree (R3-SEC-9: `uniq CHAIN /tmp/out.txt`).
+        nf = [t for t in _all_nonflag(args) if not _NUMERIC_ARG_RE.fullmatch(t)]
+        if len(nf) <= 1:
+            return True
+        return len(nf) == 2 and _write_dest_clean(nf[1], rel_ok)
+    if name in ("sed", "gsed"):
+        if _has_unknown_long_opt(args, _SED_READ_LONG):
+            return False  # --in-place, --file and every abbreviation (`--in-pl`, `--i`)
+        scripts = _sed_scripts(args)
+        if scripts is None:
+            return False  # -i, -f, an option this gate has not vetted
+        return all(_sed_script_reads_only(sc) for sc in scripts)
+    if name in ("perl", "ruby"):
+        return _script_one_liner_reads_only(args)
+    if name in _COMPRESS_CMDS:
+        if _has_unknown_long_opt(args, _COMPRESS_READ_LONG):
+            return False  # --rm, --output*, anything not vetted
+        if any(t.startswith("-") and not t.startswith("--") and "o" in t for t in args):
+            return False  # zstd -o FILE
+        if name in ("lz4", "unlz4") and len(_all_nonflag(args)) > 1:
+            return False  # lz4 INPUT OUTPUT
+        return any(t in _COMPRESS_READ_FLAGS or _short_cluster_has(t, "c", "S")
+                   or _short_cluster_has(t, "l", "S") or _short_cluster_has(t, "t", "S")
+                   for t in args)
+    if name in _TAR_NAMES:
+        archive, modes, plain = _tar_parse(args)
+        if not plain or not modes or any(m in modes for m in "xruAD"):
+            return False
+        if _has_unknown_long_opt(args, _TAR_READ_LONG) or _tar_has_side_effect_opt(args):
+            return False  # --remove-files, --checkpoint-action, ... and abbreviations
+        if "c" in modes:
+            return _write_dest_clean(archive, rel_ok)
+        return True  # list / compare
+    if name == "zip":
+        if _has_unknown_long_opt(args, _ZIP_READ_LONG):
+            return False
+        if any(t in ("-m", "--move", "-d", "--delete", "-T", "-TT", "--unzip-command",
+                     "-O", "--output-file", "--out", "-b", "--temp-path")
+               or t.startswith(("--output-file=", "--out="))
+               or _short_cluster_has(t, "m", "bnitx") for t in args):
+            return False
+        nf = _all_nonflag(args)
+        return bool(nf) and _write_dest_clean(nf[0], rel_ok)
+    if name == "cp":
+        if _has_unknown_long_opt(args, _CP_READ_LONG):
+            return False  # --remove-destination, --link, --backup, abbreviations
+        if any(t in ("-l", "-s") or _short_cluster_has(t, "l", "tS")
+               or _short_cluster_has(t, "s", "tS") for t in args):
+            return False
+        nf = [t for t in _all_nonflag(args)]
+        dest = _target_dir_flag(args) or (nf[-1] if nf else None)
+        if not _write_dest_clean(dest, rel_ok):
+            return False
+        sources = nf if _target_dir_flag(args) else nf[:-1]
+        if not sources:
+            return False
+        return all((not _touches_corvin_tree(src)) or _copy_source_readable(src)
+                   for src in sources)
+    if name in ("python", "python3") or re.fullmatch(r"python3\.\d+", name):
+        # `python3 -m json.tool FILE` pretty-prints to stdout; a second
+        # positional is its OUTPUT file.
+        if len(args) >= 2 and args[0] == "-m" and args[1] == "json.tool":
+            return len(_all_nonflag(args[2:])) <= 1
+        return False
+    return False
+
+
+def _git_write_check(arg_toks: list[str]) -> tuple[list[str], bool]:
+    """(write_targets, fail_closed) for a ``git`` invocation.
+
+    ``git -C <dir> clean -fdx`` deletes every ignored file below ``<dir>`` -
+    the runtime root of a checkout (``<repo>/.corvin``, git-ignored) with its
+    audit chain included; ``git checkout/restore/rm/mv -- <path>`` rewrites or
+    removes the named work-tree file. Whole-tree operations without a path
+    (``reset --hard``, ``stash``, a branch switch) restore COMMITTED content
+    and are not gated."""
+    base = ""
+    i = 0
+    while i < len(arg_toks):
+        t = arg_toks[i]
+        if t == "-C" and i + 1 < len(arg_toks):
+            base = os.path.join(base, arg_toks[i + 1]) if base else arg_toks[i + 1]
+            i += 2
+        elif t.startswith("-C") and len(t) > 2:
+            base = os.path.join(base, t[2:]) if base else t[2:]
+            i += 1
+        elif t == "--work-tree" and i + 1 < len(arg_toks):
+            base = arg_toks[i + 1]
+            i += 2
+        elif t.startswith("--work-tree="):
+            base = t.split("=", 1)[1]
+            i += 1
+        elif t in ("-c", "--git-dir", "--namespace", "--exec-path", "--super-prefix",
+                   "--config-env") and i + 1 < len(arg_toks):
+            i += 2
+        elif t.startswith("-"):
+            i += 1
+        else:
+            break
+    if i >= len(arg_toks):
+        return [], False
+    sub, rest = arg_toks[i], arg_toks[i + 1:]
+
+    def _in_base(a: str) -> str:
+        a = a.strip("\"'")
+        if base and not a.startswith(("/", "~", "$")):
+            return os.path.join(base, a)
+        return a
+
+    if sub == "clean":
+        if any(t in ("-n", "--dry-run") or _short_cluster_has(t, "n", "e") for t in rest):
+            return [], False
+        paths = [_in_base(a) for a in _all_nonflag(rest)]
+        removes_ignored = any(_short_cluster_has(t, "x", "e") or _short_cluster_has(t, "X", "e")
+                              for t in rest)
+        roots = paths or [base or "."]
+        for r in roots:
+            if is_protected_path(r) or _dir_at_or_under_corvin_home(r):
+                return [], True
+            if removes_ignored and _touches_corvin_tree(r):
+                return [], True
+        return [], False
+    if sub in _GIT_PATH_WRITERS:
+        return [_in_base(a) for a in _all_nonflag(rest)], False
+    return [], False
+
+
+#: Why the last ``_bash_targets`` call failed closed ("" = the generic reason).
+#: A module global on purpose: the function has ~40 ``return [], True`` sites
+#: and one process handles one hook call.
+_FAIL_DETAIL = ""
+
+
+def _fail(detail: str = "") -> tuple[list[str], bool]:
+    global _FAIL_DETAIL
+    _FAIL_DETAIL = detail
+    return [], True
+
+
+def _strict_store_detail(cmd_name: str, target: str) -> str:
+    return ("`" + cmd_name[:40] + "` names " + target[:160] + ", a strict store (audit chain, "
+            "its anchors, a session ledger), and this invocation is not a proven read")
+
+
+def _fail_closed_message(cmd: str) -> str:
+    """The deny text for a fail-closed Bash verdict (R2-SEC-5). The old text -
+    "Bash command unparseable ... use the forge MCP tools" - was wrong for the
+    common case: a perfectly parseable `awk ... audit.jsonl`, for which no MCP
+    tool is the answer."""
+    why = _FAIL_DETAIL or (
+        "the command references a protected path (audit chain, session ledger, gate "
+        "source, secrets, runtime tree) in a form the gate cannot prove to be read-only "
+        "(command substitution, heredoc, inline interpreter, eval/xargs/sh -c, or an "
+        "unparseable segment)")
+    return (
+        "path_gate: denied (fail-closed) - " + why + ". Reading is allowed: cat, head, "
+        "tail, grep, jq, wc, sort, uniq, awk/sed/perl without an output file, sha256sum, "
+        "xxd, `tar c`/`gzip -c`/`cp` to a path OUTSIDE the protected trees. Writes to "
+        "forge / skill-forge state go through their MCP tools; a gate source file is "
+        "edited in a git worktree and merged (docs/claude-ref/layer-10-path-gate.md). "
+        "Command (first 80 chars): " + cmd[:80]
+    )
+
+
+def _bash_targets(cmd: str, *, powershell: bool = False) -> tuple[list[str], bool]:
     """Return (target_paths, fail_closed).
+
+    ``powershell`` is True for the PowerShell tool: its read cmdlets and the
+    ``$x = <read cmdlet> <path>`` assignment form count as reads there (in a
+    POSIX shell ``$x = cat f`` RUNS ``$x``, so the form is never a read).
 
     fail_closed=True means we could not parse safely AND the command looks
     like it might touch a protected path. The caller treats this as a deny.
     """
+    global _FAIL_DETAIL
+    _FAIL_DETAIL = ""
     targets: list[str] = []
 
     # eval / exec → only fail-closed if a protected hint is in the command,
@@ -1470,6 +2681,17 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
         targets.append(m.group(1))
 
     segs = _split_segments(cmd)
+    # Literal `cd` / `pushd` destinations of this command: a relative write
+    # target in a later segment lands under one of them (review 2026-11-19 SEC-2).
+    _cd_dirs: list[str] = []
+    for _seg in segs:
+        try:
+            _ct = _split_tokens(_seg)
+        except ValueError:
+            continue
+        if (_ct and _ct[0].rsplit("/", 1)[-1] in ("cd", "pushd") and len(_ct) > 1
+                and not _ct[1].startswith("-")):
+            _cd_dirs.append(_ct[1])
 
     # cd-into-tree backstop (round-4): the hook runs in its own subprocess and
     # cannot observe a `cd`, so `cd ~/.corvin && rm -rf tenants` resolved the
@@ -1488,15 +2710,21 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
         except ValueError:
             continue
         if (_ct and _ct[0].rsplit("/", 1)[-1] in ("cd", "pushd") and len(_ct) > 1
-                and _is_ledger_store_path(_ct[1])):
+                and _is_read_only_tree(_ct[1])):
             for _other in segs:
                 try:
-                    _ot = _strip_cmd_wrappers(_split_tokens(_other))
+                    _ot = _strip_cmd_wrappers(_strip_shell_keywords(_split_tokens(_other)))
                 except ValueError:
-                    return [], True
-                if _ot and (_ot[0].rsplit("/", 1)[-1] not in _READ_ONLY_CMDS
+                    return _fail("a command after `cd` into a read-only store could not be parsed")
+                # Only reads may follow. A reader invocation (R2-SEC-5: `sort`,
+                # `awk '{print}'`, `sha256sum`, ...) counts; any redirect does
+                # not - its relative target would land in the store.
+                if _ot and (not _is_reader_invocation(_ot, rel_ok=False)
                             or _REDIRECT_RE.search(_other)):
-                    return [], True
+                    return _fail(
+                        "`cd` into a read-only store (audit chain / session ledger / "
+                        "protected runtime tree) followed by `" + _ot[0][:40] + "`, which the "
+                        "gate cannot prove to be a read")
     _cd_into_tree = any(_seg_chdirs_into_tree(_seg) for _seg in segs)
     if _cd_into_tree:
         _DESTRUCTIVE_ALL = (_TARGET_ALL_CMDS + _DEST_LAST_CMDS + _FIND_CMDS
@@ -1506,8 +2734,12 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
                 _st = _strip_cmd_wrappers(_split_tokens(_seg))
             except ValueError:
                 return [], True
-            if _st and _st[0].rsplit("/", 1)[-1] in _DESTRUCTIVE_ALL:
-                return [], True
+            if (_st and _st[0].rsplit("/", 1)[-1] in _DESTRUCTIVE_ALL
+                    # R2-SEC-5: `tar cf /abs/outside.tar <file>` / `cp <file>
+                    # /abs/outside` after the cd only read the tree.
+                    and not _is_reader_invocation(_st, rel_ok=False)):
+                return _fail("`" + _st[0][:40] + "` after a `cd` into the protected runtime "
+                             "tree: a relative target would land inside it")
             # A write-redirect with a RELATIVE target after a cd into the tree
             # lands inside the protected tree at run time (bypass A): `: >
             # audit.jsonl`, `printf {} > secrets.json` use builtins not in
@@ -1531,25 +2763,89 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
             continue
         # Peel leading exec wrappers (`env`/`sudo`/`nice`/`timeout`/`busybox`/…)
         # so cmd_name is the REAL command, not the wrapper (round-4 CRITICAL).
-        toks = _strip_cmd_wrappers(toks)
+        toks = _strip_cmd_wrappers(_strip_shell_keywords(toks))
         if not toks:
             continue
         cmd_name = toks[0].rsplit("/", 1)[-1]
+        # `for f in <words>`: the word list itself runs nothing. When it names a
+        # strict store, the loop body receives that path in a variable the hook
+        # cannot follow, so every OTHER segment must be a proven read
+        # (`for f in audit.jsonl; do wc -l "$f"; done` yes, `...; do rm "$f"` no).
+        _loop_words = _for_loop_words(toks)
+        if _loop_words is not None:
+            if any(_loop_word_is_protected(_w) for _w in _loop_words):
+                for _other in segs:
+                    if _other is seg:
+                        continue
+                    try:
+                        _ot = _strip_cmd_wrappers(_strip_shell_keywords(_split_tokens(_other)))
+                    except ValueError:
+                        return _fail("a command in a loop over a protected path could not be parsed")
+                    if _ot and (not _is_reader_invocation(_ot) or _REDIRECT_RE.search(_other)
+                                and not all(_write_dest_clean(_m.group(1))
+                                            for _m in _REDIRECT_RE.finditer(_other))):
+                        return _fail(
+                            "a loop over a protected path runs `" + _ot[0][:40] + "`, which "
+                            "the gate cannot prove to be a read")
+            continue
+        _reader = _is_reader_invocation(toks)
         # A non-read command with a ledger-class store path ANYWHERE in its
         # arguments (also `-P`/`-C`/`-o<path>` forms) fails closed: in-place
         # editors (`perl -i -pe`, `ruby -i`, `gawk -i inplace`, vi/vim/nano/
         # emacs), downloaders (`wget -P`), `git -C`, `zip`, `base64 -o` — the
         # list of writers is open-ended, the list of these stores is not
         # (review R10-3). Reads (cat/grep/…) stay allowed.
-        if cmd_name not in _READ_ONLY_CMDS:
+        _ro_toks = toks
+        if powershell and len(toks) >= 3 and toks[0].startswith("$") and toks[1] == "=":
+            _ro_toks = toks[2:]
+        _ro_name = _ro_toks[0].rsplit("/", 1)[-1]
+        _is_read = (_reader
+                    or (_ro_toks is not toks and _is_reader_invocation(_ro_toks))
+                    or (powershell and _ro_name.lower() in _PS_READ_ONLY_CMDS))
+        if not _is_read:
             for _t in toks[1:]:
                 _cand = _t
                 if _t.startswith("-") and "=" in _t:
                     _cand = _t.split("=", 1)[1]
                 elif _t[:2] in ("-o", "-O", "-P", "-C") and len(_t) > 2:
                     _cand = _t[2:]
-                if not _cand.startswith("-") and _is_ledger_store_path(_cand.strip("\"'")):
-                    return [], True
+                _cand = _cand.strip("\"'")
+                if _cand.startswith("-") or not _cand:
+                    continue
+                if _is_strict_store_path(_cand):
+                    return _fail(_strict_store_detail(cmd_name, _cand))
+                # A relative name after a literal `cd <dir>` is resolved by the
+                # shell against <dir>, not against the hook's cwd.
+                if not _cand.startswith(("/", "~", "$")) and any(
+                        _is_strict_store_path(os.path.join(_d, _cand)) for _d in _cd_dirs):
+                    return _fail(_strict_store_detail(cmd_name, _cand))
+                # The path INSIDE a token (round 3, R3-SEC-1): `sed -n 'w <chain>'`,
+                # `sed '1e unlink <ledger>'`, an awk string, `--checkpoint-action=
+                # exec=rm <ledger>`. git / gh carry free text (a commit message
+                # may name the chain) and have their own write check.
+                if cmd_name in ("git", "gh"):
+                    continue
+                for _piece in _embedded_path_pieces(_t):
+                    if _piece.startswith(("/", "~")):
+                        if _is_strict_store_path(_piece):
+                            return _fail(_strict_store_detail(cmd_name, _piece))
+                    elif (cmd_name in _SCRIPT_ARG_CMDS
+                          and re.fullmatch(r"[\w./+-]+", _piece)
+                          and ("." in _piece or "/" in _piece)):
+                        if (_is_audit_integrity_path(_piece)
+                                or ("/" in _piece and _is_ledger_store_path(_piece))
+                                or any(_is_strict_store_path(os.path.join(_d, _piece))
+                                       for _d in _cd_dirs)):
+                            return _fail(_strict_store_detail(cmd_name, _piece))
+        # In-place writers and git path writers: every path argument is a write
+        # target, checked against the FULL protected set (review 2026-11-19 SEC-2).
+        if not _reader:
+            targets.extend(_inplace_write_candidates(cmd_name, toks[1:]))
+        if cmd_name == "git":
+            _git_targets, _git_closed = _git_write_check(toks[1:])
+            if _git_closed:
+                return [], True
+            targets.extend(_git_targets)
         # The output option of a command that writes a file names a target (R9-4).
         if cmd_name in _OUTPUT_FLAG_CMDS:
             for _i, _t in enumerate(toks[1:], 1):
@@ -1557,6 +2853,11 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
                     targets.append(toks[_i + 1])
                 elif _t.startswith(("--output=", "--output-document=", "-out=")):
                     targets.append(_t.split("=", 1)[1])
+                elif len(_t) >= 4 and _long_opt_is(_t, "--output", "--output-document"):
+                    # GNU prefix abbreviation: `sort --outp F`, `sort --out=F`.
+                    _ov = _long_opt_value(toks, _i)
+                    if _ov is not None:
+                        targets.append(_ov)
                 elif _t[:2] in ("-o", "-O") and len(_t) > 2 and not _t.startswith("--"):
                     targets.append(_t[2:])
         if cmd_name in _ARCHIVE_CMDS:
@@ -1569,6 +2870,16 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
             for d in _archive_dest_dirs(cmd_name, arg_toks):
                 if _touches_corvin_tree(d):
                     return [], True
+            # `tar cf o.tar <file> --remove-files` (also `--rem`) deletes its
+            # members, `--checkpoint-action=exec=...` / `--to-command` run a
+            # program: every member is a write target then (round 3).
+            if cmd_name in _TAR_NAMES and _tar_has_side_effect_opt(arg_toks):
+                for a in _all_nonflag(arg_toks):
+                    if _touches_corvin_tree(a):
+                        return _fail("`" + cmd_name + "` with an option that deletes its "
+                                     "members or runs a program, on a path inside the "
+                                     "protected runtime tree: " + a[:120])
+                targets.extend(_all_nonflag(arg_toks))
         elif cmd_name == "sed" and any(t == "-i" or t.startswith("-i") for t in toks[1:]):
             t = _last_nonflag(toks[1:])
             if t:
@@ -1604,11 +2915,18 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
             # tree recursively/by glob) is destructive — `mv ~/.corvin/tenants
             # /tmp/x` relocates the audit trees but only the (unprotected) dest was
             # checked before. Fail closed on ANY arg touching the corvin tree
-            # (round-3).
-            for a in _all_nonflag(arg_toks):
-                if _touches_corvin_tree(a):
-                    return [], True
-            dest = _target_dir_flag(arg_toks) or _last_nonflag(arg_toks)
+            # (round-3). R2-SEC-5: a plain `cp` of an audit chain file or a gate
+            # source to a destination outside every protected tree is a read
+            # (`_is_reader_invocation`) - that is how a worktree copy of a gate
+            # source or an offline copy of the chain is made.
+            if not (cmd_name == "cp" and _reader):
+                for a in _all_nonflag(arg_toks):
+                    if _touches_corvin_tree(a):
+                        return _fail(
+                            "`" + cmd_name + "` with an argument inside (or above) the "
+                            "protected runtime tree: " + a[:120])
+            dest = (_target_dir_flag(arg_toks, abbrev=cmd_name != "rsync")
+                    or _last_nonflag(arg_toks))
             if dest:
                 targets.append(dest)
         elif cmd_name in _FIND_CMDS:
@@ -1639,9 +2957,9 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
             # compute/, …) blocked `mkdir memory` in it (review R10-3).
             # The tenant learning/skills rule is anchored at the tenant root, so
             # it has no such false positive and is checked here too.
-            if any(_is_ledger_store_path(a) or _is_tenant_learning_path(a)
-                   for a in _all_nonflag(toks[1:])):
-                return [], True
+            if not _reader and any(_is_strict_store_path(a) or _is_tenant_learning_path(a)
+                                   for a in _all_nonflag(toks[1:])):
+                return _fail(_strict_store_detail(cmd_name, "a protected store path"))
         elif cmd_name in _TARGET_ALL_CMDS:
             # truncate/ln/chmod/chown/chattr/rm/rmdir/unlink/shred/...: EVERY
             # non-flag arg is a candidate path that can wipe / truncate /
@@ -1669,6 +2987,13 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
             t = _last_nonflag(toks[1:])
             if t:
                 targets.append(t)
+
+    # The same targets as the shell resolves them after a literal `cd <dir>`.
+    if _cd_dirs:
+        for _t in list(targets):
+            _tn = _t.strip("\"'")
+            if _tn and not _tn.startswith(("/", "~", "$", "-")):
+                targets.extend(os.path.join(_d, _tn) for _d in _cd_dirs)
 
     return targets, False
 
@@ -1989,14 +3314,9 @@ def _check_unguarded(payload: dict) -> tuple[bool, str]:
             _ps_t = _powershell_deny(cmd)
             if _ps_t:
                 return False, _deny_msg("PowerShell", _ps_t, command=cmd[:80])
-        targets, fail_closed = _bash_targets(cmd)
+        targets, fail_closed = _bash_targets(cmd, powershell=(tool == "PowerShell"))
         if fail_closed:
-            return False, (
-                "path_gate: Bash command unparseable AND references a "
-                "protected path; fail-closed. Use the forge/skill-forge "
-                "MCP tools instead. Command (first 80 chars): "
-                + cmd[:80]
-            )
+            return False, _fail_closed_message(cmd)
         # Shell assignments in the same command (`D=…; echo x >> $D/f`): the
         # shell expands them, so the hook must too (review R5-1).
         _assign = dict(re.findall(r"(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=([^\s;&|]+)", cmd))
@@ -2322,6 +3642,20 @@ def _self_test_vectors() -> list[tuple[str, dict]]:
 
     ledger = home / "tenants" / "_default" / "session_ledger" / "x" / "y" / "ledger.jsonl"
     return [
+        # Review 2026-11-19 SEC-2/SEC-3 - the gate's own source, the anchor key
+        # and an in-place writer the old extraction did not know.
+        ("direct-write-gate-source",
+         {"tool_name": "Edit",
+          "tool_input": {"file_path": str(Path(__file__).resolve())}}),
+        ("direct-write-anchor-key",
+         {"tool_name": "Write",
+          "tool_input": {"file_path": str(_anchor_key_path())}}),
+        ("bash-sed-long-in-place-audit",
+         {"tool_name": "Bash",
+          "tool_input": {"command": f"sed --in-place 's/a/b/' {audit_log}"}}),
+        ("bash-gzip-audit",
+         {"tool_name": "Bash",
+          "tool_input": {"command": f"gzip {audit_log}"}}),
         # ADR-2102 — a forged session-ledger line is re-supplied as "the user said".
         ("direct-write-session-ledger",
          {"tool_name": "Write",

@@ -73,3 +73,33 @@ export function safeNavTarget(to: unknown): to is string {
   if (to.startsWith("//")) return false; // protocol-relative
   return true;
 }
+
+/** Prefix every same-origin generated panel is served under. */
+export const PANEL_SRC_PREFIX = "/v1/console/panels/";
+
+/**
+ * iframe `src` allowlist for a panel whose descriptor arrives from the backend
+ * manifest (a value the console does not author).
+ *
+ * Accepted, and nothing else:
+ *   - a same-origin absolute PATH under /v1/console/panels/ (no dot segments,
+ *     no backslash, not protocol-relative — the safeNavTarget shapes), or
+ *   - an absolute https: URL with a host.
+ *
+ * Fail-closed: http:, javascript:, data:, blob:, relative paths and any other
+ * same-origin path (which would frame the console API or the console itself)
+ * return null and the caller renders "not available" instead of a frame.
+ */
+export function safePanelSrc(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (safeNavTarget(value)) {
+    if (!value.startsWith(PANEL_SRC_PREFIX)) return null;
+    const path = value.split(/[?#]/, 1)[0];
+    // Dot segments (plain or percent-encoded) would let the path leave the prefix.
+    if (/(^|\/)(\.|%2e){1,2}(\/|$)/i.test(path)) return null;
+    return value;
+  }
+  const abs = safeHttpUrl(value);
+  if (abs === null) return null;
+  return new URL(abs).protocol === "https:" ? abs : null;
+}

@@ -130,9 +130,13 @@ def _spawn_fork(tenant_id: str, skill_id: str, *, source: str, instruction: str,
 
     def _run() -> None:
         try:
+            # PLS-2d: the four pre-spawn gates run inside fork(), on the exact text the
+            # engine receives (instruction + live body), attributed to THIS session. A
+            # refusal ends the run as failed below and is audited by the gate itself.
             state = _auto.fork(_registry_root(tenant_id), skill_id, source=source,
                                instruction=instruction, progress_cb=_progress,
-                               trigger={"reason": "operator_request"})
+                               trigger={"reason": "operator_request"},
+                               spawn_gate=_auto.console_spawn_gate(tenant_id, sid_fingerprint))
             with _fork_lock:
                 _fork_runs[run_id].update(status="success", progress=100, phase="canary",
                                           canary_id=state["canary_id"],
@@ -141,6 +145,17 @@ def _spawn_fork(tenant_id: str, skill_id: str, *, source: str, instruction: str,
                 tenant_id=tenant_id, sid_fingerprint=sid_fingerprint,
                 action="skill.canary_forked", target_kind="skill_canary",
                 target_id=skill_id, run_id=run_id)
+        except _auto.ForkRefused as refused:
+            # Not an error of the forge: the gates said no. No traceback, the gate's own
+            # text for the operator, a named reason on the chain.
+            log.warning("candidate fork %s for %s refused by the pre-spawn gates", run_id, skill_id)
+            with _fork_lock:
+                _fork_runs[run_id].update(status="failed", phase="refused",
+                                          error=str(refused)[:500], message=str(refused)[:200])
+            console_audit.action_failed(
+                tenant_id=tenant_id, sid_fingerprint=sid_fingerprint,
+                action="skill.canary_forked", target_kind="skill_canary",
+                target_id=skill_id, reason="spawn_gate_refused")
         except Exception as exc:  # noqa: BLE001 — surfaced in the run record
             log.exception("candidate fork %s for %s failed", run_id, skill_id)
             with _fork_lock:

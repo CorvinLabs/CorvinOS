@@ -15,6 +15,14 @@ Compliance Notes:
   tenant core audit chain (GDPR Art. 30) via ``core.skills.skill_audit``
 - No PII in error messages (fail-closed by default)
 - Tenant isolation enforced on all stats (GDPR Art. 32)
+
+Reachability (review 2026-11-19, R3-NEW-35 - stated, not hidden): this class has NO
+production caller. Nothing outside ``tests/`` imports ``core.skills.executor``; the
+executor a running install uses is ``core.skills.skill_manager.SkillExecutor``
+(reached through ``SkillManager``), which has its own timeout and audit code. The
+guardrails described above are therefore tested here and enforced nowhere - do not cite
+this module as a live mechanism, and do not add a second call path to it without
+deciding which of the two executors survives.
 """
 
 from __future__ import annotations

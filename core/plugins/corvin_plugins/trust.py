@@ -182,25 +182,111 @@ def _consent_path(corvin_home: Path, tenant_id: str) -> Path:
     return corvin_home / "tenants" / tenant_id / "global" / "plugin_consent.json"
 
 
+def record_digest(record_dict: dict) -> str:
+    """Hex digest that identifies WHAT an operator approved: the record's canonical
+    form without its signature (``manifest_signing_digest``). A consent given for one
+    plugin build does not carry over to a record whose id, version, class path or
+    declared capabilities changed afterwards."""
+    try:
+        return manifest_signing_digest(dict(record_dict)).hex()
+    except Exception:  # noqa: BLE001 - an undigestable record matches no stored digest
+        return ""
+
+
+def _read_consent(path: Path) -> dict:
+    try:
+        if path.is_symlink():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def consent_granted(
-    plugin_id: str, *, corvin_home: Path, tenant_id: str = "_default"
+    plugin_id: str, *, corvin_home: Path, tenant_id: str = "_default",
+    digest: str | None = None,
 ) -> bool:
     """Has the operator explicitly approved THIS plugin?
 
     Per-plugin on purpose. A blanket "allow community plugins" switch turns a
     per-artifact trust decision into a one-time one, and the operator who flips it
     in month one is not the one who inherits the tenth plugin in month nine.
+
+    ``digest`` (review R3-NEW-19): ``grant_consent`` stored the digest of what was
+    approved and nothing ever compared it, so an approval for one build covered
+    every later one. When the stored entry carries a digest, the caller's must
+    equal it; a caller that supplies none while one is stored gets ``False``
+    (it cannot show that it asks about the approved build). An entry stored
+    WITHOUT a digest is an approval of the plugin id alone, as before.
     """
+    data = _read_consent(_consent_path(corvin_home, tenant_id))
+    approved = data.get("approved", {})
+    entry = approved.get(plugin_id) if isinstance(approved, dict) else None
+    if not (isinstance(entry, dict) and entry.get("approved") is True):
+        return False
+    stored = entry.get("digest")
+    if isinstance(stored, str) and stored:
+        import hmac  # noqa: PLC0415
+
+        return isinstance(digest, str) and hmac.compare_digest(stored, digest)
+    return True
+
+
+class _consent_lock:
+    """Exclusive advisory lock beside the consent file (``.plugin_consent.lock``)."""
+
+    def __init__(self, path: Path) -> None:
+        self._lock_path = path.with_name("." + path.stem + ".lock")
+        self._fd: int | None = None
+
+    def __enter__(self) -> "_consent_lock":
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        self._fd = os.open(str(self._lock_path), flags, 0o600)
+        try:
+            import fcntl  # noqa: PLC0415
+
+            fcntl.flock(self._fd, fcntl.LOCK_EX)
+        except ImportError:  # pragma: no cover - Windows: the rename is still atomic
+            pass
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._fd is None:
+            return
+        try:
+            import fcntl  # noqa: PLC0415
+
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+        except Exception:  # noqa: BLE001
+            pass
+        os.close(self._fd)
+        self._fd = None
+
+
+def _atomic_write_private(path: Path, text: str) -> None:
+    import tempfile  # noqa: PLC0415
+
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix="." + path.name + ".", suffix=".tmp")
     try:
-        data = json.loads(
-            _consent_path(corvin_home, tenant_id).read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError, UnicodeDecodeError):
-        return False
-    if not isinstance(data, dict):
-        return False
-    entry = data.get("approved", {}).get(plugin_id)
-    return isinstance(entry, dict) and entry.get("approved") is True
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def operator_ref(operator: str) -> str:
@@ -226,18 +312,21 @@ def grant_consent(
     """
     path = _consent_path(corvin_home, tenant_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            data = {}
-    except (OSError, ValueError, UnicodeDecodeError):
-        data = {}
-    data.setdefault("approved", {})[plugin_id] = {
-        "approved": True,
-        "operator": operator,
-        "digest": digest,
-    }
-    path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    # R3-NEW-39: read-modify-write under an exclusive lock, written to a fresh 0600
+    # temp file and renamed. The plain ``write_text`` it replaces let two concurrent
+    # grants drop one approval, left a truncated file after a crash (= every consent
+    # gone), wrote at the process umask and followed a symlink planted at the path.
+    with _consent_lock(path):
+        data = _read_consent(path)
+        approved = data.get("approved")
+        if not isinstance(approved, dict):
+            approved = data["approved"] = {}
+        approved[plugin_id] = {
+            "approved": True,
+            "operator": operator,
+            "digest": digest,
+        }
+        _atomic_write_private(path, json.dumps(data, indent=2, sort_keys=True))
 
     if callable(audit_emit):
         try:
@@ -302,7 +391,8 @@ def evaluate(
             "trust anchor",
         )
 
-    if consent_granted(plugin_id, corvin_home=corvin_home, tenant_id=tenant_id):
+    if consent_granted(plugin_id, corvin_home=corvin_home, tenant_id=tenant_id,
+                       digest=record_digest(record_dict)):
         return TrustDecision(
             Verdict.COMMUNITY, True, "unreviewed, but explicitly approved by an operator"
         )
@@ -328,6 +418,7 @@ __all__ = [
     "TrustDecision",
     "Verdict",
     "consent_granted",
+    "record_digest",
     "enforcement_enabled",
     "evaluate",
     "grant_consent",

@@ -117,7 +117,7 @@ and nothing ever prompts for a password.
 ```bash
 ./install.sh --editable /path/to/CorvinOS   # install another clone
 ./install.sh --lan                          # allow pairing over LAN
-./install.sh --no-claude-code               # skip Claude Code
+./install.sh --with-claude-code             # also install the Claude Code CLI (not installed by default)
 ./install.sh --preset minimal               # console only
 ./install.sh --autostart                    # start the console at login
 ./install.sh --always-on                    # run as a service that survives reboot

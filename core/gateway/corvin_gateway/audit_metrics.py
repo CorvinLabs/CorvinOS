@@ -338,6 +338,11 @@ _FAMILIES: list[MetricFamily] = [
         "corvin_audit_chain_intact", "gauge",
         "1 when the audit chain verifies clean, 0 on tamper / break.",
     ),
+    MetricFamily(
+        "corvin_metrics_window_truncated", "gauge",
+        "1 when a since= window starts before the bounded chain tail a scrape "
+        "reads (the counts cover the tail only), else 0.",
+    ),
 ]
 
 
@@ -386,6 +391,9 @@ class _Snapshot:
     # Audit-chain meta
     events_read: int = 0
     chain_intact: bool = True
+    #: A ``since=`` window reached back past ``_window_max_bytes()`` of chain
+    #: tail: the numbers cover the tail only. Never set for all-time.
+    window_truncated: bool = False
 
     def counter(self, name: str) -> _Counters:
         return self.counters.setdefault(name, _Counters())
@@ -423,8 +431,10 @@ def _iter_events(
     ``verify_chain`` (Phase 6.2 emits ``corvin_audit_chain_intact = 0``
     in that case). We don't fail the whole scrape on a single bad line.
 
-    A full walk; ``aggregate(since=None)`` does not use it any more (see
-    :func:`_aggregate_all_time`), only the windowed ``since=`` scrapes do.
+    A FULL walk of the file, kept for one-shot offline callers. No periodic
+    or request-driven path may use it: ``aggregate(since=None)`` projects
+    incrementally (:func:`_aggregate_all_time`) and a windowed ``since=``
+    scrape reads the tail only (:func:`_iter_window_events`).
     """
     if not path.exists():
         return
@@ -443,6 +453,137 @@ def _iter_events(
                 continue
             ts = rec.get("ts")
             if since is not None and (not isinstance(ts, (int, float)) or ts < since):
+                continue
+            yield rec
+
+
+# ── Windowed tail reader ────────────────────────────────────────────
+#
+# A ``?since=5m`` scrape wants the last five minutes of an append-only file
+# whose timestamps only grow, i.e. its END. Until 2026-11-19 it parsed the
+# file from byte 0 and threw away everything before the window: on the live
+# 500 MB chain that is the same 7-10 s walk the all-time path was cured of,
+# once per cache miss - and the window start moves every 60 s while the cache
+# lives 15 s, so a 15 s scraper missed on every single request.
+
+#: First backward step when looking for the window start; doubles each miss.
+_TAIL_STEP_BYTES = 256 * 1024
+
+#: Records are appended by several writers; one that took its timestamp just
+#: before another committed may sit a little out of order. The search only
+#: stops at a record this much OLDER than the window start.
+_WINDOW_TS_SLACK_S = 120.0
+
+#: How many lines the search parses at one probe position to find a timestamp.
+_PROBE_LINES = 64
+
+
+def _window_max_bytes() -> int:
+    """Upper bound on the chain tail one windowed scrape may read.
+
+    A long window on a busy chain is cut here and reported as
+    ``corvin_metrics_window_truncated 1`` - an honest partial answer, never a
+    multi-second walk on a request path.
+    """
+    raw = os.environ.get("CORVIN_METRICS_WINDOW_MAX_BYTES")
+    try:
+        v = int(raw) if raw else 64 * 1024 * 1024
+    except ValueError:
+        v = 64 * 1024 * 1024
+    return max(64 * 1024, min(v, 1024 * 1024 * 1024))
+
+
+def _probe_ts(fh, limit: int) -> float | None:
+    """Timestamp of the first parseable record at the handle's position."""
+    for _ in range(_PROBE_LINES):
+        if fh.tell() >= limit:
+            return None
+        raw = fh.readline()
+        if not raw:
+            return None
+        try:
+            ts = json.loads(raw).get("ts")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+            return float(ts)
+    return None
+
+
+def _window_start_offset(path: Path, since: float, *, max_bytes: int) -> tuple[int, int, bool]:
+    """``(offset, size, truncated)``: where to start reading for ``ts >= since``.
+
+    Steps backwards from the end in doubling blocks until it finds a record
+    older than the window (minus the slack) or reaches the ``max_bytes``
+    bound. ``offset`` is always the start of a line; ``size`` is the file
+    size the search saw (records appended later belong to the next scrape).
+    """
+    size = path.stat().st_size
+    floor = max(0, size - max_bytes)
+    step = _TAIL_STEP_BYTES
+    pos = size
+    with path.open("rb") as fh:
+        while pos > floor:
+            pos = max(floor, pos - step)
+            step *= 2
+            if pos == 0:
+                return 0, size, False
+            fh.seek(pos - 1)
+            if fh.read(1) != b"\n":
+                fh.readline()  # inside a line: skip to the next line start
+            start = fh.tell()
+            ts = _probe_ts(fh, size)
+            if ts is not None and ts < since - _WINDOW_TS_SLACK_S:
+                return start, size, False
+            if pos == floor:
+                return start, size, True
+    return size, size, False
+
+
+def _iter_window_events(
+    path: Path,
+    *,
+    since: float,
+    max_bytes: int | None = None,
+    state: dict[str, Any] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield the events with ``ts >= since`` by reading the chain's TAIL only.
+
+    Cost is proportional to the bytes inside the window (bounded by
+    ``max_bytes``), not to the size of the chain. ``state`` receives
+    ``truncated`` / ``bytes_read`` / ``lines_parsed`` for the caller and tests.
+    """
+    info = state if state is not None else {}
+    info.update(truncated=False, bytes_read=0, lines_parsed=0)
+    try:
+        offset, size, truncated = _window_start_offset(
+            path, since, max_bytes=max_bytes or _window_max_bytes())
+    except FileNotFoundError:
+        return
+    info["truncated"] = truncated
+    n = 0
+    with path.open("rb") as fh:
+        fh.seek(offset)
+        while fh.tell() < size:
+            raw = fh.readline()
+            if not raw:
+                break
+            info["bytes_read"] += len(raw)
+            n += 1
+            if n % PACE_EVERY_LINES == 0:
+                time.sleep(0)
+            raw = raw.strip()
+            if not raw:
+                continue
+            info["lines_parsed"] += 1
+            try:
+                rec = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            ts = rec.get("ts")
+            if not isinstance(ts, (int, float)) or ts < since:
                 continue
             yield rec
 
@@ -1019,6 +1160,8 @@ def render_prometheus(snap: _Snapshot) -> str:
                 out.append(f"{name} {snap.events_read}")
             elif name == "corvin_audit_chain_intact":
                 out.append(f"{name} {1 if snap.chain_intact else 0}")
+            elif name == "corvin_metrics_window_truncated":
+                out.append(f"{name} {1 if snap.window_truncated else 0}")
             else:
                 out.append(f"{name} 0")
 
@@ -1049,6 +1192,24 @@ _cache: "OrderedDict[tuple[str, float | None], tuple[float, str]]" = OrderedDict
 _cache_lock = Lock()
 
 
+#: Grid a relative ``?since=<duration>`` window start is snapped to. The route
+#: computes ``now - duration``, which differs on every request, so without the
+#: grid each scrape had its own cache key: the TTL cache never hit and every
+#: request re-walked the chain (and filled the LRU with one-shot bodies).
+SINCE_GRID_S = 60.0
+
+
+def quantize_since(since: float | None) -> float | None:
+    """Snap a window start DOWN to the ``SINCE_GRID_S`` grid (None stays None).
+
+    Down, never up: the window may be up to one grid step longer than asked,
+    it is never shorter, so no event inside the requested window is dropped.
+    """
+    if since is None:
+        return None
+    return float(int(since // SINCE_GRID_S) * int(SINCE_GRID_S))
+
+
 def _cache_key(tenant_id: str, since: float | None) -> tuple[str, float | None]:
     # Round `since` to the second so adjacent scrapes hit the same key.
     return (tenant_id, None if since is None else round(since))
@@ -1069,7 +1230,10 @@ def aggregate(
     if since is None:
         snap = _aggregate_all_time(path)
     else:
-        snap = _project(_iter_events(path, since=since))
+        # The tail only - never a walk from byte 0 on a request path.
+        window: dict[str, Any] = {}
+        snap = _project(_iter_window_events(path, since=since, state=window))
+        snap.window_truncated = bool(window.get("truncated"))
     # Best-effort chain-integrity gauge. ``verify_chain_incremental`` gives the SAME
     # verdict as ``verify_chain`` (ADR-0640 R4: the proven prefix is admitted only
     # after its bytes are re-hashed and match the witness), without re-walking the
@@ -1084,27 +1248,52 @@ def aggregate(
     return snap
 
 
+#: One lock per cache key while its body is being built (single flight): N
+#: concurrent scrapes of the same window used to start N identical passes.
+_inflight: "dict[tuple[str, float | None], Lock]" = {}
+
+
 def render(tenant_id: str, *, since: float | None = None) -> str:
     """Public entry: produce the Prometheus text body for *tenant_id*.
 
     Cached for ``CORVIN_METRICS_TTL_S`` seconds per (tenant, since)
-    so a Prometheus instance scraping every 15 s does not re-walk the
-    chain on every request.
+    so a Prometheus instance scraping every 15 s does not re-read the
+    chain on every request. Single flight per key: concurrent callers of one
+    key wait for the one pass in progress and share its body.
     """
     key = _cache_key(tenant_id, since)
     ttl = _ttl_seconds()
-    now = time.time()
-    with _cache_lock:
+
+    def _fresh() -> str | None:
         cached = _cache.get(key)
-        if cached is not None and now - cached[0] < ttl:
+        if cached is not None and time.time() - cached[0] < ttl:
             _cache.move_to_end(key)
             return cached[1]
-    body = render_prometheus(aggregate(tenant_id, since=since))
+        return None
+
     with _cache_lock:
-        _cache[key] = (now, body)
-        _cache.move_to_end(key)
-        while len(_cache) > _CACHE_MAX:
-            _cache.popitem(last=False)
+        body = _fresh()
+        if body is not None:
+            return body
+        flight = _inflight.get(key)
+        if flight is None:
+            flight = _inflight[key] = Lock()
+    with flight:
+        with _cache_lock:
+            body = _fresh()  # the pass we waited for filled it
+        if body is not None:
+            return body
+        try:
+            body = render_prometheus(aggregate(tenant_id, since=since))
+            with _cache_lock:
+                _cache[key] = (time.time(), body)
+                _cache.move_to_end(key)
+                while len(_cache) > _CACHE_MAX:
+                    _cache.popitem(last=False)
+        finally:
+            with _cache_lock:
+                if _inflight.get(key) is flight:
+                    del _inflight[key]
     return body
 
 
@@ -1150,6 +1339,7 @@ def snapshot_to_dict(snap: _Snapshot) -> dict[str, Any]:
     out: dict[str, Any] = {
         "events_read":  snap.events_read,
         "chain_intact": snap.chain_intact,
+        "window_truncated": snap.window_truncated,
         "counters":     {},
         "histograms":   {},
     }

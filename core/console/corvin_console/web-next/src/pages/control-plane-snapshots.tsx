@@ -25,6 +25,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
+import {
+  controlPlaneErrorText,
+  controlPlaneFetch,
+  isControlPlaneUnavailable,
+} from "@/lib/control-plane";
 
 const API_BASE = "/v1/console/control-plane/snapshots";
 
@@ -49,25 +54,21 @@ export default function ControlPlaneSnapshotsPage() {
   });
 
   // Fetch snapshots
-  const { data: snapshots, isLoading } = useQuery<Snapshot[]>({
+  const { data: snapshots, isLoading, error } = useQuery<Snapshot[]>({
     queryKey: ["control-plane-snapshots"],
-    queryFn: async () => {
-      const res = await fetch(`${API_BASE}`);
-      if (!res.ok) throw new Error("Failed to load snapshots");
-      return res.json();
-    },
+    queryFn: () => controlPlaneFetch<Snapshot[]>(API_BASE),
+    retry: false,
   });
+  const unavailable = isControlPlaneUnavailable(error);
 
   // Create snapshot
   const createMutation = useMutation({
     mutationFn: async (snapshot: typeof newSnapshot) => {
-      const res = await fetch(`${API_BASE}`, {
+      return controlPlaneFetch(API_BASE, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(snapshot),
       });
-      if (!res.ok) throw new Error("Failed to create snapshot");
-      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["control-plane-snapshots"] });
@@ -75,21 +76,23 @@ export default function ControlPlaneSnapshotsPage() {
       setNewSnapshot({ name: "", description: "" });
       toast({ title: "Snapshot created successfully" });
     },
-    onError: () => {
-      toast({ title: "Failed to create snapshot", variant: "destructive" });
+    onError: (err) => {
+      toast({
+        title: "Snapshot was not created",
+        description: controlPlaneErrorText(err),
+        variant: "destructive",
+      });
     },
   });
 
   // Restore snapshot
   const restoreMutation = useMutation({
     mutationFn: async (snapshotId: string) => {
-      const res = await fetch(`${API_BASE}/${snapshotId}/restore`, {
+      return controlPlaneFetch(`${API_BASE}/${encodeURIComponent(snapshotId)}/restore`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ confirm: true }),
       });
-      if (!res.ok) throw new Error("Failed to restore snapshot");
-      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["control-plane-snapshots"] });
@@ -97,27 +100,33 @@ export default function ControlPlaneSnapshotsPage() {
       setRestoreConfirm(false);
       toast({ title: "Snapshot restored successfully" });
     },
-    onError: () => {
-      toast({ title: "Failed to restore snapshot", variant: "destructive" });
+    onError: (err) => {
+      toast({
+        title: "Snapshot was not restored",
+        description: controlPlaneErrorText(err),
+        variant: "destructive",
+      });
     },
   });
 
   // Delete snapshot
   const deleteMutation = useMutation({
     mutationFn: async (snapshotId: string) => {
-      const res = await fetch(`${API_BASE}/${snapshotId}`, {
+      return controlPlaneFetch(`${API_BASE}/${encodeURIComponent(snapshotId)}`, {
         method: "DELETE",
       });
-      if (!res.ok) throw new Error("Failed to delete snapshot");
-      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["control-plane-snapshots"] });
       setSelectedSnapshot(null);
       toast({ title: "Snapshot deleted successfully" });
     },
-    onError: () => {
-      toast({ title: "Failed to delete snapshot", variant: "destructive" });
+    onError: (err) => {
+      toast({
+        title: "Snapshot was not deleted",
+        description: controlPlaneErrorText(err),
+        variant: "destructive",
+      });
     },
   });
 
@@ -148,14 +157,31 @@ export default function ControlPlaneSnapshotsPage() {
             Save and restore Control Plane state (atomic, immutable)
           </p>
         </div>
-        <Button onClick={() => setCreateDialogOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" /> Create Snapshot
-        </Button>
+        {!unavailable && (
+          <Button onClick={() => setCreateDialogOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" /> Create Snapshot
+          </Button>
+        )}
       </div>
 
       {/* Snapshots List */}
       <div className="space-y-3">
-        {isLoading ? (
+        {unavailable ? (
+          <div
+            className="rounded-lg border border-dashed p-8 text-center"
+            data-testid="control-plane-snapshots-unavailable"
+            role="status"
+          >
+            <p className="text-gray-600">
+              Snapshots and rollback are not available on this build.
+            </p>
+          </div>
+        ) : error ? (
+          <div className="rounded-lg border border-destructive p-8 text-center" role="alert">
+            <p className="font-medium">Snapshots could not be loaded</p>
+            <p className="mt-1 text-sm text-gray-600">{controlPlaneErrorText(error)}</p>
+          </div>
+        ) : isLoading ? (
           <>
             <Skeleton className="h-20" />
             <Skeleton className="h-20" />
@@ -216,9 +242,8 @@ export default function ControlPlaneSnapshotsPage() {
                   size="sm"
                   variant="outline"
                   onClick={() => {
-                    // In Phase 9b.4, diff would show state changes
                     toast({
-                      title: "Diff feature coming in Phase 9c",
+                      title: "Comparing snapshots is not available on this build",
                     });
                   }}
                   className="flex-1"
@@ -371,15 +396,15 @@ export default function ControlPlaneSnapshotsPage() {
         </Dialog>
       )}
 
-      {/* Atomicity Note */}
-      <div className="mt-8 rounded-lg bg-blue-50 p-4 text-sm text-blue-900">
+      {/* Atomicity Note — a guarantee is only stated where the feature exists */}
+      {!unavailable && <div className="mt-8 rounded-lg bg-blue-50 p-4 text-sm text-blue-900">
         <CheckCircle className="mb-2 h-4 w-4" />
         <p>
           <strong>Atomicity Guarantee:</strong> All snapshot operations are
           atomic and all-or-nothing. Failed restores roll back automatically and
           audit seam the chain to maintain immutability.
         </p>
-      </div>
+      </div>}
     </div>
   );
 }

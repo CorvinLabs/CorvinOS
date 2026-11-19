@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -157,17 +157,25 @@ class TaskCostRecord:
 class CostCalculator:
     """Compute costs per call, skill, and task (Stories 1-3)."""
 
-    def __init__(self, corvin_home: str | Path):
+    def __init__(self, corvin_home: str | Path, *, tenant_root: str | Path | None = None):
         """Initialize calculator.
 
         Args:
-            corvin_home: Path to ~/.corvin
+            corvin_home: Path to ~/.corvin (the ``_default`` tenant is used)
+            tenant_root: A tenant home (``tenant_home(tenant_id)``). When given
+                it wins: costs are read from ``<tenant_root>/global/costs``.
         """
         self.corvin_home = Path(corvin_home)
-        self.costs_dir = (
-            self.corvin_home / "tenants" / "_default" / "global" / "costs"
-        )
-        self.costs_dir.mkdir(parents=True, exist_ok=True)
+        if tenant_root is not None:
+            self.costs_dir = Path(tenant_root) / "global" / "costs"
+        else:
+            self.costs_dir = (
+                self.corvin_home / "tenants" / "_default" / "global" / "costs"
+            )
+        # Not created here: constructing a calculator (every console GET does)
+        # must not write. ``_record_call_cost`` makes it on the first record.
+        #: Cost-file lines (or whole files) this instance could not use.
+        self.skipped_records = 0
 
     def calculate_call_cost(
         self,
@@ -244,15 +252,10 @@ class CostCalculator:
         call_count = 0
 
         # Sum across all call cost files
-        for filepath in self.costs_dir.glob("calls_*.jsonl"):
-            with open(filepath, "r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    data = json.loads(line)
-                    if data.get("skill_id") == skill_id:
-                        call_count += 1
-                        total_cost += Decimal(data["total_cost"])
+        for data, _ts, cost in self._records(sorted(self.costs_dir.glob("calls_*.jsonl"))):
+            if data.get("skill_id") == skill_id:
+                call_count += 1
+                total_cost += cost
 
         avg_cost = (
             total_cost / Decimal(call_count)
@@ -283,29 +286,23 @@ class CostCalculator:
         cost_by_model: dict[str, Decimal] = {}
 
         # Search all call cost files
-        for filepath in self.costs_dir.glob("calls_*.jsonl"):
-            with open(filepath, "r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    data = json.loads(line)
-                    if data.get("task_id") == task_id:
-                        call_cost = Decimal(data["total_cost"])
-                        total_cost += call_cost
-                        llm_call_count += 1
+        for data, _ts, call_cost in self._records(sorted(self.costs_dir.glob("calls_*.jsonl"))):
+            if data.get("task_id") == task_id:
+                total_cost += call_cost
+                llm_call_count += 1
 
-                        # Aggregate by skill
-                        if data.get("skill_id"):
-                            skill = data["skill_id"]
-                            cost_by_skill[skill] = (
-                                cost_by_skill.get(skill, Decimal("0")) + call_cost
-                            )
+                # Aggregate by skill
+                if data.get("skill_id"):
+                    skill = data["skill_id"]
+                    cost_by_skill[skill] = (
+                        cost_by_skill.get(skill, Decimal("0")) + call_cost
+                    )
 
-                        # Aggregate by model
-                        model = data["model_id"]
-                        cost_by_model[model] = (
-                            cost_by_model.get(model, Decimal("0")) + call_cost
-                        )
+                # Aggregate by model
+                model = data["model_id"]
+                cost_by_model[model] = (
+                    cost_by_model.get(model, Decimal("0")) + call_cost
+                )
 
         # Compute average for description
         now = datetime.now(timezone.utc)
@@ -320,6 +317,106 @@ class CostCalculator:
             cost_by_model=cost_by_model,
         )
 
+    def _cost_files(self, first_day=None, last_day=None) -> list[Path]:
+        """Cost files that can hold a record dated in ``[first_day, last_day]``.
+
+        A file is named for the UTC day it was written on (``calls_YYYY-MM-DD``),
+        while a record is bucketed by the date of its own timestamp, which may
+        carry another offset: one day of slack on both sides covers that. A file
+        whose name carries no parseable date is always read.
+        """
+        files = []
+        for filepath in sorted(self.costs_dir.glob("calls_*.jsonl")):
+            try:
+                day = datetime.strptime(filepath.stem[len("calls_"):], "%Y-%m-%d").date()
+            except ValueError:
+                files.append(filepath)
+                continue
+            if first_day is not None and day < first_day - timedelta(days=1):
+                continue
+            if last_day is not None and day > last_day + timedelta(days=1):
+                continue
+            files.append(filepath)
+        return files
+
+    def _records(self, files) -> Iterator[tuple[dict, datetime, Decimal]]:
+        """``(record, timestamp, total_cost)`` for every USABLE line of *files*.
+
+        One defective line - cut off by a crash, hand-edited, a non-finite
+        amount - used to raise out of every reader, so a single bad byte in
+        one day's file turned every cost route into a 500. Such a line is
+        skipped and counted in :attr:`skipped_records`; so is a file that
+        cannot be read. A timestamp without an offset is taken as UTC.
+        """
+        for filepath in files:
+            try:
+                handle = open(filepath, "r", encoding="utf-8", errors="replace")
+            except OSError:
+                self.skipped_records += 1
+                continue
+            with handle as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                        ts = datetime.fromisoformat(data["timestamp"])
+                        cost = Decimal(str(data["total_cost"]))
+                        if not isinstance(data.get("model_id"), str) or not cost.is_finite():
+                            raise ValueError("unusable cost record")
+                    except (ValueError, TypeError, KeyError, ArithmeticError):
+                        self.skipped_records += 1
+                        continue
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    yield data, ts, cost
+
+    def _costs_by_date(self, first_day, last_day) -> dict[str, Decimal]:
+        """Total cost per ISO date in ``[first_day, last_day]``; ONE pass per file."""
+        totals: dict[str, Decimal] = {}
+        lo, hi = first_day.isoformat(), last_day.isoformat()
+        for _data, ts, cost in self._records(self._cost_files(first_day, last_day)):
+            day = ts.date().isoformat()
+            if lo <= day <= hi:
+                totals[day] = totals.get(day, Decimal("0")) + cost
+        return totals
+
+    def usage_stats(self, days: int = 7) -> dict:
+        """MEASURED call counts over the last *days* days, from the cost files.
+
+        ``cache_hit_rate`` is ``cache_read_tokens / (input_tokens +
+        cache_read_tokens)`` and ``None`` when no record carries input tokens -
+        an unknown rate is not a rate of zero.
+        """
+        days = max(1, min(int(days), self.MAX_TREND_DAYS))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        calls = 0
+        by_model: dict[str, int] = {}
+        input_tokens = 0
+        cache_read_tokens = 0
+        active_days: set[str] = set()
+        for data, ts, _cost in self._records(self._cost_files(first_day=cutoff.date())):
+            if ts <= cutoff:
+                continue
+            calls += 1
+            by_model[data["model_id"]] = by_model.get(data["model_id"], 0) + 1
+            active_days.add(ts.date().isoformat())
+            for key in ("input_tokens", "cache_read_tokens"):
+                value = data.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    if key == "input_tokens":
+                        input_tokens += value
+                    else:
+                        cache_read_tokens += value
+        denominator = input_tokens + cache_read_tokens
+        return {
+            "days": days,
+            "calls": calls,
+            "calls_by_model": by_model,
+            "days_with_calls": len(active_days),
+            "cache_hit_rate": (cache_read_tokens / denominator) if denominator > 0 else None,
+        }
+
     def get_daily_cost(self, date: Optional[str] = None) -> Decimal:
         """Get total cost for a day.
 
@@ -331,22 +428,14 @@ class CostCalculator:
         """
         if not date:
             date = datetime.now(timezone.utc).date().isoformat()
+        try:
+            day = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            return Decimal("0")
+        return self._costs_by_date(day, day).get(day.isoformat(), Decimal("0"))
 
-        total_cost = Decimal("0")
-
-        # Search all call cost files for this date
-        for filepath in self.costs_dir.glob("calls_*.jsonl"):
-            with open(filepath, "r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    data = json.loads(line)
-                    # Extract date from timestamp
-                    ts = datetime.fromisoformat(data["timestamp"])
-                    if ts.date().isoformat() == date:
-                        total_cost += Decimal(data["total_cost"])
-
-        return total_cost
+    #: Upper bound for one trend read (the console caps its own query at 366).
+    MAX_TREND_DAYS = 366
 
     def get_daily_costs_trend(
         self,
@@ -354,24 +443,26 @@ class CostCalculator:
     ) -> list[dict]:
         """Get daily costs for N days (for Story 4 chart).
 
+        Each cost file inside the window is read ONCE. Until 2026-11-19 every
+        day of the window re-read every cost file ever written (days x files).
+
         Args:
-            days: Number of days to retrieve (default: 30)
+            days: Number of days to retrieve (default: 30, at most
+                :attr:`MAX_TREND_DAYS`)
 
         Returns:
-            List of {"date": ISO, "cost": decimal_str} dicts
+            List of {"date": ISO, "cost": decimal_str} dicts, oldest first
         """
-        result = []
-
-        for i in range(days):
-            d = datetime.now(timezone.utc).date() - timedelta(days=i)
-            date_str = d.isoformat()
-            daily_cost = self.get_daily_cost(date_str)
-            result.append({
-                "date": date_str,
-                "cost": str(daily_cost),
-            })
-
-        return sorted(result, key=lambda x: x["date"])
+        days = max(0, min(int(days), self.MAX_TREND_DAYS))
+        if days == 0:
+            return []
+        last_day = datetime.now(timezone.utc).date()
+        first_day = last_day - timedelta(days=days - 1)
+        totals = self._costs_by_date(first_day, last_day)
+        return [
+            {"date": d.isoformat(), "cost": str(totals.get(d.isoformat(), Decimal("0")))}
+            for d in (first_day + timedelta(days=i) for i in range(days))
+        ]
 
     def get_cost_by_model(
         self,
@@ -388,17 +479,10 @@ class CostCalculator:
         result: dict[str, Decimal] = {}
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-        for filepath in self.costs_dir.glob("calls_*.jsonl"):
-            with open(filepath, "r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    data = json.loads(line)
-                    ts = datetime.fromisoformat(data["timestamp"])
-                    if ts > cutoff:
-                        model = data["model_id"]
-                        cost = Decimal(data["total_cost"])
-                        result[model] = result.get(model, Decimal("0")) + cost
+        for data, ts, cost in self._records(self._cost_files(first_day=cutoff.date())):
+            if ts > cutoff:
+                model = data["model_id"]
+                result[model] = result.get(model, Decimal("0")) + cost
 
         return {k: str(v) for k, v in result.items()}
 
@@ -410,6 +494,7 @@ class CostCalculator:
 
         try:
             line = json.dumps(call.to_dict(), separators=(",", ":"))
+            self.costs_dir.mkdir(parents=True, exist_ok=True)
             with open(filepath, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
             filepath.chmod(0o600)

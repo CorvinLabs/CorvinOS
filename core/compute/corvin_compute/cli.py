@@ -54,6 +54,52 @@ from .fabric.datasources.connection_env import (  # noqa: E402
 )
 
 
+def _tenant_chain(home: Path, tenant_id: str) -> Path:
+    """THE audit chain of *tenant_id* under *home*, via ``tenant_audit_chain()``.
+
+    The resolver reads ``CORVIN_HOME``; the CLI's ``--corvin-home`` flag is the
+    authority here, so the env is pinned to it for the call (``serve`` pins it
+    for the whole process anyway). The hand-composed path is only the fallback
+    for a stripped install where neither resolver module is importable — it is
+    the same layout, and ``test_cli_audit_chain_e2e`` pins the two together.
+    """
+    prev = os.environ.get("CORVIN_HOME")
+    os.environ["CORVIN_HOME"] = str(home)
+    try:
+        try:
+            from forge.paths import tenant_audit_chain  # type: ignore[import]
+        except ImportError:
+            try:
+                from core.paths.tenant import tenant_audit_chain  # type: ignore[import]
+            except ImportError:
+                return Path(home) / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
+        return Path(tenant_audit_chain(tenant_id))
+    finally:
+        if prev is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = prev
+
+
+def _build_audit_emit(home: Path, tenant_id: str):
+    """The production ``audit_emit(event, **fields)`` for a compute worker.
+
+    One emitter for the flat driver, the pipeline and the HAC coordinators and
+    the worker itself. Metadata only, via the allow-list in ``audit.emit``.
+    """
+    from . import audit as _compute_audit
+    chain = _tenant_chain(home, tenant_id)
+
+    def _audit_emit(event: str, **fields) -> None:
+        try:
+            fields.setdefault("tenant_id", tenant_id)
+            _compute_audit.emit(event, path=chain, **fields)
+        except Exception:  # noqa: BLE001 — observability is best-effort
+            log.warning("compute audit emit refused for %s", event, exc_info=True)
+
+    return _audit_emit
+
+
 def _adapter_licensed(adapter: str) -> bool:
     """The active licence's verdict for a datasource adapter (``license.validator``).
 
@@ -311,20 +357,9 @@ async def _cmd_serve(args: argparse.Namespace) -> int:
     # Review FINDING 1: wire a REAL audit_emit so compute.* events reach the
     # unified hash chain (was a no-op default → all compute audit was lost in
     # production). Metadata-only via the compute allow-list in audit.emit().
-    from . import audit as _compute_audit
-    # R4: THE tenant chain. This composed the PRE-ADR-0007 host-global path,
-    # which is tenant-agnostic — so every compute.* record for every tenant
-    # landed in one file that the tripwire, audit_query and the compliance
-    # reports (all tenant-scoped) do not read.
-    _audit_chain = home / "tenants" / args.tenant / "global" / "forge" / "audit.jsonl"
-    _tid = args.tenant
-
-    def _audit_emit(event: str, **fields) -> None:
-        try:
-            fields.setdefault("tenant_id", _tid)
-            _compute_audit.emit(event, path=_audit_chain, **fields)
-        except Exception:  # noqa: BLE001 — observability is best-effort
-            pass
+    # R4: THE tenant chain, resolved through tenant_audit_chain() (never a
+    # hand-composed path).
+    _audit_emit = _build_audit_emit(home, args.tenant)
 
     # ADR-0029 — pipeline/HAC engines exist and are fully tested
     # (pipeline/engine.py, hac/engine.py) but were never constructed here, so
@@ -478,8 +513,7 @@ def _cmd_reap(args: argparse.Namespace) -> int:
                          indent=2))
         return 0
 
-    _audit_chain = (home / "tenants" / args.tenant
-                    / "global" / "forge" / "audit.jsonl")  # R4: THE tenant chain
+    _audit_chain = _tenant_chain(home, args.tenant)  # R4: THE tenant chain
     reaped = _recovery.reap_orphaned(
         home, args.tenant,
         older_than_s=older_than_s,

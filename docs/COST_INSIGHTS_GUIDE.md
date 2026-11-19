@@ -182,6 +182,12 @@ GET /v1/console/cost/summary
 - Line: Daily spend
 - Hover: Date, amount
 
+**Cost of a read:** `get_daily_costs_trend(days)` reads each `calls_YYYY-MM-DD.jsonl` inside the
+window once (plus one day of slack on both sides; a file whose name carries no date is always
+read) and is capped at 366 days. It used to re-read every cost file ever written once per day of
+the window, and the summary route called it three times over (39 full scans per request). The
+routes are plain `def` handlers, so this file I/O runs on the worker threadpool, not the event loop.
+
 ---
 
 ### Story 5: Cost by Component — Pie Chart
@@ -342,9 +348,15 @@ GET /v1/console/cost/guardrails
   "daily_spend": "2.50",
   "alert_active": true,
   "alert_level": "warning",
-  "alert_message": "Warning: 75% of monthly budget used. Remaining: €25.00"
+  "warning_threshold_pct": 75.0,
+  "critical_threshold_pct": 90.0
 }
 ```
+
+The GET is read-only: it creates no directory, writes no default `config.json` (the default
+budget of 100 / 3.33 is a value, not a file) and appends nothing to `alerts.jsonl` - a polled
+status read used to do all three. `BudgetGuard.check_budget(..., record_alert=True)` (the default,
+used by enforcement callers) is what records an alert.
 
 **Alert Levels:**
 - **Warning** (75% of budget): Orange notification
@@ -362,6 +374,11 @@ POST /v1/console/cost/guardrails
   "critical_threshold_pct": 90.0
 }
 ```
+
+Both thresholds are stored with the budget and returned by GET and POST; they decide
+`alert_level`. Until 2026-11-19 they were validated and then dropped (`set_budget` wrote a fixed
+75 / 90). Each must be in (0, 100] and warning must not exceed critical (422 otherwise). The
+config is written atomically at mode 0600; a write failure is a 500, not a silent success.
 
 ---
 

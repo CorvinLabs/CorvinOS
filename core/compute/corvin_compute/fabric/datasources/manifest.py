@@ -270,6 +270,14 @@ def validate_dsiv1_manifest(raw: dict) -> DSIv1ConnectionManifest:
                 f"secrets entry {s!r} invalid — must be an uppercase env-var name "
                 "(e.g. AWS_ACCESS_KEY_ID)."
             )
+        # R3-NEW-3: refused at registration too, not only when the env is built - a
+        # manifest may never name the process environment or Corvin's own credentials.
+        from .connection_env import secret_name_reserved  # noqa: PLC0415
+        if secret_name_reserved(s):
+            raise DSIv1PolicyError(
+                f"secrets entry {s!r} is reserved (process environment or a Corvin "
+                "credential) and cannot be bound to a datasource."
+            )
 
     residency = raw.get("data_residency", "any")
     if residency not in _DATA_RESIDENCIES:

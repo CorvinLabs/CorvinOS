@@ -53,6 +53,9 @@ const CHANNEL = 'whatsapp';
 const SAY_HELPER = path.resolve(ROOT, '..', '..', 'voice', 'scripts', 'say.py');
 
 const inChatCmds = require('../shared/js/in_chat_commands');
+const { makePinGuard, safeEqual, boundMap } = require('../shared/js/auth');
+const { inboundLogLine, senderFp } = require('../shared/js/logger');
+const { sanitizeAttachmentPaths } = require('../shared/js/outbox_paths');
 const chatState = require('./chat_state');
 const { makeStickyProgress } = require('../shared/js/sticky_progress');
 const {
@@ -312,13 +315,20 @@ async function safeSend(socket, jid, content) {
 function rateAllow(sender, perHour) {
   const now = Date.now();
   const HOUR = 60 * 60 * 1000;
+  // `rate_limit_per_hour` unset used to compare `n >= undefined` (never true):
+  // no limit at all. Fall back to a real default, and keep the map bounded —
+  // senders are attacker-chosen (review 2026-11-19, R3-NEW-14).
+  if (!(Number.isFinite(perHour) && perHour > 0)) perHour = 30;
   const arr = (rateMap.get(sender) || []).filter(t => now - t < HOUR);
+  rateMap.delete(sender);
   if (arr.length >= perHour) {
     rateMap.set(sender, arr);
+    boundMap(rateMap);
     return false;
   }
   arr.push(now);
   rateMap.set(sender, arr);
+  boundMap(rateMap);
   return true;
 }
 
@@ -398,13 +408,13 @@ function readOnlyOk(sender, text, chatKey) {
   const firstDrop = !_roSeen.has(seenKey);
   if (firstDrop) _roSeen.add(seenKey);
   log(`auth: read_only drop sender=${sNorm} chat=${chatKey || ''} first=${firstDrop}`);
-  const snippet = (text || '').toString().slice(0, 200);
+  // Length only, no message text: a read-only sender's text is user content
+  // and the hash chain is permanent (same rule as shared/js/auth.js, F-B10).
   _emitAuditEvent('bridge.read_only_drop', {
     channel: CHANNEL, user: sNorm, chatKey: chatKey || '',
     details: {
       first_drop: firstDrop,
-      snippet,
-      truncated: (text || '').toString().length > 200,
+      text_len: (text || '').toString().length,
     },
   });
   return { isReadOnly: true, firstDrop };
@@ -426,6 +436,19 @@ function maybeForwardAsObserver(uid, text, chatKey, base) {
   }
   return true;
 }
+
+// `/auth <pin>` brute-force guard (review 2026-11-19, R3-NEW-12): 5 wrong PINs
+// lock the sender out for 15 minutes; the lockout is logged and audited once
+// per window and the PIN is not compared while it lasts.
+const pinGuard = makePinGuard({
+  onLockout: (u, chatKey) => {
+    log(`auth: PIN lockout for ${senderFp(u)}`);
+    _emitAuditEvent('bridge.pin_failure', {
+      channel: CHANNEL, user: u, chatKey: chatKey || '',
+      details: { reason: 'lockout' },
+    });
+  },
+});
 
 function authOk(sender, text, chatKey, fromMe) {
   // Owner's own messages always pass — fromMe=true means the message
@@ -458,7 +481,9 @@ function authOk(sender, text, chatKey, fromMe) {
   if (!wlNorm.includes(sNorm)) {
     if (cs.pin && text && text.trim().startsWith('/auth ')) {
       const given = text.trim().slice(6).trim();
-      if (given === cs.pin) {
+      if (pinGuard.isLocked(sNorm, chatKey)) return false;
+      if (safeEqual(given, cs.pin)) {
+        pinGuard.clear(sNorm);
         settings.whitelist = (settings.whitelist || []).concat([sNorm]);
         // F-B7: atomic + owner-only, same as saveSettings() (a bare
         // writeFileSync here left the PIN/whitelist file at umask perms).
@@ -468,6 +493,10 @@ function authOk(sender, text, chatKey, fromMe) {
         log(`auth: PIN accepted, added ${sNorm} to whitelist`);
         return true;
       }
+      pinGuard.fail(sNorm);
+      _emitAuditEvent('bridge.pin_failure', {
+        channel: CHANNEL, user: sNorm, chatKey: chatKey || '', details: {},
+      });
     }
     log(`auth: rejected sender=${sender} (normalized=${sNorm})`);
     return false;
@@ -585,6 +614,9 @@ async function processOutbox() {
       continue;
     }
     if (payload.channel !== CHANNEL) continue;
+    // Never send a file from outside the outbox / session workdirs
+    // (outbox_paths.js, review 2026-11-19 R3-NEW-41).
+    sanitizeAttachmentPaths(payload, OUTBOX, { logger: log });
     // Layer-22 follow-up: if the target chat has been /off-disabled
     // between the time the adapter generated this reply and the
     // daemon picking it up, drop the send. Without this gate the
@@ -1380,9 +1412,12 @@ if (MOCK) {
           // both the outer wrapper and (after unwrap) the inner message.
           const outerKeys = Object.keys(m.message || {}).join(',');
           const innerKeys = inner ? Object.keys(inner).join(',') : '<null>';
-          log(`upsert: from=${sender} kind=other (outer_keys=[${outerKeys}] inner_keys=[${innerKeys}])`);
+          log(`upsert: from=${senderFp(sender)} kind=other (outer_keys=[${outerKeys}] inner_keys=[${innerKeys}])`);
         } else {
-          log(`upsert: from=${sender} kind=${kindLog} text="${text.slice(0,80)}"`);
+          // Runs BEFORE any auth check, for every chat of the account (third
+          // parties included): fingerprint + length only, never id or text
+          // (review 2026-11-19, R3-NEW-13).
+          log(inboundLogLine({ from: sender, kind: kindLog, text }));
         }
         {
           const ro = readOnlyOk(sender, text, sender);

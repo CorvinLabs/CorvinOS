@@ -163,6 +163,9 @@ class WorkflowOptimizer:
             config_path: Path to config directory. If None, uses
                          ~/.corvin/tenants/<tenant_id>/global/workflow_optimizer_config.json
         """
+        # An explicit path (tests, an embedding host) names ONE directory for every tenant's
+        # file; without one each tenant's config lives in that tenant's own home (PLS-8).
+        self._explicit_config_path = bool(config_path)
         self.config_path = config_path or self._default_config_path()
         self._default_config = SkillConfig()
         self._config_cache: Dict[str, SkillConfig] = {}
@@ -312,6 +315,10 @@ class WorkflowOptimizer:
 
         try:
             config_file = self._get_config_file(tenant_id)
+            if not config_file.exists():
+                legacy = self._legacy_config_file(tenant_id)
+                if legacy is not None and legacy.exists():
+                    config_file = legacy
             if config_file.exists():
                 with open(config_file, encoding="utf-8") as f:
                     data = json.load(f)
@@ -441,10 +448,29 @@ class WorkflowOptimizer:
         )
 
     def _get_config_file(self, tenant_id: str):
-        """Get config file path for tenant."""
+        """Config file of ``tenant_id``, in ``tenant_id``'s own home.
+
+        PLS-8: until 2026-11-19 the directory was always the parent of the default path, which
+        is the PROCESS tenant's home (``CORVIN_TENANT_ID`` at construction) - so tenant B's
+        learned routing config was written into, and read from, tenant A's directory. Now the
+        requested tenant's home is resolved per call (``tenant_home`` validates the id). An
+        explicitly configured path keeps its one-directory layout with the tenant in the name.
+        """
         from pathlib import Path
-        config_dir = Path(self.config_path).parent if self.config_path else Path.home() / ".corvin"
-        return config_dir / f"workflow_optimizer_config_{tenant_id}.json"
+        if self._explicit_config_path:
+            from core.paths.tenant import validate_tenant_id
+            validate_tenant_id(tenant_id)
+            return Path(self.config_path).parent / f"workflow_optimizer_config_{tenant_id}.json"
+        from core.paths.tenant import tenant_home
+        return tenant_home(tenant_id) / "workflow_optimizer_config.json"
+
+    def _legacy_config_file(self, tenant_id: str):
+        """Where the pre-PLS-8 code put this tenant's config: the process tenant's home, tenant
+        in the file name. Read-only fallback so a learned config is not lost; never written."""
+        from pathlib import Path
+        if self._explicit_config_path:
+            return None
+        return Path(self.config_path).parent / f"workflow_optimizer_config_{tenant_id}.json"
 
     def _emit_audit_event(
         self,

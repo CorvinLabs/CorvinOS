@@ -126,28 +126,6 @@ _INPUT_SCHEMA_BASE: dict[str, Any] = {
             "minimum": OUTPUT_CAP_MIN_CHARS,
             "maximum": OUTPUT_CAP_MAX_CHARS,
         },
-        "hermetic": {
-            "type": "boolean",
-            "description": (
-                "Default true (Layer 29.2a). When true AND no "
-                "working_dir is passed, the worker runs in a fresh "
-                "0o700 tempdir that is rmtree'd after the call. "
-                "Setting working_dir explicitly already bypasses "
-                "the hermetic dir, so this flag mainly exists as an "
-                "operator-side opt-out for diagnostic purposes."
-            ),
-        },
-        "env_passthrough": {
-            "type": "boolean",
-            "description": (
-                "Default false (Layer 29.2b). When false the worker "
-                "subprocess inherits only a curated env allowlist "
-                "(PATH/HOME/USER/LANG/TERM + engine-specific API key). "
-                "Set true when the worker genuinely needs the bridge's "
-                "full env (e.g. custom OPENROUTER_API_KEY for OpenCode). "
-                "Prefer using env_extra for narrowly-scoped additions."
-            ),
-        },
         "output_judge_mode": {
             "type": "string",
             "enum": ["off", "advisory", "enforcing"],
@@ -230,6 +208,20 @@ _INPUT_SCHEMA_BASE: dict[str, Any] = {
     "required": ["prompt"],
     "additionalProperties": False,
 }
+
+
+def _operator_flag(name: str, *, default: bool) -> bool:
+    """An operator-set boolean from this server's environment.
+
+    Unset / empty / unrecognised → ``default`` (the strict value for both
+    callers), so a typo can never weaken isolation.
+    """
+    raw = (os.environ.get(name) or "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return default
 
 
 def _wrap_text_for_os(result: DelegateResult) -> str:
@@ -454,8 +446,27 @@ class DelegateServer:
         working_dir = args.get("working_dir")
         allow_write = bool(args.get("allow_write", False))
         output_cap_chars = args.get("output_cap_chars", OUTPUT_CAP_DEFAULT_CHARS)
-        hermetic = bool(args.get("hermetic", True))
-        env_passthrough = bool(args.get("env_passthrough", False))
+        # ``hermetic`` and ``env_passthrough`` are NOT tool arguments (review
+        # 2026-11-19, A2A-7). Both only ever WEAKEN isolation — the worker's
+        # private tempdir and the scrubbed environment — and the caller of this
+        # tool is an LLM whose prompt may carry injected text: with
+        # ``env_passthrough=true`` one tool call handed the worker every secret
+        # in the bridge's environment. They are operator settings now, read
+        # from this server's own environment; a tool call that tries to weaken
+        # either one is refused, never silently honoured or silently dropped.
+        if args.get("hermetic") is False or (
+                "hermetic" in args and not isinstance(args.get("hermetic"), bool)):
+            self._error(msgid, INVALID_PARAMS,
+                        "hermetic is an operator setting "
+                        "(CORVIN_DELEGATE_HERMETIC), not a tool argument")
+            return
+        if args.get("env_passthrough") not in (None, False):
+            self._error(msgid, INVALID_PARAMS,
+                        "env_passthrough is an operator setting "
+                        "(CORVIN_DELEGATE_ENV_PASSTHROUGH), not a tool argument")
+            return
+        hermetic = _operator_flag("CORVIN_DELEGATE_HERMETIC", default=True)
+        env_passthrough = _operator_flag("CORVIN_DELEGATE_ENV_PASSTHROUGH", default=False)
         output_judge_mode = args.get("output_judge_mode")
         # Layer 30 — three optional capability widening flags.
         # None = "no opinion from caller" → env-floor + persona default

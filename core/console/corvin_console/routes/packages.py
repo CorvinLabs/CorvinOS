@@ -29,6 +29,7 @@ never env vars (CLAUDE.md § Multi-tenant axis).
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -205,18 +206,21 @@ def _validate_and_extract_zip(zip_bytes: bytes, extract_to: Path, max_size: int)
             if not members:
                 raise ValueError("ZIP file is empty")
 
-            # Extract manifest first to validate structure
+            # Extract manifest first to validate structure (bounded read)
+            from core.plugins.staging import MAX_MANIFEST_BYTES  # noqa: PLC0415
+            if zf.getinfo("manifest.json").file_size > MAX_MANIFEST_BYTES:
+                raise ValueError("manifest.json is too large")
             manifest_data = zf.read("manifest.json")
             manifest = json.loads(manifest_data)
 
-            # Validate all member paths BEFORE extraction (path traversal defense)
-            extract_to_resolved = extract_to.resolve()
-            for member in members:
-                member_path = (extract_to_resolved / member).resolve()
-                # Ensure resolved path stays within extract_to (no ../ escapes). A string
-                # prefix test would accept a sibling such as ``<dir>-evil``.
-                if member_path != extract_to_resolved and not member_path.is_relative_to(extract_to_resolved):
-                    raise ValueError(f"path traversal detected: {member}")
+            # Entry count, unpacked size and every entry name BEFORE extraction
+            # (ZIP bomb, traversal, backslash, case collisions) - the checks
+            # every archive intake shares (core.plugins.staging).
+            from core.plugins.staging import StagingError, check_zip_archive  # noqa: PLC0415
+            try:
+                check_zip_archive(zf, extract_to)
+            except StagingError as exc:
+                raise ValueError(f"archive refused: {exc}") from exc
 
             # Now extract all files (paths already validated)
             extract_to.mkdir(parents=True, exist_ok=True)
@@ -432,7 +436,14 @@ async def upload_package(
     - 413: Package too large
     - 422: Manifest validation failed
     """
-    zip_bytes = await file.read()
+    # Bounded read: one byte past the cap is enough to know the body is too
+    # large. ``await file.read()`` used to buffer whatever the client sent.
+    zip_bytes = await file.read(_MAX_PACKAGE_BYTES + 1)
+    if len(zip_bytes) > _MAX_PACKAGE_BYTES:
+        raise HTTPException(
+            status_code=http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"package exceeds {_MAX_PACKAGE_BYTES // 1024 // 1024} MB limit",
+        )
 
     # Use unique temp directory to avoid concurrent upload conflicts
     temp_id = str(uuid.uuid4())[:8]
@@ -443,7 +454,9 @@ async def upload_package(
         temp_pkg_dir.parent.mkdir(parents=True, exist_ok=True)
 
         # Validate ZIP and extract all files to unique temp location
-        extract_result = _validate_and_extract_zip(zip_bytes, temp_pkg_dir, _MAX_PACKAGE_BYTES)
+        # Unpacking is blocking file I/O (up to hundreds of MB): worker thread.
+        extract_result = await asyncio.to_thread(
+            _validate_and_extract_zip, zip_bytes, temp_pkg_dir, _MAX_PACKAGE_BYTES)
         manifest = extract_result["manifest"]
         package_id, version = _validate_manifest(manifest)
         permissions = _extract_permissions(manifest)
@@ -466,7 +479,7 @@ async def upload_package(
 
         # AUDIT BEFORE COMMIT (GDPR Art. 30), enforced: a record that does not commit
         # refuses the install with 503 and nothing is moved into installed/.
-        _audit_first(rec, "package.install", package_id)
+        await asyncio.to_thread(_audit_first, rec, "package.install", package_id)
 
         # Commit the package atomically: create backup, move temp → final, clean old backup
         # (TOCTOU-safe: minimal window between atomic move and cleanup)

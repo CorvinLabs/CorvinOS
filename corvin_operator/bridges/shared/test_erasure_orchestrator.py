@@ -101,13 +101,20 @@ class TestValidateSubjectId(unittest.TestCase):
         for s in ["discord:12345", "telegram:67890", "whatsapp:491234567890"]:
             self.assertEqual(validate_subject_id(s), s)
 
-    def test_rejects_pii_shape(self):
-        with self.assertRaises(ValueError):
-            validate_subject_id("alice@example.com")
+    def test_rejects_unsafe_shape(self):
         with self.assertRaises(ValueError):
             validate_subject_id("Alice Smith")
         with self.assertRaises(ValueError):
             validate_subject_id("../etc/passwd")
+        with self.assertRaises(ValueError):
+            validate_subject_id("a@b.example\n")
+
+    def test_accepts_channel_ids_with_at_and_plus(self):
+        # Review 2026-11-19 (SEC-5): the ids the bridges actually store. Refusing
+        # them made exactly these subjects impossible to erase.
+        for sid in ("4915112345678@s.whatsapp.net", "+4915112345678",
+                    "alice@example.com", "whatsapp:4915112345678@s.whatsapp.net"):
+            self.assertEqual(validate_subject_id(sid), sid)
 
     def test_rejects_empty(self):
         with self.assertRaises(ValueError):
@@ -132,7 +139,11 @@ class TestErasureRequest(unittest.TestCase):
 
     def test_validates_subject(self):
         with self.assertRaises(ValueError):
-            ErasureRequest(subject_id="alice@example.com", requester="dpo")
+            ErasureRequest(subject_id="alice smith/../x", requester="dpo")
+        # SEC-5: an "@"-bearing channel id is a valid subject.
+        self.assertEqual(
+            ErasureRequest(subject_id="alice@example.com", requester="dpo").subject_id,
+            "alice@example.com")
 
     def test_requires_requester(self):
         with self.assertRaises(ValueError):

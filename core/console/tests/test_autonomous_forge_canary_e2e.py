@@ -65,7 +65,7 @@ def forge_client(tmp_path: Path):
     orig_license = host_validator._ACTIVE_LICENSE
     host_validator._set_active_license({"tier": "member"})
     orig_resolve = sc.resolve_llm_client
-    sc.resolve_llm_client = lambda explicit=None: refine_engine_for(SKILL)
+    sc.resolve_llm_client = lambda explicit=None, **_kw: refine_engine_for(SKILL)
 
     app = FastAPI()
     app.include_router(route.router, prefix=BASE)
@@ -345,7 +345,7 @@ def test_engine_timeout_mid_ldd_keeps_the_scored_candidate(tmp_path):
     engine.messages.create.side_effect = _create
     with forge_client(tmp_path) as (client, root, home):
         from skill_creator import skill_creator as sc
-        sc.resolve_llm_client = lambda explicit=None: engine
+        sc.resolve_llm_client = lambda explicit=None, **_kw: engine
         resp = post(client, "/fork", {"skill_id": SKILL})
         run = wait_fork(client, resp.json()["run_id"])
         assert run["status"] == "success", run

@@ -503,3 +503,48 @@ class TestPrincipalTenantIsolation:
                             json={"reason": "approved"})
             assert r.status_code == 200, r.text
             assert r.json()["success"] is True
+
+
+# ============================================================================
+# Review 2026-11-19: the two GET routes disclosed a tenant's pending and
+# decided approvals to any caller — they had neither the principal dependency
+# nor the principal-tenant check the three POST routes carry.
+# ============================================================================
+
+# The skill id is the one the fixture's status record names, so the status
+# route answers 200 (not its own skill-mismatch 404) once the guards pass.
+_READ_PATHS = (
+    "/v1/approvals/os.delegation_router?tenant_id=_default",
+    "/v1/approvals/os.delegation_router/approval-1/status?tenant_id=_default",
+)
+
+
+class TestReadRoutesAreGuardedLikeTheWrites:
+    _client = TestPrincipalTenantIsolation._client
+
+    @pytest.mark.parametrize("path", _READ_PATHS)
+    def test_a_request_that_never_passed_the_guard_is_rejected(self, test_client, mock_approval_gate, path):
+        # ``test_client`` installs no middleware: request.state has no principal.
+        r = test_client.get(path)
+        assert r.status_code == 401, r.text
+        mock_approval_gate.get_pending_approvals.assert_not_called()
+        mock_approval_gate.get_approval_status.assert_not_called()
+
+    @pytest.mark.parametrize("path", _READ_PATHS)
+    def test_a_token_of_another_tenant_cannot_read_default(self, mock_approval_gate, path):
+        from corvin_gateway.auth import ResolvedToken
+        client = self._client(mock_approval_gate, ResolvedToken(tenant_id="acme", label="alice", fingerprint="ab12"))
+        r = client.get(path)
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["reason"] == "tenant-mismatch"
+        mock_approval_gate.get_pending_approvals.assert_not_called()
+        mock_approval_gate.get_approval_status.assert_not_called()
+
+    @pytest.mark.parametrize("path", _READ_PATHS)
+    def test_the_local_operator_and_a_default_token_still_read(self, mock_approval_gate, path):
+        from corvin_gateway.auth import ResolvedToken
+        mock_approval_gate.get_pending_approvals = Mock(return_value=[])
+        for principal in (None, ResolvedToken(tenant_id="_default", label="alice", fingerprint="ab12")):
+            client = self._client(mock_approval_gate, principal)
+            r = client.get(path)
+            assert r.status_code == 200, r.text

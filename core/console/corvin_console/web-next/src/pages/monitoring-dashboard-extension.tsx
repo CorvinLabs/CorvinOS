@@ -512,8 +512,8 @@ const CompliancePanel: React.FC<{
       }
     >
       <CardHeader>
-        <CardTitle>ADR Compliance Status</CardTitle>
-        <CardDescription>Week {latestReport.week}: ADR-0206, 0205, 0186, 0369</CardDescription>
+        <CardTitle>Compliance Status</CardTitle>
+        <CardDescription>Week {latestReport.week}: weekly compliance checks</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="space-y-3">

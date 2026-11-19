@@ -185,10 +185,6 @@ export async function getWorkflowRunTablePage(
   );
 }
 
-export function workflowTableZipUrl(wid: string, rid: string): string {
-  return `/v1/console/workflows/${encodeURIComponent(wid)}/runs/${encodeURIComponent(rid)}/tables.zip`;
-}
-
 export function experimentJupyterUrl(experimentId: string): string {
   return `/v1/console/compute/experiments/${encodeURIComponent(experimentId)}/export/jupyter`;
 }

@@ -21,7 +21,6 @@ drops forbidden keys fail-closed; callers still must not send them.
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -39,21 +38,42 @@ def _ensure_operator_on_path() -> None:
 def audit_chain_path(tenant_id: str, corvin_home: Optional[Path] = None) -> Path:
     """``<tenant_home>/global/forge/audit.jsonl`` — the chain the tripwire reads.
 
+    Resolved through ``tenant_audit_chain()`` — the ONE resolver every writer of a
+    hash-chained record shares (``forge.paths``, mirrored byte-identically by
+    ``core.paths.tenant``; pinned by ``tests/security/test_audit_chain_ssot.py``). Until
+    2026-11-19 this function composed the path by hand in three places (review PLS-8).
+
     ``corvin_home`` pins the runtime root for callers that already own one
-    (``SkillManager(corvin_home, tenant_id)``); otherwise ``forge.paths``
-    resolves it (``CORVIN_HOME`` → repo-local ``.corvin`` → ``~/.corvin``).
+    (``SkillManager(corvin_home, tenant_id)``). The resolver takes no root argument, so the
+    pinned path is the resolver's own path re-rooted: its tail below the resolver's
+    ``corvin_home()``, under the pinned root. Nothing about the layout is restated here.
     """
-    if corvin_home is not None:
-        return Path(corvin_home) / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
+    chain, home = _resolve_chain(tenant_id)
+    if corvin_home is None:
+        return chain
+    pinned = Path(corvin_home)
+    try:
+        return pinned / chain.relative_to(home)
+    except ValueError:
+        # The tenant home is not below corvin_home() (a relocated tenant root): a pinned
+        # root cannot be honoured without guessing the layout, so the resolver's path stands.
+        logger.error("skill audit: cannot re-root the audit chain under a pinned corvin_home; "
+                     "using the resolver's path")
+        return chain
+
+
+def _resolve_chain(tenant_id: str) -> "tuple[Path, Path]":
+    """``(tenant_audit_chain(tenant_id), corvin_home())`` from ``forge.paths``, else from its
+    byte-identical mirror ``core.paths.tenant`` (forge not importable in a stripped layout)."""
     _ensure_operator_on_path()
     try:
-        from forge import paths as _forge_paths  # type: ignore[import-not-found]
+        from forge import paths as _paths  # type: ignore[import-not-found]
 
-        return _forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
+        return Path(_paths.tenant_audit_chain(tenant_id)), Path(_paths.corvin_home())
     except Exception:  # noqa: BLE001 — forge not importable (stripped layout)
-        root = os.environ.get("CORVIN_HOME")
-        base = Path(os.path.expanduser(root)) if root else Path.home() / ".corvin"
-        return base / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
+        from core.paths import tenant as _paths  # noqa: PLC0415
+
+        return Path(_paths.tenant_audit_chain(tenant_id)), Path(_paths.corvin_home())
 
 
 def emit_skill_audit(

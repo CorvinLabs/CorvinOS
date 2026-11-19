@@ -132,6 +132,71 @@ class SinceQueryTests(unittest.TestCase):
                 )
 
 
+# ── Review 2026-11-19: cache key + tenant-id validation ──────────────
+
+
+class SinceGridAndTenantValidationTests(unittest.TestCase):
+    def test_quantize_since_snaps_down_to_the_grid(self):
+        grid = audit_metrics.SINCE_GRID_S
+        self.assertIsNone(audit_metrics.quantize_since(None))
+        self.assertEqual(audit_metrics.quantize_since(1_000_000_019.7), 1_000_000_019.7 // grid * grid)
+        # Down, never up: the window is never shorter than requested.
+        for raw in (0.0, 59.999, 60.0, 61.0, 1_763_500_000.123):
+            q = audit_metrics.quantize_since(raw)
+            self.assertLessEqual(q, raw)
+            self.assertLess(raw - q, grid)
+            self.assertEqual(q % grid, 0.0)
+
+    def test_repeated_relative_scrapes_share_one_cache_key(self):
+        """``?since=1h`` used to produce a new ``now - 3600`` on every request,
+        so each scrape missed the TTL cache and re-walked the chain."""
+        from unittest.mock import patch
+        seen: list = []
+        real_render = audit_metrics.render
+
+        def _spy(tid, *, since=None):
+            if since is not None:  # background all-time renders are not the scrape
+                seen.append(since)
+            return real_render(tid, since=since)
+
+        with sandbox(("acme",)) as home:
+            _write(home, "acme", "tool.created", persona="coder")
+            # Two wall-clock instants inside one grid cell.
+            base = 1_763_500_020.0
+            with patch.object(audit_metrics, "render", _spy), _client() as c:
+                for now in (base + 1.25, base + 37.5):
+                    with patch("time.time", lambda now=now: now):
+                        self.assertEqual(c.get("/v1/tenants/acme/metrics?since=1h").status_code, 200)
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[0], seen[1], seen)
+        self.assertEqual(
+            audit_metrics._cache_key("acme", seen[0]), audit_metrics._cache_key("acme", seen[1]))
+
+    def test_an_invalid_tenant_id_is_404_not_500(self):
+        with sandbox(("acme",)):
+            with _client() as c:
+                for bad in ("Bad%20Tenant", "a..b", "UPPER", "x" * 200):
+                    r = c.get(f"/v1/tenants/{bad}/metrics")
+                    self.assertEqual(r.status_code, 404, (bad, r.status_code, r.text))
+
+
+    def test_a_tenant_the_canonical_resolver_admits_is_scraped(self):
+        """``core.tenants`` reserves ``test``/``local``/``admin``/... while the
+        canonical ``forge.tenants`` admits them: their metrics answered 404."""
+        names = ("test", "local", "admin", "system", "internal", "service", "operator")
+        with sandbox(names) as home:
+            for name in names:
+                _write(home, name, "tool.created", persona="coder")
+            with _client() as c:
+                for name in names:
+                    audit_metrics.clear_cache()
+                    r = c.get(f"/v1/tenants/{name}/metrics")
+                    self.assertEqual(r.status_code, 200, (name, r.status_code, r.text))
+                # still refused: what the canonical validator refuses
+                for bad in ("__reserved", "a..b", "UPPER"):
+                    self.assertEqual(c.get(f"/v1/tenants/{bad}/metrics").status_code, 404, bad)
+
+
 # ── Read-only contract ───────────────────────────────────────────────
 
 

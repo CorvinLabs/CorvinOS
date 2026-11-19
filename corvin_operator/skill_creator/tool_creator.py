@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import artifact_review as ar
+from . import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,8 @@ class ToolCreatorOrchestrator:
                  progress_cb: Optional[Callable[[str, int, str], None]] = None,
                  client: Any = None,
                  draft_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
-                 iteration_cb: Optional[Callable[[int, Dict[str, Any], Dict[str, Any]], None]] = None):
+                 iteration_cb: Optional[Callable[[int, Dict[str, Any], Dict[str, Any]], None]] = None,
+                 spawn_gate: Optional[Callable[[str], None]] = None):
         self.tenant_id = tenant_id
         self.progress_cb = progress_cb
         #: Called with the draft as soon as it passed validation, so the run record
@@ -175,7 +177,12 @@ class ToolCreatorOrchestrator:
         self.draft_cb = draft_cb
         # ``iteration_cb(k, draft_dict, tests)`` after each sandbox test iteration (additive observation only).
         self.iteration_cb = iteration_cb
-        self.client = client if client is not None else ar.resolve_engine()
+        self.client = client if client is not None else ar.resolve_engine(self.tenant_id)
+        # ``spawn_gate(text)`` runs on the text of EVERY engine call (plan, repairs, the
+        # reviewers) before it is made and raises to refuse; the client is gated here, so no
+        # phase holds an ungated one (review R3-BR-2). None = the caller gated the request.
+        self.spawn_gate = spawn_gate
+        self.client = llm_client.gated_client(self.client, spawn_gate)
         self.engine_id = ar.engine_id(self.client)
 
     # -- plumbing --------------------------------------------------------

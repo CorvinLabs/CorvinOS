@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -121,67 +123,158 @@ class BudgetConfig:
         }
 
 
+class BudgetConfigUnreadable(RuntimeError):
+    """``config.json`` exists but cannot be read as a budget.
+
+    Until 2026-11-19 this was logged and replaced by the 100 EUR default: a
+    tenant whose stored limit was 20 or 5000 was shown - and capped at - an
+    amount nobody had chosen.
+    """
+
+
+class InvalidBudget(ValueError):
+    """A budget amount is not a finite, positive number."""
+
+
+def validate_budget_amount(value, name: str = "budget") -> Decimal:
+    """Return *value* as a finite Decimal > 0, else raise :class:`InvalidBudget`.
+
+    ``Decimal("NaN")``, ``Decimal("Infinity")``, zero and negatives all used to
+    be accepted: zero divides, NaN raises on comparison, and an infinite or
+    negative budget turns the spend cap into "always allowed" / "always denied".
+    """
+    try:
+        amount = value if isinstance(value, Decimal) else Decimal(str(value).strip())
+    except (InvalidOperation, ValueError, TypeError):
+        raise InvalidBudget(f"{name} must be a number") from None
+    if not amount.is_finite() or amount <= 0:
+        raise InvalidBudget(f"{name} must be a finite number greater than zero")
+    return amount
+
+
+DEFAULT_WARNING_PCT = 75.0
+DEFAULT_CRITICAL_PCT = 90.0
+
+
+def validate_threshold_pct(value, name: str = "threshold") -> float:
+    """Return *value* as a finite percentage in (0, 100], else raise :class:`InvalidBudget`."""
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        raise InvalidBudget(f"{name} must be a number") from None
+    if isinstance(value, bool) or pct != pct or not (0 < pct <= 100):
+        raise InvalidBudget(f"{name} must be greater than 0 and at most 100")
+    return pct
+
+
 class BudgetGuard:
     """Enforce budget limits and track alerts (Stories 9-10)."""
 
-    def __init__(self, corvin_home: str | Path):
+    def __init__(self, corvin_home: str | Path, *, tenant_root: str | Path | None = None):
         """Initialize budget guard.
 
         Args:
-            corvin_home: Path to ~/.corvin
+            corvin_home: Path to ~/.corvin (the ``_default`` tenant is used)
+            tenant_root: A tenant home (``tenant_home(tenant_id)``). When given
+                it wins: the budget lives under ``<tenant_root>/global/budget``
+                and ``corvin_home`` is ignored. The console passes the session's
+                tenant here so one tenant never reads or sets another's budget.
         """
         self.corvin_home = Path(corvin_home)
-        self.budget_dir = (
-            self.corvin_home / "tenants" / "_default" / "global" / "budget"
-        )
-        self.budget_dir.mkdir(parents=True, exist_ok=True)
-
-        # Load or create default config
+        #: Recorded in alerts/denials; the directory name of the tenant home.
+        self.tenant_id = Path(tenant_root).name if tenant_root is not None else "_default"
+        if tenant_root is not None:
+            self.budget_dir = Path(tenant_root) / "global" / "budget"
+        else:
+            self.budget_dir = (
+                self.corvin_home / "tenants" / "_default" / "global" / "budget"
+            )
+        # Nothing is created here: constructing a guard (every console GET does)
+        # must not write. The directory is made by the first real write.
+        #: ``"default"`` (no file: the built-in default applies), ``"stored"``
+        #: or ``"invalid"`` (a file that cannot be read as a budget).
+        self.config_state = "default"
         self.config = self._load_config()
         self.alert_id_counter = 0
+
+    def _require_config(self) -> None:
+        if self.config_state == "invalid":
+            raise BudgetConfigUnreadable(
+                "the stored budget configuration is unreadable; set the budget again"
+            )
 
     def set_budget(
         self,
         monthly_budget: Decimal,
         daily_budget: Optional[Decimal] = None,
+        *,
+        warning_threshold_pct: Optional[float] = None,
+        critical_threshold_pct: Optional[float] = None,
     ) -> BudgetConfig:
         """Set budget limits (Story 9).
 
         Args:
             monthly_budget: Monthly budget in EUR
             daily_budget: Daily budget in EUR (default: monthly / 30)
+            warning_threshold_pct: Alert threshold in percent (default 75)
+            critical_threshold_pct: Critical threshold in percent (default 90)
 
         Returns:
             Updated BudgetConfig
+
+        Raises:
+            InvalidBudget: an amount or a threshold is out of range
+            OSError: the config could not be written (nothing is changed then)
         """
+        warning = validate_threshold_pct(
+            DEFAULT_WARNING_PCT if warning_threshold_pct is None else warning_threshold_pct,
+            "warning_threshold_pct")
+        critical = validate_threshold_pct(
+            DEFAULT_CRITICAL_PCT if critical_threshold_pct is None else critical_threshold_pct,
+            "critical_threshold_pct")
+        if warning > critical:
+            raise InvalidBudget("warning_threshold_pct must not exceed critical_threshold_pct")
+        monthly_budget = validate_budget_amount(monthly_budget, "monthly_budget")
         if daily_budget is None:
             daily_budget = monthly_budget / Decimal("30")
+        else:
+            daily_budget = validate_budget_amount(daily_budget, "daily_budget")
 
-        self.config = BudgetConfig(
+        config = BudgetConfig(
             monthly_budget=monthly_budget,
             daily_budget=daily_budget,
-            warning_threshold_pct=75.0,
-            critical_threshold_pct=90.0,
+            warning_threshold_pct=warning,
+            critical_threshold_pct=critical,
             spend_cap_enabled=True,
         )
-
-        self._save_config()
+        # Persist first: a budget that could not be stored is not in force.
+        self._write_config(config)
+        self.config = config
+        self.config_state = "stored"  # also repairs an unreadable file
         return self.config
 
     def check_budget(
         self,
         current_spend: Decimal,
         daily_spend: Decimal,
+        *,
+        record_alert: bool = True,
     ) -> BudgetStatus:
         """Check current budget status (Story 9).
 
         Args:
             current_spend: Current monthly spend (EUR)
             daily_spend: Today's spend (EUR)
+            record_alert: Append an active alert to ``alerts.jsonl``. A status
+                READ passes False: a polled GET must not write a line per poll.
 
         Returns:
             BudgetStatus with current situation
+
+        Raises:
+            BudgetConfigUnreadable: the stored config cannot be read
         """
+        self._require_config()
         remaining = self.config.monthly_budget - current_spend
         pct_used = (
             float(current_spend / self.config.monthly_budget * Decimal("100"))
@@ -232,7 +325,7 @@ class BudgetGuard:
         )
 
         # Record alert if triggered
-        if alert_active:
+        if alert_active and record_alert:
             self._record_alert(
                 current_spend,
                 alert_level,
@@ -253,6 +346,12 @@ class BudgetGuard:
             - allowed: True if request can proceed, False if denied
             - denial_reason: Reason for denial (if allowed=False)
         """
+        if self.config_state == "invalid":
+            # Fail closed: a cap whose limit is unknown does not wave through.
+            return False, (
+                "The stored budget configuration is unreadable; "
+                "set the budget again before spending."
+            )
         if not self.config.spend_cap_enabled:
             return True, None
 
@@ -331,12 +430,16 @@ class BudgetGuard:
             reason = AlertReason.MONTHLY_THRESHOLD
 
         remaining = self.config.monthly_budget - current_spend
-        pct_used = float(current_spend / self.config.monthly_budget * Decimal("100"))
+        pct_used = (
+            float(current_spend / self.config.monthly_budget * Decimal("100"))
+            if self.config.monthly_budget > 0
+            else 0.0
+        )
 
         alert = BudgetAlert(
             alert_id=alert_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
-            tenant_id="_default",
+            tenant_id=self.tenant_id,
             level=level,
             reason=reason,
             current_spend=str(current_spend),
@@ -362,10 +465,11 @@ class BudgetGuard:
             "current_spend": str(current_spend),
             "requested_cost": str(requested_cost),
             "reason": reason,
-            "tenant_id": "_default",
+            "tenant_id": self.tenant_id,
         }
 
         try:
+            self.budget_dir.mkdir(parents=True, exist_ok=True)
             with open(denials_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(denial_record, separators=(",", ":")) + "\n")
             denials_file.chmod(0o600)
@@ -377,6 +481,7 @@ class BudgetGuard:
         alerts_file = self.budget_dir / "alerts.jsonl"
 
         try:
+            self.budget_dir.mkdir(parents=True, exist_ok=True)
             with open(alerts_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(alert.to_dict(), separators=(",", ":")) + "\n")
             alerts_file.chmod(0o600)
@@ -388,42 +493,64 @@ class BudgetGuard:
         config_file = self.budget_dir / "config.json"
 
         if not config_file.exists():
-            # Create default config
-            default = BudgetConfig(
-                monthly_budget=Decimal("100"),  # €100/month default
-                daily_budget=Decimal("3.33"),   # €3.33/day
+            # The default is a value, not a file: loading never writes.
+            return BudgetConfig(
+                monthly_budget=Decimal("100"),  # 100 EUR/month default
+                daily_budget=Decimal("3.33"),   # 3.33 EUR/day
             )
-            self._save_config_obj(default)
-            return default
 
         try:
             with open(config_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                self.config_state = "stored"
                 return BudgetConfig(
-                    monthly_budget=Decimal(data["monthly_budget"]),
-                    daily_budget=Decimal(data["daily_budget"]),
-                    warning_threshold_pct=data.get("warning_threshold_pct", 75.0),
-                    critical_threshold_pct=data.get("critical_threshold_pct", 90.0),
+                    monthly_budget=validate_budget_amount(
+                        data["monthly_budget"], "monthly_budget"),
+                    daily_budget=validate_budget_amount(
+                        data["daily_budget"], "daily_budget"),
+                    warning_threshold_pct=validate_threshold_pct(
+                        data.get("warning_threshold_pct", DEFAULT_WARNING_PCT),
+                        "warning_threshold_pct"),
+                    critical_threshold_pct=validate_threshold_pct(
+                        data.get("critical_threshold_pct", DEFAULT_CRITICAL_PCT),
+                        "critical_threshold_pct"),
                     spend_cap_enabled=data.get("spend_cap_enabled", True),
                 )
         except Exception as e:
-            logger.error(f"Failed to load budget config: {e}")
+            # NOT the default: a limit nobody chose must not be reported or
+            # enforced as this tenant's. The placeholder below only keeps the
+            # attribute typed; every reader checks ``config_state`` first.
+            logger.error("Failed to load budget config: %s", type(e).__name__)
+            self.config_state = "invalid"
             return BudgetConfig(
                 monthly_budget=Decimal("100"),
                 daily_budget=Decimal("3.33"),
             )
 
     def _save_config(self) -> None:
-        """Save current config to disk."""
+        """Save current config to disk (best effort; logs on failure)."""
         self._save_config_obj(self.config)
 
     def _save_config_obj(self, config: BudgetConfig) -> None:
-        """Save config object to disk."""
-        config_file = self.budget_dir / "config.json"
-
+        """Save config object to disk (best effort; logs on failure)."""
         try:
-            with open(config_file, "w", encoding="utf-8") as f:
+            self._write_config(config)
+        except OSError as e:
+            logger.error("Failed to save budget config: %s", type(e).__name__)
+
+    def _write_config(self, config: BudgetConfig) -> None:
+        """Write the config atomically at 0o600. Raises OSError on failure."""
+        self.budget_dir.mkdir(parents=True, exist_ok=True)
+        config_file = self.budget_dir / "config.json"
+        fd, tmp = tempfile.mkstemp(dir=str(self.budget_dir), prefix=".config.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(config.to_dict(), f, indent=2)
-            config_file.chmod(0o600)
-        except Exception as e:
-            logger.error(f"Failed to save budget config: {e}")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, config_file)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise

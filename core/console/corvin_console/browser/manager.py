@@ -90,6 +90,7 @@ class BrowserSessionManager:
         audit_fn=None,
         vault_resolver=None,           # (tenant_id, key) -> Optional[str]
         allowlist_resolver=None,       # (tenant_id) -> (allowlist, forbidden)
+        host_gate_resolver=None,       # (tenant_id) -> ((host) -> (ok, reason)) | None  [L35]
         notify_fn=None,                # (tenant_id, *, text) -> None, best-effort
         now=None,                      # injectable clock (Date.now-free for tests)
     ) -> None:
@@ -97,6 +98,7 @@ class BrowserSessionManager:
         self._audit_fn = audit_fn
         self._vault_resolver = vault_resolver
         self._allowlist_resolver = allowlist_resolver
+        self._host_gate_resolver = host_gate_resolver
         self._notify_fn = notify_fn
         self._now = now or time.time
         self._sessions: dict[str, _Live] = {}
@@ -146,6 +148,14 @@ class BrowserSessionManager:
                 # session creation, never silently fall back to "no policy" (which
                 # would mean unrestricted egress).
                 raise RuntimeError(f"browser egress policy unavailable: {e}") from e
+        # SEC-13: the tenant's real L35 gate. Same fail-closed rule - a gate that
+        # cannot be built blocks the session instead of leaving it ungated.
+        host_gate = None
+        if self._host_gate_resolver is not None:
+            try:
+                host_gate = self._host_gate_resolver(tenant_id)
+            except Exception as e:  # noqa: BLE001
+                raise RuntimeError(f"tenant egress gate (L35) unavailable: {type(e).__name__}") from e
 
         _t0 = self._now()
         live: _Live = _Live(session=None, owner_fingerprint=owner_fingerprint,  # type: ignore[arg-type]
@@ -214,6 +224,7 @@ class BrowserSessionManager:
             sid, tenant_id,
             home=self._home_resolver(tenant_id),
             allowlist=allowlist, forbidden=forbidden,
+            host_gate=host_gate,
             task_scoped_hosts=task_scoped_hosts,
             audit_fn=self._audit_fn, vault_resolve=vault,
             confirm_fn=_confirm, on_action=_on_action, headless=headless,

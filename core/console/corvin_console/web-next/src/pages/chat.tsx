@@ -127,6 +127,7 @@ import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/u
 import { useVirtualList } from "@/hooks/use-virtual-list";
 import { DropOverlay } from "@/components/chat/DropOverlay";
 import { PanelRight } from "lucide-react";
+import { icon as statusIcon } from "@/lib/status-markers";
 
 /**
  * Detect the language of a text for TTS playback and return a BCP-47 code.
@@ -1537,7 +1538,7 @@ function ChatPane({
               role="status"
               data-testid="bg-children-chip"
             >
-              ⏳ {bgOpen} background {bgOpen === 1 ? "task" : "tasks"} running
+              {statusIcon("running")} {bgOpen} background {bgOpen === 1 ? "task" : "tasks"} running
             </span>
           )}
           {voiceOut && voiceState !== "idle" && (

@@ -21,11 +21,15 @@ import asyncio
 import dataclasses
 import logging
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
 
-from .manifest import PipelineManifest, PipelineStore, StageSpec, _atomic_write_json
+from .manifest import (
+    InvalidComponentId, PipelineManifest, PipelineStore, StageSpec,
+    _atomic_write_json, contained_path, require_unique_stage_ids,
+)
 
 log = logging.getLogger(__name__)
 
@@ -60,17 +64,46 @@ class PipelineCoordinator:
         self.gate_queue = gate_queue
 
         self._stages: list[StageSpec] = list(manifest.stages)
+        require_unique_stage_ids(self._stages)
         self._current_idx: int = 0
         # stage_id -> {state, best_loss, best_params, artifact_dir, run_id}
         self._completed: dict[str, dict] = {}
         self._state: str = "running"
         self._store = PipelineStore(corvin_home, manifest.tenant_id, pipeline_id)
         self._gate_index: int = 0
+        # Abort / shutdown plumbing. ``request_abort`` may arrive while a stage's
+        # ComputeRun is executing in a worker thread; the flags are checked at
+        # the head of every loop turn and the active run is told directly, so a
+        # pipeline WITHOUT steering gates stops too (it used to enqueue a gate
+        # action nobody would ever read and run every remaining stage).
+        self._abort_requested = threading.Event()
+        self._abort_finalised: bool = False
+        self._stop_reason: str = ""
+        self._run_lock = threading.Lock()
+        self._active_run: Any = None
+        self._started_monotonic: float = time.monotonic()
 
     # -- public entry point -------------------------------------------------------
 
     async def run(self) -> None:
-        """Main coroutine — called via ``asyncio.create_task()``."""
+        """Main coroutine — called via ``asyncio.create_task()``.
+
+        A cancellation (worker shutdown past its drain deadline, loop teardown)
+        is ``BaseException``: it passes every ``except Exception`` in the loop
+        below, and the pipeline used to end in memory as ``aborted`` with an
+        empty on-disk summary and no ``compute.pipeline_terminal`` record. The
+        terminal record is written here before the cancellation propagates.
+        """
+        try:
+            await self._run()
+        except asyncio.CancelledError:
+            if not self._stop_reason:
+                self._stop_reason = "cancelled"
+            self._abort_requested.set()
+            self.finish_aborted()
+            raise
+
+    async def _run(self) -> None:
         self._emit("compute.pipeline_started", {
             "pipeline_id": self.pipeline_id,
             "stage_count": len(self._stages),
@@ -80,14 +113,24 @@ class PipelineCoordinator:
         self._store.write_manifest(self.manifest)
 
         while self._current_idx < len(self._stages):
+            if self._abort_requested.is_set():
+                self._finish_aborted()
+                return
             stage = self._stages[self._current_idx]
-
-            # Resolve $refs in stage inputs before execution
-            resolved_stage = self._resolve_refs(stage)
 
             # Execute stage in a thread so the event loop stays responsive
             try:
+                # Resolve $refs in stage inputs before execution. Inside the
+                # ``try``: a ref that escapes its artifact directory raises, and
+                # that is a failed stage with a terminal record, not a dead task.
+                resolved_stage = self._resolve_refs(stage)
                 result = await asyncio.to_thread(self._exec_stage, resolved_stage)
+                if self._abort_requested.is_set():
+                    # The abort landed while this stage ran: the pipeline is
+                    # aborted, never "failed" (and never continued).
+                    self._write_stage_summary(stage, result)
+                    self._finish_aborted()
+                    return
                 # A stage whose run produced no valid loss returned normally, and
                 # the pipeline went on to "converged" (adversarial review
                 # 2026-11-06). It is a failed stage: stop the pipeline, named.
@@ -97,6 +140,9 @@ class PipelineCoordinator:
                         f"stage {stage.stage_id!r} produced no valid loss: "
                         f"{result.get('error') or result.get('state')}")
             except Exception as exc:
+                if self._abort_requested.is_set():
+                    self._finish_aborted()
+                    return
                 log.exception("stage %s failed: %s", stage.stage_id, exc)
                 self._state = "failed"
                 self._failure = str(exc)[:240]
@@ -114,7 +160,9 @@ class PipelineCoordinator:
                     "state": "failed",
                     "stages_completed": len(self._completed),
                     "failed_stage_id": stage.stage_id,
-                    "error": str(exc),
+                    # The class only: the message can quote tool output; the
+                    # full text is in pipeline_summary.json.
+                    "error_class": type(exc).__name__,
                 })
                 return
 
@@ -160,6 +208,9 @@ class PipelineCoordinator:
 
             self._current_idx += 1
 
+        if self._abort_requested.is_set():
+            self._finish_aborted()
+            return
         # All stages done
         self._state = "converged"
         self._store.write_summary(
@@ -172,7 +223,7 @@ class PipelineCoordinator:
             "pipeline_id": self.pipeline_id,
             "state": "converged",
             "stages_completed": len(self._completed),
-            "total_wall_s": 0.0,
+            "total_wall_s": round(time.monotonic() - self._started_monotonic, 3),
         })
 
     # -- gate handling ------------------------------------------------------------
@@ -207,27 +258,29 @@ class PipelineCoordinator:
                 return True
 
             elif action_type == "abort":
-                self._state = "aborted"
-                self._store.write_summary(
-                    state="aborted",
-                    current_stage_id=None,
-                    completed_stages=list(self._completed.keys()),
-                    best_losses={
-                        k: v.get("best_loss") for k, v in self._completed.items()
-                    },
-                )
-                self._emit("compute.pipeline_terminal", {
-                    "pipeline_id": self.pipeline_id,
-                    "state": "aborted",
-                    "stages_completed": len(self._completed),
-                    "gate_index": self._gate_index,
-                })
+                self._abort_requested.set()
+                self._finish_aborted()
                 return False
 
             elif action_type == "add_stage":
                 stage_dict = payload.get("stage", {})
                 if stage_dict:
-                    new_stage = StageSpec.from_dict(stage_dict)
+                    try:
+                        new_stage = StageSpec.from_dict(stage_dict)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        # An invalid stage (e.g. a stage_id that is not a safe
+                        # path component) is refused; the gate stays open.
+                        log.warning("pipeline %s: add_stage refused: %s",
+                                    self.pipeline_id, exc)
+                        continue
+                    try:
+                        require_unique_stage_ids([*self._stages, new_stage])
+                    except ValueError as exc:
+                        # A stage added at a gate may not reuse an id: its result
+                        # and artifacts would replace the earlier stage's.
+                        log.warning("pipeline %s: add_stage refused: %s",
+                                    self.pipeline_id, exc)
+                        continue
                     insert_pos = self._current_idx + 1
                     self._stages.insert(insert_pos, new_stage)
                     log.info(
@@ -323,7 +376,15 @@ class PipelineCoordinator:
             run_id=run_id,
             audit_emit=self.audit_emit,
         )
-        record = run.run()
+        with self._run_lock:
+            self._active_run = run
+            if self._abort_requested.is_set():
+                run.request_abort()
+        try:
+            record = run.run()
+        finally:
+            with self._run_lock:
+                self._active_run = None
 
         summary = record.summary or {}
         best_params_raw = summary.get("top_k", [{}])
@@ -407,7 +468,17 @@ class PipelineCoordinator:
             return ref
         if path.startswith("artifacts/"):
             fname = path[len("artifacts/"):]
-            return str(self._store.stage_artifacts_dir(sid) / fname)
+            # ``fname`` is manifest text: ``$s1.artifacts/../../x`` or an
+            # absolute path would leave the stage's artifact directory. Confined
+            # like every other manifest-derived path; a ref that escapes fails
+            # the stage instead of handing a tool a foreign path.
+            base = self._store.stage_artifacts_dir(sid)
+            parts = [p for p in fname.replace("\\", "/").split("/") if p not in ("", ".")]
+            if not parts or fname.startswith(("/", "\\")) or ".." in parts:
+                raise InvalidComponentId(
+                    f"stage ref {ref[:120]!r} does not name a file inside the "
+                    f"artifact directory of stage {sid!r}")
+            return str(contained_path(base, *parts))
         if path == "best_params":
             return completed.get("best_params", {})
         if path == "best_loss":
@@ -462,18 +533,94 @@ class PipelineCoordinator:
             "forged_tools": list(self.manifest.forged_tools),
         }
 
-    def request_abort(self) -> None:
-        """Thread-safe abort request — enqueues an abort action."""
+    def request_abort(self, reason: str = "") -> None:
+        """Abort the pipeline: stop the running stage and start no further one.
+
+        Sets the abort flag (checked at the head of every loop turn), tells the
+        active ComputeRun to stop after its current iteration, and wakes a
+        parked steering gate. ``aborted`` is final: no later code path may
+        overwrite it with ``failed`` / ``converged``.
+        """
+        if reason and not self._stop_reason:
+            self._stop_reason = reason
+        self._abort_requested.set()
+        with self._run_lock:
+            run = self._active_run
+        if run is not None:
+            try:
+                run.request_abort()
+            except Exception:  # noqa: BLE001
+                log.exception("pipeline %s: abort of the active run failed",
+                              self.pipeline_id)
         try:
             self.gate_queue.put_nowait({"action_type": "abort", "payload": {}})
-        except asyncio.QueueFull:
+        except Exception:  # noqa: BLE001 — a full/foreign queue must not block the abort
             pass
+        if self._state not in ("converged", "failed"):
+            self._state = "aborted"
+
+    def request_interrupt(self) -> None:
+        """Worker shutdown: a pipeline is not resumable, so this is an abort
+        with the reason recorded."""
+        self.request_abort(reason="worker-shutdown")
+
+    def is_terminal(self) -> bool:
+        """True once a terminal record has been (or is being) written."""
+        return self._state in ("converged", "failed") or self._abort_finalised
+
+    def finish_aborted(self) -> None:
+        """Synchronous terminal ``aborted`` record for a stopping worker.
+
+        Called by the engine when the coordinator coroutine did not finish
+        within the shutdown deadline (a tool iteration still running in its
+        thread). No-op for a pipeline that already reached a terminal state.
+        """
+        if self._state in ("converged", "failed"):
+            return
+        self._finish_aborted()
+
+    def _finish_aborted(self) -> None:
+        """Write the terminal ``aborted`` record exactly once."""
+        # Reached from the loop thread and, at shutdown, possibly from a second
+        # caller: the flag flips under the lock so there is one record.
+        with self._run_lock:
+            if self._abort_finalised:
+                return
+            self._abort_finalised = True
         self._state = "aborted"
+        try:
+            self._store.write_summary(
+                state="aborted",
+                current_stage_id=None,
+                completed_stages=list(self._completed.keys()),
+                best_losses={
+                    k: v.get("best_loss") for k, v in self._completed.items()
+                },
+                error=self._stop_reason or None,
+            )
+        except OSError:
+            log.warning("pipeline %s: aborted summary not written",
+                        self.pipeline_id, exc_info=True)
+        self._emit("compute.pipeline_terminal", {
+            "pipeline_id": self.pipeline_id,
+            "state": "aborted",
+            "stages_completed": len(self._completed),
+            "gate_index": self._gate_index,
+            "reason": self._stop_reason or "external-abort",
+        })
 
     # -- audit helper -------------------------------------------------------------
 
     def _emit(self, event: str, details: dict) -> None:
+        # The emitter contract is ``audit_emit(event, **fields)`` — the same one
+        # ComputeRun uses. This used to call ``audit_emit(event, "INFO", details)``
+        # positionally; the production emitter takes no positional beyond the
+        # event, so every pipeline record raised TypeError into the ``except``
+        # below and never reached the chain.
         try:
-            self.audit_emit(event, "INFO", details)
+            fields = dict(details)
+            fields.setdefault("tenant_id", self.manifest.tenant_id)
+            self.audit_emit(event, **fields)
         except Exception:  # noqa: BLE001
-            pass
+            log.debug("pipeline %s: audit emit failed for %s",
+                      self.pipeline_id, event, exc_info=True)

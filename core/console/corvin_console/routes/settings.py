@@ -21,6 +21,7 @@ these files larger than that is structurally suspicious anyway.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import time
@@ -622,7 +623,7 @@ async def set_worker_engine(
     through ``Depends()``.
     """
     if not verify_reauth(rec, body.re_auth_token):
-        console_audit.action_failed(
+        await asyncio.to_thread(console_audit.action_failed,
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="settings.worker_engine",
@@ -646,7 +647,7 @@ async def set_worker_engine(
             },
         )
 
-    console_audit.action_performed(
+    await asyncio.to_thread(console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="settings.worker_engine",
@@ -954,7 +955,7 @@ async def set_feature(
     endpoint does.
     """
     if not verify_reauth(rec, body.re_auth_token):
-        console_audit.action_failed(
+        await asyncio.to_thread(console_audit.action_failed,
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="settings.feature_toggle",
@@ -972,7 +973,7 @@ async def set_feature(
             flag_id, body.enabled, rec.tenant_id,
         )
     except _feature_flags_module.UnknownFlagError:
-        console_audit.action_failed(
+        await asyncio.to_thread(console_audit.action_failed,
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="settings.feature_toggle",
@@ -985,7 +986,7 @@ async def set_feature(
             detail="unknown_flag",
         )
 
-    console_audit.action_performed(
+    await asyncio.to_thread(console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="settings.feature_toggle",
@@ -1071,11 +1072,17 @@ async def install_update(
         return HTTPException(status_code=code, detail=detail)
 
     try:
+        # Stays on the loop on purpose: start_update schedules its watcher with
+        # asyncio.get_running_loop().create_task(); from a worker thread there is
+        # no loop, the lock is released and the run is settled "interrupted".
         return UpdateManager(rec.tenant_id).start_update(rec.sid_fingerprint)
     except UpdateNotAllowedError as e:
         in_progress = "in progress" in str(e)
-        raise _fail(http_status.HTTP_409_CONFLICT if in_progress else http_status.HTTP_404_NOT_FOUND,
-                    "already_in_progress" if in_progress else "updater_not_found", str(e)) from e
+        raise await asyncio.to_thread(
+            _fail,
+            http_status.HTTP_409_CONFLICT if in_progress else http_status.HTTP_404_NOT_FOUND,
+            "already_in_progress" if in_progress else "updater_not_found", str(e)) from e
     except OSError as e:
-        raise _fail(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "spawn_failed",
-                    f"could not start the updater: {e}") from e
+        raise await asyncio.to_thread(
+            _fail, http_status.HTTP_500_INTERNAL_SERVER_ERROR, "spawn_failed",
+            f"could not start the updater: {e}") from e

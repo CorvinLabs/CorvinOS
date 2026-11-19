@@ -57,18 +57,19 @@ const body = SRC.slice(bodyOpen + 1, bodyEnd);
 // ── behavioural: run the real handler with mocks ────────────────────────────
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const PARAMS = [
-  'interaction', 'readOnlyOk', '_isOwnerCheck', 'inChatCmds', 'currentSettings',
+  'interaction', 'readOnlyOk', '_isOwnerCheck', '_isAudienceGuest', 'inChatCmds', 'currentSettings',
   'rateAllow', 'writeInbox', 'log', 'slashCommands', 'CHANNEL', 'SETTINGS_FILE',
   'OPERATOR_NAME', 'maybeForwardAsObserver', 'READ_ONLY_ACK', 'chatToggle', 'require', '__dirname',
+  'chatTypeOfInteraction',
 ];
 const handler = new AsyncFunction(...PARAMS, body);
 
-function scenario({ readOnly = false, owner = true, spgAllowed = false, disclosed = true,
-                    rateOk = true, instruction = 'audit every open PR' } = {}) {
-  const calls = { inbox: [], logs: [], replies: [], edits: [], markSeen: 0 };
+function scenario({ readOnly = false, owner = true, spgAllowed = false, audienceGuest = false, disclosed = true,
+                    rateOk = true, instruction = 'audit every open PR', command = 'task' } = {}) {
+  const calls = { inbox: [], logs: [], replies: [], edits: [], markSeen: 0, spg: 0, dispatchCtx: [], toggleCtx: [] };
   const interaction = {
     isChatInputCommand: () => true,
-    commandName: 'task',
+    commandName: command,
     user: { id: 'u-1' },
     channelId: 'ch-1',
     options: { getString: (n) => (n === 'args' ? instruction : null) },
@@ -84,7 +85,7 @@ function scenario({ readOnly = false, owner = true, spgAllowed = false, disclose
     // was ever admitted here.
     if (m === '../shared/js/python_bin') return { pythonBin: () => 'python3' };
     if (m === 'child_process') return {
-      spawnSync: () => ({ status: 0, stdout: JSON.stringify({ allowed: spgAllowed }) }),
+      spawnSync: () => { calls.spg++; return { status: 0, stdout: JSON.stringify({ allowed: spgAllowed }) }; },
     };
     throw new Error(`unexpected require(${m})`);
   };
@@ -92,27 +93,29 @@ function scenario({ readOnly = false, owner = true, spgAllowed = false, disclose
     interaction,
     readOnlyOk: () => ({ isReadOnly: readOnly, firstDrop: true }),
     _isOwnerCheck: () => owner,
+    _isAudienceGuest: () => audienceGuest,
     inChatCmds: {
       dispatchReadOnlyConsent: () => null,
       disclosureHasSeen: () => disclosed,
       disclosureCardText: () => 'DISCLOSURE CARD',
       disclosureMarkSeen: () => { calls.markSeen++; return { ok: true }; },
       getObserverVisibility: () => 'off',
-      dispatch: () => null,
+      dispatch: (ctx) => { calls.dispatchCtx.push(ctx); return null; },
     },
     currentSettings: () => ({ rate_limit_per_hour: 30, lang: 'en' }),
     rateAllow: () => rateOk,
     writeInbox: (p) => { calls.inbox.push(p); return 'id-1'; },
     log: (l) => calls.logs.push(String(l)),
-    slashCommands: { interactionToText: (i) => `/task ${i.options.getString('args')}`.trim() },
+    slashCommands: { interactionToText: (i) => `/${command} ${i.options.getString('args')}`.trim() },
     CHANNEL: 'discord',
     SETTINGS_FILE: '/nonexistent/settings.json',
     OPERATOR_NAME: 'Owner',
     maybeForwardAsObserver: () => false,
     READ_ONLY_ACK: 'RO',
-    chatToggle: { handleToggleCommand: () => null },
+    chatToggle: { handleToggleCommand: (ctx) => { calls.toggleCtx.push(ctx); return null; } },
     require: fakeRequire,
     __dirname,
+    chatTypeOfInteraction: () => 'group',
   };
   return handler(...PARAMS.map((k) => args[k])).then(() => calls);
 }
@@ -148,6 +151,34 @@ function scenario({ readOnly = false, owner = true, spgAllowed = false, disclose
     const c = await scenario({ owner: false, spgAllowed: true });
     t('inbox envelope written for an SPG-admitted guest', c.inbox.length === 1);
   }
+
+  // Review 2026-11-19, R3-NEW-2: a sender admitted only because the owner
+  // opened the chat (`/all on`, audience=all) is a GUEST. Until then
+  // _isOwnerCheck returned authOk(), which is true for such a sender, and the
+  // whole owner surface (/vault, /all, /debug, /invite) was open to them.
+  console.log('\n[non-owner in an audience=all chat → admitted as guest, never owner]');
+  {
+    const c = await scenario({ owner: false, audienceGuest: true });
+    t('inbox envelope written for an audience guest', c.inbox.length === 1);
+    t('SPG is not consulted for an audience guest', c.spg === 0);
+  }
+  {
+    // A non-/task command reaches the in-chat dispatcher: it must see isOwner=false.
+    const c = await scenario({ owner: false, audienceGuest: true, command: 'vault', instruction: 'list' });
+    t('dispatcher was reached', c.dispatchCtx.length === 1);
+    t('dispatcher sees isOwner === false for the guest',
+      c.dispatchCtx.length === 1 && c.dispatchCtx[0].isOwner === false);
+    t('toggle sees isOwner === false for the guest',
+      c.toggleCtx.length >= 1 && c.toggleCtx.every((x) => x.isOwner === false));
+  }
+  {
+    const c = await scenario({ owner: true, command: 'vault', instruction: 'list' });
+    t('dispatcher sees isOwner === true for the owner',
+      c.dispatchCtx.length === 1 && c.dispatchCtx[0].isOwner === true);
+  }
+  t('daemon.js: _isOwnerCheck requires whitelist membership on top of authOk',
+    /return authOk\(userId, text, channelId\) && isOwnerUid\(userId\);/.test(SRC));
+  t('daemon.js: no dispatch hardcodes isOwner: true', !/isOwner:\s*true\s*[,}]/.test(SRC));
 
   console.log('\n[first contact → disclosure card first, NO inbox write]');
   {

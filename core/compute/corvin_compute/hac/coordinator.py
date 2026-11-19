@@ -4,11 +4,12 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
 
-from .manifest import HACManifest, HACStore, SubManagerSpec
+from .manifest import HACManifest, HACStore, SubManagerSpec, require_unique_manager_ids
 from .attribution import compute_root_loss, compute_attribution, check_convergence
 
 log = logging.getLogger(__name__)
@@ -38,12 +39,26 @@ class HACCoordinator:
         self.audit_emit = audit_emit or (lambda *a, **kw: None)
         self.gate_queue = gate_queue
 
+        # Also enforced at HACEngine.submit; repeated here because everything
+        # below is keyed by manager_id whoever constructs the coordinator.
+        require_unique_manager_ids(manifest.sub_managers)
         self._state = "running"
         self._round = 0
         self._root_loss_history: list[float] = []
         self._manager_results: dict[str, dict] = {}  # manager_id -> last result
         self._manager_budgets: dict[str, dict] = {}  # manager_id -> budget dict
         self._store = HACStore(corvin_home, manifest.tenant_id, hac_id)
+        # Abort / shutdown plumbing — see PipelineCoordinator. Sub-managers run
+        # as ComputeRuns in worker threads; an abort must reach each of them and
+        # must stop the round loop, with or without a backprop gate.
+        self._abort_requested = threading.Event()
+        self._stop_reason: str = ""
+        self._run_lock = threading.Lock()
+        # Keyed by RUN id, never by manager_id: an abort must reach every live
+        # ComputeRun, and a manager-keyed dict let a second run of the same
+        # manager replace the first, which then ran on after request_abort.
+        self._active_runs: dict[str, Any] = {}
+        self._finalised: bool = False
 
         # Distribute initial budget across sub-managers
         for sm in manifest.sub_managers:
@@ -55,6 +70,72 @@ class HACCoordinator:
             }
 
     async def run(self) -> None:
+        """Main coroutine. A cancellation (worker shutdown past its drain
+        deadline, loop teardown) passes every ``except Exception``; the terminal
+        record is written here before it propagates, so a HAC run never ends
+        without ``compute.hac_terminal`` and a final summary."""
+        try:
+            await self._run()
+        except asyncio.CancelledError:
+            if not self._stop_reason:
+                self._stop_reason = "cancelled"
+            self._abort_requested.set()
+            self.finish_aborted()
+            raise
+
+    def is_terminal(self) -> bool:
+        return self._finalised
+
+    def finish_aborted(self) -> None:
+        """Synchronous terminal ``aborted`` record for a stopping worker (the
+        coroutine did not finish within the shutdown deadline). No-op once a
+        terminal record exists."""
+        with self._run_lock:
+            if self._finalised:
+                return
+        self._abort_requested.set()
+        self._finish()
+
+    def _finish(self) -> None:
+        """Write the terminal record + final summary exactly once."""
+        with self._run_lock:
+            if self._finalised:
+                return
+            self._finalised = True
+        if self._abort_requested.is_set():
+            # "aborted" is final: a failure noticed while stopping does not replace it.
+            self._state = "aborted"
+        self._emit("compute.hac_terminal", {
+            "hac_id": self.hac_id, "state": self._state,
+            "rounds_completed": self._round,
+            "final_root_loss": self._root_loss_history[-1] if self._root_loss_history else None,
+            "convergence_reason": (
+                (self._stop_reason or "external-abort")
+                if self._state == "aborted" else self._state),
+        })
+        try:
+            self._write_final_summary()
+        except OSError:
+            log.warning("hac %s: final summary not written", self.hac_id, exc_info=True)
+
+    def _write_final_summary(self) -> None:
+        self._store.write_summary(
+            state=self._state, round_n=self._round,
+            root_loss=self._root_loss_history[-1] if self._root_loss_history else None,
+            manager_states={mid: res.get("state", "unknown")
+                            for mid, res in self._manager_results.items()},
+            attributions={},
+            # Real per-manager best-loss + the round-loss history so the console
+            # detail view renders actual data instead of an always-empty stage scan.
+            sub_manager_losses={mid: res.get("best_loss")
+                                for mid, res in self._manager_results.items()
+                                if res.get("best_loss") is not None},
+            root_loss_history=list(self._root_loss_history),
+            error=(getattr(self, "_failure", None) if self._state != "aborted"
+                   else (self._stop_reason or None)),
+        )
+
+    async def _run(self) -> None:
         self._emit("compute.hac_started", {
             "hac_id": self.hac_id,
             "manager_count": len(self.manifest.sub_managers),
@@ -67,6 +148,9 @@ class HACCoordinator:
         managers_to_run = [sm.manager_id for sm in self.manifest.sub_managers]
 
         for round_n in range(self.manifest.max_backprop_rounds + 1):
+            if self._abort_requested.is_set():
+                self._state = "aborted"
+                break
             self._round = round_n
             self._emit("compute.hac_round_started", {
                 "hac_id": self.hac_id, "round": round_n, "managers_to_run": managers_to_run,
@@ -74,6 +158,9 @@ class HACCoordinator:
 
             # Run specified sub-managers in parallel
             await self._run_managers(managers_to_run)
+            if self._abort_requested.is_set():
+                self._state = "aborted"
+                break
 
             # Compute root loss
             sub_losses = {
@@ -141,7 +228,8 @@ class HACCoordinator:
                     },
                 })
                 gate_result = await self._handle_backprop_gate(attributions)
-                if gate_result == "abort":
+                if gate_result == "abort" or self._abort_requested.is_set():
+                    self._abort_requested.set()
                     self._state = "aborted"
                     break
                 managers_to_run = gate_result  # list of manager_ids to re-run
@@ -157,41 +245,28 @@ class HACCoordinator:
                     self._failure = "no sub-manager produced a valid loss"
                     break
 
-        self._emit("compute.hac_terminal", {
-            "hac_id": self.hac_id, "state": self._state,
-            "rounds_completed": self._round,
-            "final_root_loss": self._root_loss_history[-1] if self._root_loss_history else None,
-            "convergence_reason": self._state,
-        })
-        self._store.write_summary(
-            state=self._state, round_n=self._round,
-            root_loss=self._root_loss_history[-1] if self._root_loss_history else None,
-            manager_states={mid: res.get("state", "unknown")
-                            for mid, res in self._manager_results.items()},
-            attributions={},
-            # Real per-manager best-loss + the round-loss history so the console
-            # detail view renders actual data instead of an always-empty stage scan.
-            sub_manager_losses={mid: res.get("best_loss")
-                                for mid, res in self._manager_results.items()
-                                if res.get("best_loss") is not None},
-            root_loss_history=list(self._root_loss_history),
-            error=getattr(self, "_failure", None),
-        )
+        self._finish()
 
     async def _run_managers(self, manager_ids: list[str]) -> None:
         """Run specified sub-managers in parallel."""
         tasks = []
-        for manager_id in manager_ids:
+        scheduled: list[str] = []
+        # One run per manager per round: a repeated id would start two
+        # ComputeRuns for one manager (their results overwrite each other).
+        for manager_id in dict.fromkeys(manager_ids):
             sm = next((m for m in self.manifest.sub_managers if m.manager_id == manager_id), None)
             if sm is None:
                 continue
+            scheduled.append(manager_id)
             tasks.append(asyncio.create_task(
                 asyncio.to_thread(self._exec_manager, sm),
                 name=f"hac_{self.hac_id}_{manager_id}",
             ))
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            for manager_id, result in zip(manager_ids, results):
+            # Zipped against the ids actually SCHEDULED: zipping the requested
+            # list misattributed every result after a skipped (unknown) id.
+            for manager_id, result in zip(scheduled, results):
                 if isinstance(result, Exception):
                     # gather(return_exceptions=True) hands back the exception as a
                     # value — there is no active exc context here, so log.exception
@@ -267,7 +342,15 @@ class HACCoordinator:
             run_id=run_id,
             audit_emit=self.audit_emit,
         )
-        rec = run.run()
+        with self._run_lock:
+            self._active_runs[run_id] = run
+            if self._abort_requested.is_set():
+                run.request_abort()
+        try:
+            rec = run.run()
+        finally:
+            with self._run_lock:
+                self._active_runs.pop(run_id, None)
         # RunRecord has no best_params field (only best_loss/best_iter) — the
         # public run surface deliberately exposes iteration params only via
         # RunStore, not on the aggregate record. Look up the winning
@@ -307,7 +390,10 @@ class HACCoordinator:
 
             if action_type == "resume":
                 # Re-run the highest-attribution managers or those specified
-                re_run = payload.get("re_run", [])
+                # ``re_run`` is caller input: keep only known manager ids, each
+                # once and in order. ["m1", "m1"] used to start m1 twice, and an
+                # unknown id shifted every result onto the wrong manager.
+                re_run = self._known_manager_ids(payload.get("re_run", []))
                 if not re_run and attributions:
                     highest = max(attributions, key=attributions.get)
                     re_run = [highest]
@@ -344,6 +430,19 @@ class HACCoordinator:
                     "forge_run_id": payload.get("forge_run_id", ""),
                 })
 
+    def _known_manager_ids(self, requested: Any) -> list[str]:
+        if not isinstance(requested, (list, tuple)):
+            return []
+        known = {sm.manager_id for sm in self.manifest.sub_managers}
+        out: list[str] = []
+        for mid in requested:
+            if isinstance(mid, str) and mid in known and mid not in out:
+                out.append(mid)
+            elif mid not in out:
+                log.warning("hac %s: gate resume names unknown or repeated "
+                            "manager %r - ignored", self.hac_id, str(mid)[:80])
+        return out
+
     def get_status_dict(self) -> dict:
         return {
             "hac_id": self.hac_id,
@@ -379,15 +478,38 @@ class HACCoordinator:
             },
         }
 
-    def request_abort(self) -> None:
+    def request_abort(self, reason: str = "") -> None:
+        """Abort the HAC run: stop every running sub-manager, start no new round."""
+        if reason and not self._stop_reason:
+            self._stop_reason = reason
+        self._abort_requested.set()
+        with self._run_lock:
+            runs = list(self._active_runs.values())
+        for run in runs:
+            try:
+                run.request_abort()
+            except Exception:  # noqa: BLE001
+                log.exception("hac %s: abort of a sub-manager run failed", self.hac_id)
         try:
             self.gate_queue.put_nowait({"action_type": "abort", "payload": {}})
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
-        self._state = "aborted"
+        if self._state not in ("converged", "failed", "budget"):
+            self._state = "aborted"
+
+    def request_interrupt(self) -> None:
+        """Worker shutdown: a HAC run is not resumable, so this is an abort
+        with the reason recorded."""
+        self.request_abort(reason="worker-shutdown")
 
     def _emit(self, event: str, details: dict) -> None:
+        # ``audit_emit(event, **fields)`` — the ComputeRun emitter contract. The
+        # earlier positional ``(event, "INFO", details)`` call raised TypeError
+        # in the production emitter and every HAC record was lost.
         try:
-            self.audit_emit(event, "INFO", details)
-        except Exception:
-            pass
+            fields = dict(details)
+            fields.setdefault("tenant_id", self.manifest.tenant_id)
+            self.audit_emit(event, **fields)
+        except Exception:  # noqa: BLE001
+            log.debug("hac %s: audit emit failed for %s", self.hac_id, event,
+                      exc_info=True)

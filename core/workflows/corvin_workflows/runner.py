@@ -59,6 +59,22 @@ class RunResult:
             return 0.0
         return sum(n.wall_s for n in self.nodes.values())
 
+    @property
+    def partial_nodes(self) -> list[str]:
+        """Ids of the nodes that succeeded WITHOUT finishing their work: a delegation_loop that
+        ran out of budget (``max_loops`` / ``max_total_workers``) before its manager said
+        COMPLETE. The run's ``state`` stays ``complete`` - the graph ran to its end - so a caller
+        that reports the outcome must read this too, or a budget-exhausted loop reads as a
+        finished one (review PLS-1)."""
+        out: list[str] = []
+        for nid, n in self.nodes.items():
+            if n.status != "success" or not isinstance(n.output, dict):
+                continue
+            term = n.output.get("_terminal")
+            if isinstance(term, dict) and term.get("state") == "partial":
+                out.append(nid)
+        return out
+
 
 @dataclass
 class ResumeContext:
@@ -202,6 +218,10 @@ def _is_final_failure(exc: BaseException) -> bool:
     (the resolver could not run) is NOT final: a reader fault can be transient, so it follows the
     node's retry policy."""
     if _is_spawn_refusal(exc):
+        return True
+    # A delegation loop whose manager said FAIL (or answered outside the protocol) is final too:
+    # a retry re-runs the whole loop and its workers for a verdict already given (PLS-1).
+    if getattr(exc, "final_failure", False) is True:
         return True
     return getattr(exc, "reason_code", None) == "model_unknown"
 

@@ -95,7 +95,7 @@ async def main() -> int:
     # spawns, the ADR-0213 sync call, the follow-up turn — is REAL.
     import house_rules as hr  # type: ignore
     hr._house_rules_classifier = (  # type: ignore[assignment]
-        lambda task, rules, auth, **kw: ("", 0.0, "test clear")
+        lambda task, rules, auth, **kw: ("", 0.99, "test clear")
     )
 
     cr = chat_runtime

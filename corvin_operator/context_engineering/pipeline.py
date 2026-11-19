@@ -212,7 +212,7 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
     bundle = ContextBundle(task=task)
     ctx = StageCtx(tenant_id=tenant, task_obj=task_adapter(task),
                    session_id=getattr(session, "sid", "") or "",
-                   persona=persona or "")
+                   persona=persona or "", session=session)
 
     specs, dropped = resolve_pipeline(tenant, active=active)
     for d in dropped:  # unknown/unregistered stage ids — audited, never a crash

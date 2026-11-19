@@ -342,7 +342,9 @@ class RunDelegateJudgeFlowTests(unittest.TestCase):
         self.assertFalse(result.output_judge_replaced)
         self.assertEqual(result.final_text, "original output")
 
-    def test_enforcing_mode_fails_safe_on_judge_error(self):
+    def test_enforcing_mode_denies_on_judge_error(self):
+        # Review 2026-11-19 (A2A-12): enforcing releases output only with a
+        # verdict; a judge that produced none withholds the text (fail-closed).
         runner = _runner_failing("judge unreachable")
         result = run_delegate(
             engine="codex_cli",
@@ -352,9 +354,23 @@ class RunDelegateJudgeFlowTests(unittest.TestCase):
             engine_factory=_factory(_FakeEngine(reply="original output")),
             audit=False,
         )
-        # Fail-safe: original text passes through, but verdict is judge_error
+        self.assertFalse(result.ok)
         self.assertEqual(result.output_judge_verdict, "judge_error")
         self.assertFalse(result.output_judge_replaced)
+        self.assertEqual(result.final_text, "")
+        self.assertIn("output-judge-error", result.error or "")
+
+    def test_advisory_mode_still_passes_through_on_judge_error(self):
+        result = run_delegate(
+            engine="codex_cli",
+            prompt="hi",
+            output_judge_mode="advisory",
+            judge_runner=_runner_failing("judge unreachable"),
+            engine_factory=_factory(_FakeEngine(reply="original output")),
+            audit=False,
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.output_judge_verdict, "judge_error")
         self.assertEqual(result.final_text, "original output")
 
     def test_env_floor_beats_weaker_tool_arg(self):

@@ -31,6 +31,7 @@ const { startHealthServer }     = require('../shared/js/health-server');
 const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
+const { fetchToFile, streamToFile } = require('../shared/js/media_fetch');
 const { writeInboxAtomic }      = require('../shared/js/inbox_write');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const chatToggle                = require('../shared/js/chat_toggle');
@@ -61,9 +62,11 @@ for (const d of [INBOX, OUTBOX]) fs.mkdirSync(d, { recursive: true });
 const HTTP_PORT = parseInt(process.env.TELEGRAM_HTTP_PORT || '7892', 10);
 
 const log = makeLogger('tg-daemon');
+// Telegram's Bot API serves files up to 20 MB; anything larger is refused.
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const { loadSettings, currentSettings } = makeSettingsAccessor(SETTINGS_FILE, log);
 const settings = loadSettings(); // boot-time snapshot for token resolution
-const { rateAllow, authOk, readOnlyOk } = makeAuth({
+const { rateAllow, authOk, readOnlyOk, isOwner: isOwnerUid } = makeAuth({
   settingsFile: SETTINGS_FILE, currentSettings, loadSettings, logger: log,
   channel: CHANNEL,
   // 2026-08-02: without this, an empty whitelist meant EVERY sender was
@@ -229,6 +232,10 @@ bot.on('message', async (msg) => {
       await bot.sendMessage(chatId, `You are not authorized. Your user-id: ${userId}\nAdd it to the whitelist in settings.json (or send "/auth <pin>").\nThe owner can also open this chat with /all on.`);
       return;
     }
+    // Owner surface = whitelist membership ONLY. authOk() also admits guests
+    // of an `audience=all` chat; those must never reach /vault, /all, /debug,
+    // /invite or the /on|/off toggle (review 2026-11-19, R3-NEW-2).
+    const senderIsOwner = isOwnerUid(userIdStr);
     // Layer-19 — EU AI Act Art. 50: proactive bot-disclosure on first encounter
     // for whitelisted (owner) senders. Shown once per (chat, uid).
     if (!inChatCmds.disclosureHasSeen({ channel: CHANNEL, chatKey: String(chatId), uid: userIdStr })) {
@@ -249,7 +256,7 @@ bot.on('message', async (msg) => {
     // flip into opt-in mode and use /on per chat.
     {
       const tog = chatToggle.handleToggleCommand({
-        text, chatKey: String(chatId), isOwner: true,
+        text, chatKey: String(chatId), isOwner: senderIsOwner,
         settingsFile: SETTINGS_FILE,
       });
       if (tog) {
@@ -285,7 +292,7 @@ bot.on('message', async (msg) => {
     {
       const cwk = inChatCmds.dispatch({
         text, channel: CHANNEL, chatKey: String(chatId),
-        isOwner: true,  // authOk has already checked the whitelist
+        isOwner: senderIsOwner,  // whitelist => owner; audience=all guest => false
         settingsFile: SETTINGS_FILE,
       });
       if (cwk) {
@@ -324,42 +331,46 @@ bot.on('message', async (msg) => {
     const base = { from: userIdStr, chat_id: chatId, chat_type: (msg.chat && msg.chat.type === 'private') ? 'private' : 'group',
                     forwarded: !!(msg.forward_origin || msg.forward_from || msg.forward_from_chat || msg.forward_date), ts: Date.now() };
 
-    if (msg.voice || msg.audio) {
-      const fileId = (msg.voice || msg.audio).file_id;
-      const stream = bot.getFileStream(fileId);
-      const ext = msg.voice ? '.ogg' : '.mp3';
-      const p = path.join(INBOX, `${id}${ext}`);
-      const out = fs.createWriteStream(p);
-      stream.pipe(out);
-      await new Promise(res => out.on('finish', res));
-      writeInbox({ ...base, audio_path: p });
-    } else if (msg.photo) {
-      const photo = msg.photo[msg.photo.length - 1]; // largest size
-      const fileLink = await bot.getFileLink(photo.file_id);
-      const ext = '.jpg';
-      const p = path.join(INBOX, `${id}${ext}`);
-      const buf = await (await fetch(fileLink)).arrayBuffer();
-      fs.writeFileSync(p, Buffer.from(buf));
-      writeInbox({ ...base, image_path: p, caption: msg.caption || '' });
-    } else if (msg.document) {
-      const fileLink = await bot.getFileLink(msg.document.file_id);
-      const fname = (msg.document.file_name || 'document.bin').replace(/[^a-zA-Z0-9._-]/g, '_');
-      const p = path.join(INBOX, `${id}_${fname}`);
-      const buf = await (await fetch(fileLink)).arrayBuffer();
-      fs.writeFileSync(p, Buffer.from(buf));
-      writeInbox({ ...base, document_path: p, document_name: msg.document.file_name, mimetype: msg.document.mime_type, caption: msg.caption || '' });
-    } else if (msg.video) {
-      const fileLink = await bot.getFileLink(msg.video.file_id);
-      const p = path.join(INBOX, `${id}.mp4`);
-      const buf = await (await fetch(fileLink)).arrayBuffer();
-      fs.writeFileSync(p, Buffer.from(buf));
-      writeInbox({ ...base, video_path: p, caption: msg.caption || '' });
-    } else if (msg.sticker) {
-      const fileLink = await bot.getFileLink(msg.sticker.file_id);
-      const p = path.join(INBOX, `${id}.webp`);
-      const buf = await (await fetch(fileLink)).arrayBuffer();
-      fs.writeFileSync(p, Buffer.from(buf));
-      writeInbox({ ...base, image_path: p, is_sticker: true });
+    // Media downloads are status-checked and size-bounded, and a failing
+    // source stream rejects instead of hanging the handler (media_fetch.js,
+    // review 2026-11-19 R3-NEW-33). A failed download writes no inbox entry.
+    // Same precedence as the branches below; for a photo, the largest size.
+    const media = msg.voice || msg.audio
+      || (msg.photo && msg.photo[msg.photo.length - 1])
+      || msg.document || msg.video || msg.sticker || null;
+    if (media) {
+      try {
+        const declaredSize = Number(media.file_size);
+        if (msg.voice || msg.audio) {
+          const ext = msg.voice ? '.ogg' : '.mp3';
+          const p = path.join(INBOX, `${id}${ext}`);
+          if (Number.isFinite(declaredSize) && declaredSize > MAX_MEDIA_BYTES) throw new Error('attachment too large');
+          await streamToFile(bot.getFileStream(media.file_id), p, { maxBytes: MAX_MEDIA_BYTES });
+          writeInbox({ ...base, audio_path: p });
+        } else if (msg.photo) {
+          const p = path.join(INBOX, `${id}.jpg`);
+          await fetchToFile(await bot.getFileLink(media.file_id), p, { maxBytes: MAX_MEDIA_BYTES, declaredSize });
+          writeInbox({ ...base, image_path: p, caption: msg.caption || '' });
+        } else if (msg.document) {
+          const fname = (msg.document.file_name || 'document.bin').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+          const p = path.join(INBOX, `${id}_${fname}`);
+          await fetchToFile(await bot.getFileLink(media.file_id), p, { maxBytes: MAX_MEDIA_BYTES, declaredSize });
+          writeInbox({ ...base, document_path: p, document_name: msg.document.file_name, mimetype: msg.document.mime_type, caption: msg.caption || '' });
+        } else if (msg.video) {
+          const p = path.join(INBOX, `${id}.mp4`);
+          await fetchToFile(await bot.getFileLink(media.file_id), p, { maxBytes: MAX_MEDIA_BYTES, declaredSize });
+          writeInbox({ ...base, video_path: p, caption: msg.caption || '' });
+        } else {
+          const p = path.join(INBOX, `${id}.webp`);
+          await fetchToFile(await bot.getFileLink(media.file_id), p, { maxBytes: MAX_MEDIA_BYTES, declaredSize });
+          writeInbox({ ...base, image_path: p, is_sticker: true });
+        }
+      } catch (e) {
+        // Error text only — never the file link (it embeds the bot token).
+        log(`media download failed chat=${chatId}: ${String(e && e.message || e).replace(/https?:\/\/\S+/g, '<url>')}`);
+        try { await bot.sendMessage(chatId, 'Could not fetch that attachment (too large or the download failed).'); } catch {}
+        return;
+      }
     } else if (text) {
       writeInbox({ ...base, text });
     } else {

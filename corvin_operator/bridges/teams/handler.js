@@ -67,13 +67,18 @@ function renderExecutionContextTeams(context) {
  * @param {string}   cfg.inboxDir        — absolute path to shared/inbox/
  * @param {string}   cfg.settingsFile    — absolute path to settings.json
  * @param {function} cfg.currentSettings — hot-reload accessor
- * @param {object}   cfg.auth            — { authOk, readOnlyOk, rateAllow }
+ * @param {object}   cfg.auth            — { authOk, readOnlyOk, rateAllow, isOwner }
  * @param {function} cfg.logger          — log(msg) function
  * @param {Map}      cfg.conversationRefs — chatKey → ConversationReference
  */
 function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, conversationRefs }) {
   const log = logger || (() => {});
   const { rateAllow, authOk, readOnlyOk } = auth;
+  // Owner surface = whitelist membership ONLY (auth.isOwner). authOk() also
+  // admits guests of an `audience=all` chat; those must never reach /vault,
+  // /all, /debug, /invite or the /on|/off toggle (review 2026-11-19,
+  // R3-NEW-2). An auth object without isOwner fails closed: nobody is owner.
+  const isOwnerUid = typeof auth.isOwner === 'function' ? auth.isOwner : (() => false);
 
   // Sticky-progress + finalize-guard state for _progress/_heartbeat outbox
   // payloads. Mirrors the Discord/Telegram/Slack/WhatsApp/Signal daemons
@@ -223,7 +228,7 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, co
     // ── Toggle commands (/on /off /status) ────────────────────────────────
     {
       const tog = chatToggle.handleToggleCommand({
-        text, chatKey: String(chatKey), isOwner: true, settingsFile,
+        text, chatKey: String(chatKey), isOwner: isOwnerUid(email), settingsFile,
       });
       if (tog) {
         try { await ctx.sendActivity(tog.reply); } catch {}
@@ -253,7 +258,7 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, co
     {
       const cwk = inChatCmds.dispatch({
         text, channel: 'teams', chatKey: String(chatKey),
-        isOwner: true, settingsFile,
+        isOwner: isOwnerUid(email), settingsFile,
       });
       if (cwk) {
         try { await ctx.sendActivity(cwk.reply); } catch {}

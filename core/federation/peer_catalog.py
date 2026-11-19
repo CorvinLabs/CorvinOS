@@ -32,6 +32,7 @@ CATALOG_TTL_S = 300.0
 _MAX_AGENTS_PER_PEER = 64
 _ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
 CATALOG_INSTRUCTION = "federation.catalog"
+_RESERVED_AGENT_IDS = frozenset({"operator"})
 
 
 class PeerCatalogError(RuntimeError):
@@ -82,6 +83,10 @@ def sanitize_catalog(raw: Any) -> list[dict]:
         max_c = item.get("max_concurrent", 1)
         cost = item.get("cost_per_task_usd", 0.0)
         if not _is_id(agent_id, 128) or agent_id in seen:
+            continue
+        if agent_id.lower() in _RESERVED_AGENT_IDS:
+            # "operator" (any case) is the human's name in a conversation
+            # prompt; a peer may not list an agent that carries it.
             continue
         if not isinstance(caps, list) or not caps or any(c not in _VALID_CAPABILITIES for c in caps):
             continue

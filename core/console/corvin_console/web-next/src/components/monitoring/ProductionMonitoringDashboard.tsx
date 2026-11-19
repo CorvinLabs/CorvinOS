@@ -11,32 +11,36 @@
  * Real-time updates every 5-10 seconds during active operations.
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertCircle, CheckCircle, AlertTriangle, RefreshCw, TrendingUp } from 'lucide-react';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { AlertCircle, CheckCircle, AlertTriangle, RefreshCw } from 'lucide-react';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Button } from '@/components/ui/button';
+import { icon } from '@/lib/status-markers';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Type Definitions
 // ─────────────────────────────────────────────────────────────────────────────
 
+// The backend reports ``null`` for every figure it does not measure (it used
+// to invent them). Each numeric field is therefore nullable, and is rendered
+// through fmt()/pct() below - a bare ``.toFixed`` on null crashed the panel.
 interface HealthResponse {
-  health_score: number;
+  health_score: number | null;
   status: 'healthy' | 'degraded' | 'critical';
-  uptime_hours: number;
+  uptime_hours: number | null;
   last_check: string;
   timestamp: string;
   tenant_id: string;
 }
 
 interface AutonomousStats {
-  skills_forged: number;
-  skills_approved: number;
-  skills_deferred: number;
-  skills_active: number;
-  success_rate: number;
-  avg_optimization_confidence: number;
-  avg_latency_ms: number;
-  avg_error_rate: number;
+  skills_forged: number | null;
+  skills_approved: number | null;
+  skills_deferred: number | null;
+  skills_active: number | null;
+  success_rate: number | null;
+  avg_optimization_confidence: number | null;
+  avg_latency_ms: number | null;
+  avg_error_rate: number | null;
   last_fork_timestamp: string | null;
   timestamp: string;
   tenant_id: string;
@@ -45,12 +49,12 @@ interface AutonomousStats {
 interface SkillMetric {
   skill_id: string;
   version: string;
-  confidence: number;
-  latency_p50_ms: number;
-  latency_p95_ms: number;
-  latency_p99_ms: number;
-  error_rate: number;
-  execution_count: number;
+  confidence: number | null;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  latency_p99_ms: number | null;
+  error_rate: number | null;
+  execution_count: number | null;
   last_error: string | null;
   status: 'healthy' | 'degraded' | 'critical' | 'inactive';
   last_updated: string;
@@ -76,17 +80,43 @@ interface TimeSeriesPoint {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Formatting (null-safe)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Shown for a figure the backend does not measure. */
+export const NOT_AVAILABLE = '\u2014';
+
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/** ``value`` with ``digits`` decimals and ``suffix``; NOT_AVAILABLE for null/NaN. */
+export function fmt(value: number | null | undefined, digits = 1, suffix = ''): string {
+  return isNum(value) ? `${value.toFixed(digits)}${suffix}` : NOT_AVAILABLE;
+}
+
+/** A 0..1 ratio as a percentage; NOT_AVAILABLE for null/NaN. */
+export function pct(value: number | null | undefined, digits = 0): string {
+  return isNum(value) ? `${(value * 100).toFixed(digits)}%` : NOT_AVAILABLE;
+}
+
+/** An integer count with en-US grouping; NOT_AVAILABLE for null/NaN. */
+export function count(value: number | null | undefined): string {
+  return isNum(value) ? value.toLocaleString('en-US') : NOT_AVAILABLE;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Sub-Components
 // ─────────────────────────────────────────────────────────────────────────────
 
 const HealthScoreGauge: React.FC<{ health: HealthResponse }> = ({ health }) => {
-  const getStatusColor = (score: number) => {
+  const getStatusColor = (score: number | null) => {
+    if (!isNum(score)) return 'text-gray-400';
     if (score >= 67) return 'text-green-500';
     if (score >= 34) return 'text-yellow-500';
     return 'text-red-500';
   };
 
-  const getStatusBg = (score: number) => {
+  const getStatusBg = (score: number | null) => {
+    if (!isNum(score)) return 'bg-gray-50';
     if (score >= 67) return 'bg-green-50';
     if (score >= 34) return 'bg-yellow-50';
     return 'bg-red-50';
@@ -101,15 +131,16 @@ const HealthScoreGauge: React.FC<{ health: HealthResponse }> = ({ health }) => {
         </div>
         <div className="text-right">
           <div className={`text-5xl font-bold ${getStatusColor(health.health_score)}`}>
-            {health.health_score.toFixed(1)}
+            {fmt(health.health_score)}
           </div>
           <div className="text-sm text-gray-600">
-            {health.status === 'healthy' && '✅ Healthy'}
-            {health.status === 'degraded' && '⚠️ Degraded'}
-            {health.status === 'critical' && '❌ Critical'}
+            {health.status === 'healthy' && `${icon('done')} Healthy`}
+            {health.status === 'degraded' && `${icon('warning')} Degraded`}
+            {health.status === 'critical' && `${icon('failed')} Critical`}
+            {!['healthy', 'degraded', 'critical'].includes(health.status) && 'Not measured on this build'}
           </div>
           <div className="text-xs text-gray-500 mt-1">
-            Uptime: {health.uptime_hours.toFixed(1)}h
+            Uptime: {fmt(health.uptime_hours, 1, 'h')}
           </div>
         </div>
       </div>
@@ -121,19 +152,19 @@ const StatsCards: React.FC<{ stats: AutonomousStats }> = ({ stats }) => {
   return (
     <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
       <div className="rounded-lg border bg-blue-50 p-4">
-        <div className="text-2xl font-bold text-blue-600">{stats.skills_forged}</div>
+        <div className="text-2xl font-bold text-blue-600">{count(stats.skills_forged)}</div>
         <p className="text-xs text-gray-600">Skills Forged</p>
       </div>
       <div className="rounded-lg border bg-green-50 p-4">
-        <div className="text-2xl font-bold text-green-600">{(stats.success_rate * 100).toFixed(0)}%</div>
+        <div className="text-2xl font-bold text-green-600">{pct(stats.success_rate)}</div>
         <p className="text-xs text-gray-600">Success Rate</p>
       </div>
       <div className="rounded-lg border bg-purple-50 p-4">
-        <div className="text-2xl font-bold text-purple-600">{stats.avg_latency_ms.toFixed(1)}ms</div>
+        <div className="text-2xl font-bold text-purple-600">{fmt(stats.avg_latency_ms, 1, 'ms')}</div>
         <p className="text-xs text-gray-600">Avg Latency</p>
       </div>
       <div className="rounded-lg border bg-orange-50 p-4">
-        <div className="text-2xl font-bold text-orange-600">{(stats.avg_optimization_confidence * 100).toFixed(0)}%</div>
+        <div className="text-2xl font-bold text-orange-600">{pct(stats.avg_optimization_confidence)}</div>
         <p className="text-xs text-gray-600">Avg Confidence</p>
       </div>
     </div>
@@ -173,12 +204,12 @@ const SkillPerformanceTable: React.FC<{ skills: SkillMetric[] }> = ({ skills }) 
             <tr key={skill.skill_id} className="border-b hover:bg-gray-50">
               <td className="px-4 py-3 font-mono text-xs">{skill.skill_id}</td>
               <td className="px-4 py-3">
-                <div className="font-semibold">{(skill.confidence * 100).toFixed(0)}%</div>
+                <div className="font-semibold">{pct(skill.confidence)}</div>
               </td>
-              <td className="px-4 py-3">{skill.latency_p50_ms.toFixed(1)}ms</td>
-              <td className="px-4 py-3">{skill.latency_p95_ms.toFixed(1)}ms</td>
-              <td className="px-4 py-3">{(skill.error_rate * 100).toFixed(2)}%</td>
-              <td className="px-4 py-3">{skill.execution_count.toLocaleString()}</td>
+              <td className="px-4 py-3">{fmt(skill.latency_p50_ms, 1, 'ms')}</td>
+              <td className="px-4 py-3">{fmt(skill.latency_p95_ms, 1, 'ms')}</td>
+              <td className="px-4 py-3">{pct(skill.error_rate, 2)}</td>
+              <td className="px-4 py-3">{count(skill.execution_count)}</td>
               <td className={`px-4 py-3 rounded font-semibold ${getStatusColor(skill.status)}`}>
                 {skill.status.charAt(0).toUpperCase() + skill.status.slice(1)}
               </td>
@@ -210,7 +241,7 @@ const AlertsTimeline: React.FC<{ activeAlerts: AlertEvent[]; recentAlerts: Alert
       <div>
         <h4 className="font-semibold mb-2">Active Alerts ({activeAlerts.length})</h4>
         {activeAlerts.length === 0 ? (
-          <div className="text-sm text-gray-500">✅ No active alerts</div>
+          <div className="text-sm text-gray-500">No active alerts</div>
         ) : (
           <div className="space-y-2">
             {activeAlerts.map((alert) => (
@@ -221,7 +252,7 @@ const AlertsTimeline: React.FC<{ activeAlerts: AlertEvent[]; recentAlerts: Alert
                   <div className="text-gray-600">{alert.message}</div>
                   {alert.metric_name && (
                     <div className="text-xs text-gray-500 mt-1">
-                      {alert.metric_name}: {alert.metric_value?.toFixed(3)} (threshold: {alert.threshold?.toFixed(3)})
+                      {alert.metric_name}: {fmt(alert.metric_value, 3)} (threshold: {fmt(alert.threshold, 3)})
                     </div>
                   )}
                 </div>
@@ -256,7 +287,7 @@ const ConfidenceTrendChart: React.FC<{ data: TimeSeriesPoint[] }> = ({ data }) =
     <div className="rounded-lg border p-4">
       <h4 className="font-semibold mb-4">Confidence Trend (7 days)</h4>
       <ResponsiveContainer width="100%" height={300}>
-        <LineChart data={data.map((p) => ({ ...p, value: p.value * 100 }))}>
+        <LineChart data={data.filter((p) => isNum(p.value)).map((p) => ({ ...p, value: p.value * 100 }))}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis
             dataKey="timestamp"
@@ -268,7 +299,7 @@ const ConfidenceTrendChart: React.FC<{ data: TimeSeriesPoint[] }> = ({ data }) =
             label={{ value: 'Confidence %', angle: -90, position: 'insideLeft' }}
           />
           <Tooltip
-            formatter={(val: number) => `${val.toFixed(1)}%`}
+            formatter={(val: number) => fmt(val, 1, '%')}
             labelFormatter={(ts) => new Date(ts as string | number).toLocaleString("en-US")}
           />
           <Legend />
@@ -300,7 +331,7 @@ const LatencyTrendChart: React.FC<{ data: TimeSeriesPoint[] }> = ({ data }) => {
           />
           <YAxis label={{ value: 'Latency (ms)', angle: -90, position: 'insideLeft' }} />
           <Tooltip
-            formatter={(val: number) => `${val.toFixed(1)}ms`}
+            formatter={(val: number) => fmt(val, 1, 'ms')}
             labelFormatter={(ts) => new Date(ts as string | number).toLocaleString("en-US")}
           />
           <Legend />
@@ -345,20 +376,20 @@ export const ProductionMonitoringDashboard: React.FC = () => {
       if (statsRes.ok) setStats(await statsRes.json());
       if (skillsRes.ok) {
         const skillData = await skillsRes.json();
-        setSkills(skillData.skills);
+        setSkills(skillData.skills ?? []);
       }
       if (alertsRes.ok) {
         const alertData = await alertsRes.json();
-        setActiveAlerts(alertData.active_alerts);
-        setRecentAlerts(alertData.recent_alerts);
+        setActiveAlerts(alertData.active_alerts ?? []);
+        setRecentAlerts(alertData.recent_alerts ?? []);
       }
       if (confidenceRes.ok) {
         const confData = await confidenceRes.json();
-        setConfidenceTrend(confData.data_points);
+        setConfidenceTrend(confData.data_points ?? []);
       }
       if (latencyRes.ok) {
         const latData = await latencyRes.json();
-        setLatencyTrend(latData.data_points);
+        setLatencyTrend(latData.data_points ?? []);
       }
 
       setLastRefresh(new Date());

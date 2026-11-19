@@ -274,16 +274,22 @@ def permit_token() -> Optional[str]:
 def _chain_writer():
     """Return ``(write_event, tenant_audit_chain)`` — THE core chain writer.
 
-    Imported as the bare ``security_events`` / ``paths`` modules (with the
-    forge package dir on ``sys.path``), exactly like ``validator.py`` does, so
-    the process-wide instance that carries the chain-DNA seed does the write.
+    ``security_events`` is imported as the bare module (with the forge package
+    dir on ``sys.path``), exactly like ``validator.py`` does, so the process-wide
+    instance that carries the chain-DNA seed does the write.
+
+    The chain path is NOT taken from the bare ``paths`` module: that name is
+    shared by three files, and a process that loaded ``cowork/lib/paths.py``
+    first has a ``paths`` without ``tenant_audit_chain`` — the ImportError was
+    swallowed by the caller and the capability decision went unrecorded. The
+    package-qualified forge resolver is the same function under one name only.
     """
     import sys as _sys
     _forge_inner = Path(__file__).resolve().parents[1] / "forge" / "forge"
     if str(_forge_inner) not in _sys.path:
         _sys.path.insert(0, str(_forge_inner))
     from security_events import write_event  # type: ignore[import]
-    from paths import tenant_audit_chain  # type: ignore[import]
+    from corvin_operator.forge.forge.paths import tenant_audit_chain
     return write_event, tenant_audit_chain
 
 

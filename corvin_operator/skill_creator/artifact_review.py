@@ -56,9 +56,12 @@ VERDICT: CONFIRMED / PLAUSIBLE / REFUTED
 MAX_ARTIFACT_CHARS = 120_000
 
 
-def resolve_engine() -> Any:
-    """The configured engine client, or None when no engine is reachable."""
-    return sc.resolve_llm_client()
+def resolve_engine(tenant_id: Optional[str] = None) -> Any:
+    """The configured engine client, or None when no engine is reachable. ``tenant_id`` is the
+    tenant the generation runs for (its spans, worker env and model choice)."""
+    if tenant_id is None:
+        return sc.resolve_llm_client()
+    return sc.resolve_llm_client(tenant_id=tenant_id)
 
 
 def engine_id(client: Any) -> str:

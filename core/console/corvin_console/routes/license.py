@@ -16,6 +16,8 @@ Compliance baseline mirrors ``routes/settings.py``:
 """
 from __future__ import annotations
 
+import asyncio
+from collections import deque
 import json
 import os
 import threading
@@ -25,13 +27,14 @@ import time
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from fastapi import status as http_status
 from pydantic import BaseModel, Field
 
 from .. import auth as session_auth
 from .. import audit as console_audit
 from .. import _bootstrap
+from ..chain_tail import DEFAULT_MAX_SCAN_BYTES, iter_chain_tail, scan_window
 from ..deps import require_csrf, require_session, verify_reauth
 from core.tenants import validate_tenant_id
 
@@ -292,7 +295,7 @@ async def upload_license(
     """
     if rec.tier != "owner":
         try:
-            console_audit.action_denied(
+            await asyncio.to_thread(console_audit.action_denied,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.upload",
@@ -312,7 +315,7 @@ async def upload_license(
     # Validate file
     if not file.filename or not file.filename.endswith(".jwt"):
         try:
-            console_audit.action_failed(
+            await asyncio.to_thread(console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.upload",
@@ -330,7 +333,7 @@ async def upload_license(
     content = await file.read()
     if len(content) > _MAX_LICENSE_FILE_SIZE:
         try:
-            console_audit.action_failed(
+            await asyncio.to_thread(console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.upload",
@@ -351,7 +354,7 @@ async def upload_license(
             raise ValueError("Empty token")
     except Exception:
         try:
-            console_audit.action_failed(
+            await asyncio.to_thread(console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.upload",
@@ -372,7 +375,7 @@ async def upload_license(
         lic = _verifier.verify_token(token, pubkey_pem=pubkey)
     except _verifier.LicenseError as e:
         try:
-            console_audit.action_failed(
+            await asyncio.to_thread(console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.upload",
@@ -390,7 +393,7 @@ async def upload_license(
         )
     except Exception as e:
         try:
-            console_audit.action_failed(
+            await asyncio.to_thread(console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.upload",
@@ -408,7 +411,8 @@ async def upload_license(
     # Audit FIRST — audit-first invariant (GDPR Art. 30, CLAUDE.md §L16)
     fp = _verifier.fingerprint_customer_id(lic.customer_id)
     try:
-        _license_audit.license_activated(
+        await asyncio.to_thread(
+            _license_audit.license_activated,
             tier=lic.tier,
             customer_fp=fp,
             valid_until=lic.valid_until,
@@ -453,7 +457,7 @@ async def upload_license(
         )
     except Exception as e:
         try:
-            console_audit.action_failed(
+            await asyncio.to_thread(console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.upload",
@@ -470,7 +474,7 @@ async def upload_license(
 
     # Console audit
     try:
-        console_audit.action_performed(
+        await asyncio.to_thread(console_audit.action_performed,
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="license.upload",
@@ -496,7 +500,7 @@ async def revoke_license(
     """Revoke the currently installed license."""
     if rec.tier != "owner":
         try:
-            console_audit.action_denied(
+            await asyncio.to_thread(console_audit.action_denied,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.revoke",
@@ -530,7 +534,8 @@ async def revoke_license(
 
     # Audit FIRST — audit-first invariant (GDPR Art. 30, CLAUDE.md §L16)
     try:
-        _license_audit.license_revoked(
+        await asyncio.to_thread(
+            _license_audit.license_revoked,
             customer_fp=fp,
             reason=req.reason,
         )
@@ -544,7 +549,7 @@ async def revoke_license(
         _grace.reset_state()
     except Exception as e:
         try:
-            console_audit.action_failed(
+            await asyncio.to_thread(console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.revoke",
@@ -560,7 +565,7 @@ async def revoke_license(
         )
 
     try:
-        console_audit.action_performed(
+        await asyncio.to_thread(console_audit.action_performed,
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="license.revoke",
@@ -573,12 +578,29 @@ async def revoke_license(
     return {"ok": True}
 
 
+#: ``license.*`` records are rare: a key is installed a few times a year, so on
+#: a busy install the default 32 MiB tail often holds none of them and the
+#: panel read "no licence events". When the first pass finds fewer than asked
+#: for, the scan is repeated over this wider tail (needle-prefiltered, off the
+#: event loop, on demand for the owner only).
+LICENSE_AUDIT_MAX_SCAN_BYTES = 512 * 1024 * 1024
+
+
 @router.get("/audit-tail", response_model=list[AuditEvent])
 async def get_license_audit(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    response: Response,
     limit: int = 100,
 ) -> list[AuditEvent]:
-    """Get recent license audit events (metadata only)."""
+    """Get recent license audit events (metadata only).
+
+    The body stays a plain list. Whether it is complete is in the headers:
+    ``X-Corvin-Scan-Truncated`` is ``true`` when the chain is larger than the
+    scanned tail AND fewer than ``limit`` events were found - older licence
+    events may then exist outside it. ``X-Corvin-Scan-Bytes`` /
+    ``X-Corvin-Scan-Total-Bytes`` / ``X-Corvin-Scan-Covers-Since`` say how far
+    back the answer reaches.
+    """
     if rec.tier != "owner":
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
@@ -587,8 +609,56 @@ async def get_license_audit(
 
     _check_license_plugin()
 
-    events: list[AuditEvent] = []
+    if limit < 1:
+        return []
+    # The chain scan is blocking file I/O: awaited off the event loop, bounded
+    # to the tail of the file (a full forward scan of a 500 MB chain inside
+    # this handler stalled every other request).
+    events, scan = await asyncio.to_thread(
+        _license_audit_scan, rec.tenant_id, min(limit, 1000),
+    )
+    response.headers["X-Corvin-Scan-Truncated"] = "true" if scan["truncated"] else "false"
+    response.headers["X-Corvin-Scan-Bytes"] = str(scan["scanned_bytes"])
+    response.headers["X-Corvin-Scan-Total-Bytes"] = str(scan["total_bytes"])
+    if scan.get("covers_since"):
+        response.headers["X-Corvin-Scan-Covers-Since"] = str(scan["covers_since"])
+    return events
 
+
+def _license_audit_scan(tenant_id: str, limit: int) -> tuple[list[AuditEvent], dict[str, Any]]:
+    """``(events, scan)``: the newest ``license.*`` records and what the scan covered.
+
+    BLOCKING. First the default tail; when that holds fewer than ``limit``
+    events and the chain is larger, once more over
+    :data:`LICENSE_AUDIT_MAX_SCAN_BYTES`. ``scan["truncated"]`` is True only
+    when the answer may be incomplete: the chain is larger than the widest
+    window scanned and fewer than ``limit`` events were found.
+    """
+    empty = {"truncated": False, "scanned_bytes": 0, "total_bytes": 0, "covers_since": None}
+    try:
+        validate_tenant_id(tenant_id)
+        audit_file = console_audit._audit_path(tenant_id)
+    except Exception:  # noqa: BLE001 - invalid tenant / no resolver: nothing to read
+        return [], empty
+    window = DEFAULT_MAX_SCAN_BYTES
+    events = _license_audit_tail(tenant_id, limit, max_scan_bytes=window)
+    scan = scan_window(audit_file, max_scan_bytes=window)
+    if scan["truncated"] and len(events) < limit:
+        window = LICENSE_AUDIT_MAX_SCAN_BYTES
+        events = _license_audit_tail(tenant_id, limit, max_scan_bytes=window)
+        scan = scan_window(audit_file, max_scan_bytes=window)
+    scan["truncated"] = bool(scan["truncated"] and len(events) < limit)
+    return events, scan
+
+
+def _license_audit_tail(
+    tenant_id: str, limit: int, *, max_scan_bytes: int = DEFAULT_MAX_SCAN_BYTES,
+) -> list[AuditEvent]:
+    """Newest-first ``license.*`` records from the tail of the tenant chain.
+
+    BLOCKING — call through ``asyncio.to_thread``. Never raises: an unreadable
+    chain or an invalid tenant id yields an empty list.
+    """
     try:
         # ADR-0007: validate tenant_id before constructing file paths, with the ONE
         # canonical validator. The private ``re.compile(...).match`` copy this replaced
@@ -596,34 +666,32 @@ async def get_license_audit(
         # "\n") and named a different directory (review 2026-11-05, LRN-15; the core
         # validator moved to fullmatch in a0b71c4cb).
         try:
-            validate_tenant_id(rec.tenant_id)
+            validate_tenant_id(tenant_id)
         except ValueError:
-            return events
-        # Use the same path as audit.py:_audit_path() — forge/audit.jsonl under the tenant global dir
-        audit_file = console_audit._audit_path(rec.tenant_id)
-        if not audit_file.exists():
-            return events
-
-        with open(audit_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    entry = json.loads(line)
-                    if entry.get("event_type", "").startswith("license."):
-                        raw_details = entry.get("details", {})
-                        filtered = {k: v for k, v in raw_details.items() if k in _AUDIT_TAIL_DETAILS_ALLOWLIST}
-                        events.append(AuditEvent(
-                            timestamp=entry.get("timestamp", 0),
-                            event_type=entry.get("event_type", ""),
-                            details=filtered,
-                        ))
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-        # Return last N events
-        return sorted(events, key=lambda e: e.timestamp, reverse=True)[:limit]
-
+            return []
+        # Same file audit.py writes: forge/audit.jsonl under the tenant global dir.
+        audit_file = console_audit._audit_path(tenant_id)
+        newest: deque[AuditEvent] = deque(maxlen=limit)
+        for entry in iter_chain_tail(
+            audit_file, max_scan_bytes=max_scan_bytes, needles=('"license.',),
+        ):
+            event_type = entry.get("event_type", "")
+            if not isinstance(event_type, str) or not event_type.startswith("license."):
+                continue
+            raw_details = entry.get("details", {})
+            if not isinstance(raw_details, dict):
+                raw_details = {}
+            filtered = {k: v for k, v in raw_details.items() if k in _AUDIT_TAIL_DETAILS_ALLOWLIST}
+            # Chain records carry ``ts``; ``timestamp`` is read for older shapes.
+            ts = entry.get("ts", entry.get("timestamp", 0))
+            try:
+                newest.append(AuditEvent(
+                    timestamp=float(ts) if not isinstance(ts, bool) else 0.0,
+                    event_type=event_type, details=filtered,
+                ))
+            except (TypeError, ValueError):
+                continue
+        return sorted(newest, key=lambda e: e.timestamp, reverse=True)
     except Exception:
         return []
 
@@ -678,7 +746,7 @@ async def get_license_info(
     jti_prefix = jti_raw[:8] if jti_raw else None
 
     try:
-        console_audit.action_performed(
+        await asyncio.to_thread(console_audit.action_performed,
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="license.info_viewed",
@@ -738,7 +806,7 @@ async def apply_license_key(
     """
     if rec.tier != "owner":
         try:
-            console_audit.action_denied(
+            await asyncio.to_thread(console_audit.action_denied,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.key_apply",
@@ -755,7 +823,7 @@ async def apply_license_key(
 
     if not verify_reauth(rec, req.re_auth_token):
         try:
-            console_audit.action_failed(
+            await asyncio.to_thread(console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.key_apply",
@@ -791,7 +859,7 @@ async def apply_license_key(
 
     if claims is None:
         try:
-            console_audit.action_failed(
+            await asyncio.to_thread(console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="license.key_apply",
@@ -814,7 +882,7 @@ async def apply_license_key(
     try:
         if _lv._is_token_fp_revoked(token):
             try:
-                console_audit.action_failed(
+                await asyncio.to_thread(console_audit.action_failed,
                     tenant_id=rec.tenant_id,
                     sid_fingerprint=rec.sid_fingerprint,
                     action="license.key_apply",
@@ -838,7 +906,7 @@ async def apply_license_key(
     try:
         if not _lv._check_device_fp(claims):
             try:
-                console_audit.action_failed(
+                await asyncio.to_thread(console_audit.action_failed,
                     tenant_id=rec.tenant_id,
                     sid_fingerprint=rec.sid_fingerprint,
                     action="license.key_apply",
@@ -864,7 +932,7 @@ async def apply_license_key(
     try:
         if not _lv._check_instance_id_bound(claims):
             try:
-                console_audit.action_failed(
+                await asyncio.to_thread(console_audit.action_failed,
                     tenant_id=rec.tenant_id,
                     sid_fingerprint=rec.sid_fingerprint,
                     action="license.key_apply",
@@ -883,7 +951,8 @@ async def apply_license_key(
     except Exception:
         pass  # unexpected check failure -- the post-reload check below still guards
 
-    return _swap_in_license_key(token, claims, rec, _lv)
+    # File swap + chain writes under a lock: off the event loop, awaited.
+    return await asyncio.to_thread(_swap_in_license_key, token, claims, rec, _lv)
 
 
 def _restore_previous_key(key_path: Path, previous: bytes | None) -> None:

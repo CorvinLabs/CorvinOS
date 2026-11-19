@@ -74,7 +74,7 @@ function renderExecutionContextSignal(context) {
  * @param {string}   cfg.inboxDir
  * @param {string}   cfg.settingsFile
  * @param {function} cfg.currentSettings
- * @param {object}   cfg.auth              — { authOk, readOnlyOk, rateAllow }
+ * @param {object}   cfg.auth              — { authOk, readOnlyOk, rateAllow, isOwner }
  * @param {function} cfg.logger
  * @param {function} cfg.sendSignal        — async (recipient, message, opts?) => {timestamp}
  *                                           injected so tests can mock it.
@@ -91,6 +91,11 @@ function renderExecutionContextSignal(context) {
 function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, sendSignal, deleteSignal }) {
   const log = logger || (() => {});
   const { rateAllow, authOk, readOnlyOk } = auth;
+  // Owner surface = whitelist membership ONLY (auth.isOwner). authOk() also
+  // admits guests of an `audience=all` chat; those must never reach /vault,
+  // /all, /debug, /invite or the /on|/off toggle (review 2026-11-19,
+  // R3-NEW-2). An auth object without isOwner fails closed: nobody is owner.
+  const isOwnerUid = typeof auth.isOwner === 'function' ? auth.isOwner : (() => false);
   const doDeleteSignal = deleteSignal || (async () => {});
 
   // Sticky-progress + finalize-guard state for _progress/_heartbeat outbox
@@ -240,7 +245,7 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, se
 
     // ── Toggle commands ───────────────────────────────────────────────────
     {
-      const tog = chatToggle.handleToggleCommand({ text, chatKey: String(chatKey), isOwner: true, settingsFile });
+      const tog = chatToggle.handleToggleCommand({ text, chatKey: String(chatKey), isOwner: isOwnerUid(sender), settingsFile });
       if (tog) {
         try { await sendSignal(sender, tog.reply); } catch {}
         return null;
@@ -265,7 +270,7 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, se
       }
     }
     {
-      const cwk = inChatCmds.dispatch({ text, channel: 'signal', chatKey: String(chatKey), isOwner: true, settingsFile });
+      const cwk = inChatCmds.dispatch({ text, channel: 'signal', chatKey: String(chatKey), isOwner: isOwnerUid(sender), settingsFile });
       if (cwk) {
         try { await sendSignal(sender, cwk.reply); } catch {}
         return null;

@@ -36,6 +36,7 @@ import re
 import sqlite3
 import sys
 import contextlib
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1359,17 +1360,121 @@ def _name_names_subject(name: str, subject_id: str) -> bool:
         idx += 1
 
 
-def _mentions_subject(obj: Any, subject_id: str, depth: int = 0) -> bool:
+def _subject_value_forms(subject_id: str) -> frozenset[str]:
+    """The spellings under which a store can hold ``subject_id`` as a VALUE.
+
+    Review 2026-11-19 (SEC-5): stores written by the adapter key a chat by its
+    directory form (``session_state.safe_chat_key`` - every non-alphanumeric
+    character replaced by ``_``, cut at 64), so a WhatsApp JID
+    ``49151...@s.whatsapp.net`` is on disk as ``49151____s_whatsapp_net``. An
+    exact-match comparison against the raw id found none of those records and
+    the erasure reported COMPLETED. The directory form is added only when it
+    differs from the raw id; an id that is already alphanumeric keeps exactly
+    one form.
+
+    The safe form is LOSSY (two different ids can share it), so
+    :func:`_mentions_subject` compares it only under :data:`_SAFE_FORM_KEYS`.
+    """
+    forms = {subject_id}
+    try:
+        safe = _ledger_safe_key(subject_id)
+    except Exception:  # noqa: BLE001
+        safe = ""
+    if safe and safe != "anon":
+        forms.add(safe)
+    return frozenset(forms)
+
+
+#: Round 2 (R2-SEC-7): keys whose stored value is demonstrably the adapter's
+#: DIRECTORY form of a chat id (``session_state.safe_chat_key``). Only under these
+#: is the safe form of the subject compared. Under every other identity key
+#: (``user``, ``owner``, ``author`` ...) the stores hold the id as the channel gave
+#: it, and the safe form is lossy: ``john.doe`` and ``john_doe`` both fold to
+#: ``john_doe``, so comparing it there erased ANOTHER person's records
+#: (``{"user": "john_doe"}`` matched an erasure of ``john.doe``) - an Art. 5
+#: breach committed by the Art. 17 path.
+_SAFE_FORM_KEYS: frozenset[str] = frozenset({"chat_key", "session_key"})
+
+
+#: R3-SEC-6: per-thread count of records that carried ONLY the lossy directory
+#: form of the subject under a :data:`_SAFE_FORM_KEYS` key and were therefore
+#: left in place. The orchestrator resets it before each handler and reports a
+#: non-zero count as ``SKIPPED / not_erasable`` for that layer.
+_SAFE_FORM_STATE = threading.local()
+
+
+def reset_ambiguous_safe_form_count() -> None:
+    _SAFE_FORM_STATE.count = 0
+
+
+def ambiguous_safe_form_count() -> int:
+    return int(getattr(_SAFE_FORM_STATE, "count", 0))
+
+
+def _carries_raw_subject(obj: Any, subject_id: str, depth: int = 0) -> bool:
+    """True when *subject_id* appears verbatim as a string value under ANY key."""
     if depth > 8:
         return False
+    if isinstance(obj, str):
+        return obj == subject_id
+    if isinstance(obj, dict):
+        return any(_carries_raw_subject(v, subject_id, depth + 1) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_carries_raw_subject(v, subject_id, depth + 1) for v in obj)
+    return False
+
+
+def _exact_or_safe_mention(obj: Any, subject_id: str, forms: "frozenset[str]",
+                           depth: int = 0) -> "tuple[bool, bool]":
+    """``(exact, safe_only)``: an identity key holds the raw id / only its
+    directory form somewhere in *obj*."""
+    if depth > 8:
+        return False, False
+    safe_only = False
     if isinstance(obj, dict):
         for k, v in obj.items():
-            if k in _SUBJECT_KEYS and isinstance(v, str) and v == subject_id:
-                return True
-            if _mentions_subject(v, subject_id, depth + 1):
-                return True
+            if k in _SUBJECT_KEYS and isinstance(v, str):
+                if v == subject_id:
+                    return True, safe_only
+                if k in _SAFE_FORM_KEYS and v in forms:
+                    safe_only = True
+                    continue
+            exact, safe = _exact_or_safe_mention(v, subject_id, forms, depth + 1)
+            if exact:
+                return True, safe_only
+            safe_only = safe_only or safe
     elif isinstance(obj, list):
-        return any(_mentions_subject(v, subject_id, depth + 1) for v in obj)
+        for v in obj:
+            exact, safe = _exact_or_safe_mention(v, subject_id, forms, depth + 1)
+            if exact:
+                return True, safe_only
+            safe_only = safe_only or safe
+    return False, safe_only
+
+
+def _mentions_subject(obj: Any, subject_id: str, depth: int = 0,
+                      _forms: "frozenset[str] | None" = None) -> bool:
+    """True when the record *obj* is attributable to ``subject_id``.
+
+    R3-SEC-6: restricting the directory form to :data:`_SAFE_FORM_KEYS` was
+    not enough - under those very keys ``{"chat_key": "john_doe"}`` still
+    matched an erasure of ``john.doe``, although it is just as likely the
+    record of the person whose id IS ``john_doe``. A directory-form match is
+    now accepted only when the same record also carries the raw id verbatim
+    (under any key - ``jid``, ``raw_chat_id``, ``from`` ...), which is the one
+    thing the folded form cannot fake. A record that has only the folded form
+    is left in place and counted (:func:`ambiguous_safe_form_count`) so the
+    layer reports ``not_erasable`` instead of deleting on a guess or claiming
+    a clean result.
+    """
+    forms = _forms if _forms is not None else _subject_value_forms(subject_id)
+    exact, safe_only = _exact_or_safe_mention(obj, subject_id, forms, depth)
+    if exact:
+        return True
+    if safe_only:
+        if _carries_raw_subject(obj, subject_id):
+            return True
+        _SAFE_FORM_STATE.count = ambiguous_safe_form_count() + 1
     return False
 
 

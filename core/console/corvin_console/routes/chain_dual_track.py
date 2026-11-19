@@ -9,10 +9,14 @@ Reads from three audit chain files (same three-source strategy as audit_tail.py)
   - tenant_global_dir/forge/audit.jsonl     — tenant forge events (console.*, A2A.*, acs.*)
   - tenant_global_dir/audit.jsonl           — tenant-level events (chain.genesis, top-level A2A)
 
-Each chain is scanned in FULL (streaming, retaining only dual-track-relevant
-event types) so the view is COMPLETE — a session's events are never dropped
-once the chain grows past a trailing-byte window. This matches the single-chain
-os-turns reader and keeps the two views consistent.
+Each chain is read through ``chain_tail.iter_chain_tail``: the last
+``_MAX_SCAN_BYTES`` of the file, streamed, with a byte-level prefilter on the
+relevant event types. This replaced a FULL scan of all three files plus a full
+``verify_chain`` walk on every request (review 2026-11-19 round 3, R3-NEW-24):
+on a 500 MB chain that is many seconds of CPU per page view. The price is that
+a session older than the window is shown partially; the response says so in
+``window`` (``truncated`` / ``covers_since``) instead of presenting a partial
+view as the whole one.
 
 Session filter: events are scoped to a chat_key extracted from the
 ``sid`` path parameter (format: ``<channel>:<chat_key>``).
@@ -33,7 +37,11 @@ from .. import auth as session_auth
 from ..deps import require_session
 
 from .. import _bootstrap
+from .. import chain_tail
 _forge_paths = _bootstrap.forge_paths
+
+#: Tail window per chain file.
+_MAX_SCAN_BYTES = chain_tail.DEFAULT_MAX_SCAN_BYTES
 
 router = APIRouter()
 
@@ -95,47 +103,28 @@ def _project(ev: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# Event types the dual-track view consumes. Streaming the full chain but only
-# retaining these keeps memory bounded while guaranteeing COMPLETENESS — a fixed
-# trailing byte budget silently dropped a session's events once the chain grew
-# past it (os-turns reads the chain in full, so a truncating dual-track was both
-# incomplete and inconsistent with the single-chain view).
+# Event types the dual-track view consumes.
 _RELEVANT_TYPES = (
     _OS_EVENTS | _WORKER_EVENTS | _BRIDGE_OS_EVENTS | _BRIDGE_WORKER_EVENTS
     | {"chain.genesis"}
 )
+#: Byte-level prefilter: a line that names none of these cannot be relevant.
+_NEEDLES = tuple(sorted({t.split(".", 1)[0] + "." for t in _RELEVANT_TYPES}))
 
 
-def _read_audit(audit_path: Path) -> list[dict[str, Any]]:
-    """Read the FULL audit.jsonl, retaining only dual-track-relevant events.
+def _read_audit(audit_path: Path, *, max_scan_bytes: int | None = None) -> list[dict[str, Any]]:
+    """Dual-track-relevant events in the tail window of ``audit_path``.
 
-    The whole file is scanned (so no session's events are ever truncated away),
-    but only events whose ``event_type`` is in ``_RELEVANT_TYPES`` are kept in
-    memory — bounding footprint regardless of chain size. Lines are parsed
-    individually so a single corrupt line never aborts the read.
+    Streams the last ``max_scan_bytes`` (default ``_MAX_SCAN_BYTES``); only
+    events whose ``event_type`` is in ``_RELEVANT_TYPES`` are kept. A corrupt
+    line is skipped, a missing file yields nothing.
     """
-    if not audit_path.exists():
-        return []
-    events: list[dict[str, Any]] = []
-    try:
-        with audit_path.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                # Cheap pre-filter: skip lines that can't be a relevant event
-                # before paying for json.loads on the whole chain.
-                if "event_type" not in line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if ev.get("event_type") in _RELEVANT_TYPES:
-                    events.append(ev)
-    except OSError:
-        pass
-    return events
+    window = _MAX_SCAN_BYTES if max_scan_bytes is None else max_scan_bytes
+    return [
+        ev for ev in chain_tail.iter_chain_tail(
+            audit_path, max_scan_bytes=window, needles=_NEEDLES)
+        if ev.get("event_type") in _RELEVANT_TYPES
+    ]
 
 
 def _chain_paths(tid: str) -> list:
@@ -151,24 +140,50 @@ def _chain_paths(tid: str) -> list:
     return paths
 
 
-def _read_all_events(tid: str) -> list[dict[str, Any]]:
-    """Read events from all three audit chain files, deduplicated by inode."""
-    paths = _chain_paths(tid)
-    seen_inodes: set[int] = set()
-    result: list[dict[str, Any]] = []
-    for path in paths:
-        if not path.exists():
-            continue
+def _unique_chain_files(tid: str) -> list[Path]:
+    """The existing chain files of ``_chain_paths``, deduplicated by inode."""
+    seen_inodes: set[tuple[int, int]] = set()
+    out: list[Path] = []
+    for path in _chain_paths(tid):
         try:
             st = path.stat()
-            inode = (st.st_dev, st.st_ino)
         except OSError:
             continue
+        inode = (st.st_dev, st.st_ino)
         if inode in seen_inodes:
             continue
         seen_inodes.add(inode)
+        out.append(path)
+    return out
+
+
+def _read_all_events(tid: str) -> list[dict[str, Any]]:
+    """Read events from all three audit chain files, deduplicated by inode."""
+    result: list[dict[str, Any]] = []
+    for path in _unique_chain_files(tid):
         result.extend(_read_audit(path))
     return result
+
+
+def _scan_window(tid: str) -> dict[str, Any]:
+    """What the tail scan covered across the chain files (see ``chain_tail``).
+    ``truncated`` is true when ANY file is larger than the window."""
+    truncated = False
+    scanned = total = 0
+    covers: list[str] = []
+    for path in _unique_chain_files(tid):
+        w = chain_tail.scan_window(path, max_scan_bytes=_MAX_SCAN_BYTES)
+        truncated = truncated or bool(w["truncated"])
+        scanned += int(w["scanned_bytes"])
+        total += int(w["total_bytes"])
+        if w["covers_since"]:
+            covers.append(str(w["covers_since"]))
+    return {
+        "truncated": truncated,
+        "scanned_bytes": scanned,
+        "total_bytes": total,
+        "covers_since": max(covers) if covers else None,
+    }
 
 
 def _verify_all_chains(tid: str) -> bool:
@@ -205,7 +220,13 @@ def _verify_all_chains(tid: str) -> bool:
             continue
         seen_inodes.add(inode)
         try:
-            ok, _problems = _sec.verify_chain(path)
+            # Same verdict as ``verify_chain``; the already-proven prefix of
+            # the append-only file is re-hashed, not re-parsed (ADR-0640 R4).
+            _incremental = getattr(_sec, "verify_chain_incremental", None)
+            if _incremental is not None:
+                ok, _problems, _total = _incremental(path)
+            else:
+                ok, _problems = _sec.verify_chain(path)
         except Exception:
             return False
         if not ok:
@@ -243,6 +264,7 @@ def get_chain_dual_track(
           }, ...],
           "os_only_events": [{...}, ...],
           "chain_verified": true | false,
+          "window": {truncated, scanned_bytes, total_bytes, covers_since},
           "ts": float,
         }
     """
@@ -381,5 +403,7 @@ def get_chain_dual_track(
         # genesis_match pulled from a broken/tampered chain is not
         # trustworthy regardless of which event-type string is in it.
         "chain_verified": _verify_all_chains(tid),
+        # The events above come from a bounded tail of each chain file.
+        "window":        _scan_window(tid),
         "ts":            time.time(),
     }

@@ -14,6 +14,7 @@ Returns:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -146,7 +147,10 @@ async def get_live_measurements(
     if _api is None:
         init_maturity_api()
 
-    measurements = _api.get_measurements(window=window, tenant_id=rec.tenant_id)
+    # The builder reads the tenant's audit chain and learning store: blocking
+    # file I/O, so it runs on a worker thread, never on the event loop.
+    measurements = await asyncio.to_thread(
+        _api.get_measurements, window=window, tenant_id=rec.tenant_id)
     response = _api.to_dict(measurements, window=window)
 
     return MaturityMeasurementsResponse(

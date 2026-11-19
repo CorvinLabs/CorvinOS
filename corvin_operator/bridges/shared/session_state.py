@@ -59,14 +59,184 @@ CLAUDE_STATE_FILES: tuple[str, ...] = (
 CLAUDE_STATE_GLOB = ".claude*"
 
 
-def safe_chat_key(s: str) -> str:
-    """Sanitise a chat id for use as a path segment.
+def legacy_chat_key(s: str) -> str:
+    """The alnum-only directory form of a chat id: every other character is ``_``, cut at 64.
 
-    Identical to ``adapter._safe_id`` — the adapter's directory names are
-    produced by that function, so any resolver aiming at the same directory
-    must sanitise the same way.
+    LOSSY: ``a.b@x.com``, ``a_b@x.com`` and ``a-b@x.com`` are all ``a_b_x_com``. It is the
+    name a chat directory has unless another chat already holds it
+    (:func:`resolve_chat_dir`), and the form every pre-2026-11-19 store was written under.
     """
     return "".join(ch if ch.isalnum() else "_" for ch in str(s))[:64] or "anon"
+
+
+def safe_chat_key(s: str) -> str:
+    """Sanitise a chat id for use as a path segment (:func:`legacy_chat_key`).
+
+    This is the DEFAULT directory name of a chat, not necessarily the one it has: where
+    two chat ids share it, the second one lives under :func:`hashed_chat_key`. Code that
+    needs a chat's directory calls :func:`resolve_chat_dir` / :func:`claude_session_dirs`;
+    code that matches a directory NAME against a subject (erasure) must try both
+    :func:`chat_dir_names`.
+    """
+    return legacy_chat_key(s)
+
+
+def hashed_chat_key(s: str) -> str:
+    """The collision-free directory form: readable prefix + ``_`` + sha256(raw id)[:16].
+
+    64 characters at most, like the legacy form. Used for a chat whose legacy name is held
+    by a different chat id."""
+    import hashlib  # noqa: PLC0415
+    raw = str(s)
+    digest = hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    return legacy_chat_key(raw)[:47] + "_" + digest
+
+
+def chat_dir_names(s: str) -> tuple[str, str]:
+    """Both directory names a chat id can have: ``(legacy, hashed)``."""
+    return legacy_chat_key(s), hashed_chat_key(s)
+
+
+#: Who a chat directory belongs to: ``{"chat_key": <raw id>, "claimed_at": <ts>}``, kept in
+#: the chat's ledger store (``session_ledger.ledger_dir(workdir)``) - outside every worker
+#: cwd and write-protected by the path gate, like the ledger next to it.
+CHAT_OWNER_FILE = "owner.json"
+
+
+def _ledger_store(workdir: Path) -> Path:
+    try:
+        from . import session_ledger as _sl  # type: ignore  # noqa: PLC0415
+    except ImportError:
+        import session_ledger as _sl  # type: ignore  # noqa: PLC0415
+    return Path(_sl.ledger_dir(workdir))
+
+
+def _owner_state(workdir: Path, chat_key: str) -> tuple[str, bool]:
+    """``(state, has_marker)`` - state is ``"mine"``, ``"foreign"`` or ``"unclaimed"``.
+
+    * the owner marker names a chat id -> that id's, nobody else's;
+    * a marker that cannot be read as one -> ``foreign`` (never guessed);
+    * no marker: the ledger decides. A recorded TURN of a different chat id that maps to
+      the same directory name makes the directory ``foreign`` - also when this chat's own
+      turns are in it too (the two shared it before 2026-11-19; neither keeps it).
+      Only this chat's turns -> ``mine``. No such turn -> ``unclaimed``. Boundary records
+      are not evidence: the inactivity sweep writes them under the directory name.
+    """
+    raw = str(chat_key)
+    name = legacy_chat_key(raw)
+    store = _ledger_store(workdir)
+    marker = store / CHAT_OWNER_FILE
+    try:
+        fd = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        fd = -1
+    except OSError:
+        return "foreign", True
+    if fd >= 0:
+        try:
+            with os.fdopen(fd, "r", encoding="utf-8", errors="surrogatepass") as fh:
+                data = json.loads(fh.read(65536))
+            owner = data.get("chat_key") if isinstance(data, dict) else None
+        except (OSError, ValueError):
+            owner = None
+        if not isinstance(owner, str) or not owner:
+            return "foreign", True
+        return ("mine" if owner == raw else "foreign"), True
+    mine = False
+    try:
+        with open(store / "ledger.jsonl", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"turn"' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict) or rec.get("kind") != "turn":
+                    continue
+                key = rec.get("chat_key")
+                if not isinstance(key, str) or not key:
+                    continue
+                if key == raw:
+                    mine = True
+                elif legacy_chat_key(key) == name:
+                    return "foreign", False
+    except OSError:
+        pass
+    return ("mine" if mine else "unclaimed"), False
+
+
+def _claim_chat_dir(workdir: Path, chat_key: str) -> bool:
+    """Write the owner marker unless one exists (hard link of a fresh temp: never an
+    overwrite, so two chats racing for one name cannot both win). Never raises."""
+    import tempfile  # noqa: PLC0415
+    import time  # noqa: PLC0415
+    try:
+        store = _ledger_store(workdir)
+        store.mkdir(parents=True, exist_ok=True)
+        marker = store / CHAT_OWNER_FILE
+        fd, tmp = tempfile.mkstemp(prefix=".owner.", suffix=".tmp", dir=str(store))
+        try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", errors="surrogatepass") as fh:
+                json.dump({"chat_key": str(chat_key), "claimed_at": int(time.time())}, fh,
+                          ensure_ascii=True)
+            try:
+                os.link(tmp, marker)
+                return True
+            except FileExistsError:
+                return False
+            except (OSError, AttributeError, NotImplementedError):
+                if os.path.lexists(marker):
+                    return False
+                os.replace(tmp, marker)        # filesystems without hard links
+                return True
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    except OSError:
+        return False
+
+
+def resolve_chat_dir(parent: Path | str, chat_key: str, *, claim: bool = False) -> Path:
+    """The directory of chat ``chat_key`` below ``parent`` (``<sessions>/<channel>/``).
+
+    The sanitised name alone is lossy, so two chat ids could resolve to ONE working
+    directory - one Claude session, one ``.corvin-history.md``, one ledger. The e-mail
+    bridge keys a chat by its From address, where ``a.b@x.com`` and ``a_b@x.com`` are two
+    people. Rule:
+
+    * the hashed directory exists -> that is the chat's (it was diverted before);
+    * the legacy name is this chat's or nobody's -> the legacy name. Every chat that
+      existed before this rule, and every chat whose name nobody else wants, keeps the
+      name it always had - nothing moves, no mirror of the name goes stale;
+    * the legacy name belongs to a DIFFERENT chat id (owner marker, or that id's recorded
+      turns) -> the hashed name. Where two ids already shared a directory, both get their
+      own new one and the shared directory is left as it is, untouched.
+
+    ``claim=True`` (the adapter, when it is about to use the directory) records this chat
+    as the owner of an unclaimed legacy name; ``claim=False`` never writes. Neither creates
+    the working directory. Never raises."""
+    parent = Path(parent)
+    raw = str(chat_key)
+    legacy, hashed = parent / legacy_chat_key(raw), parent / hashed_chat_key(raw)
+    try:
+        if hashed.is_dir():
+            return hashed
+        state, has_marker = _owner_state(legacy, raw)
+        if state == "foreign":
+            return hashed
+        if claim and not has_marker and not _claim_chat_dir(legacy, raw):
+            # Lost the race for the name (or the store is not writable): whoever holds
+            # the marker now decides.
+            if _owner_state(legacy, raw) == ("foreign", True):
+                return hashed
+    except Exception:  # noqa: BLE001 — identity resolver must never raise
+        pass
+    return legacy
 
 
 def _load_paths():
@@ -115,15 +285,17 @@ def claude_session_dirs(channel: str, chat_id: str,
     de-duplicated list; a caller that finds no existing directory in it has
     nothing to reset.
     """
-    safe = safe_chat_key(chat_id)
+    safe = legacy_chat_key(chat_id)
     out: list[Path] = []
 
     _paths = _load_paths()
     if _paths is not None:
-        # Canonical, tenant-aware (ADR-0007 Phase 1.2).
+        # Canonical, tenant-aware (ADR-0007 Phase 1.2). The chat's name below the channel
+        # directory is resolve_chat_dir's (the hashed name where the legacy one is held
+        # by another chat id) - never written from here (claim=False).
         try:
-            out.append(Path(_paths.voice_session_dir(channel, safe,
-                                                     tenant_id=tenant_id)))
+            _canon = Path(_paths.voice_session_dir(channel, safe, tenant_id=tenant_id))
+            out.append(resolve_chat_dir(_canon.parent, chat_id))
         except Exception:  # noqa: BLE001 — identity resolver must never raise
             pass
         # Legacy: adapter.SESSIONS_ROOT = voice_dir()/sessions, honouring the
@@ -134,7 +306,7 @@ def claude_session_dirs(channel: str, chat_id: str,
                 legacy_root = Path(xdg) / "corvin-voice" / "sessions"
             else:
                 legacy_root = Path(_paths.voice_dir(tenant_id)) / "sessions"
-            out.append(legacy_root / safe_chat_key(channel) / safe)
+            out.append(resolve_chat_dir(legacy_root / legacy_chat_key(channel), chat_id))
         except Exception:  # noqa: BLE001
             pass
 
@@ -189,7 +361,7 @@ def route_session_dir(workdir: Path, provider: str) -> Path:
     # providers cleared for different data out of one CLI session.
     import hashlib  # noqa: PLC0415
     digest = hashlib.sha256(str(provider).encode("utf-8")).hexdigest()[:8]
-    return base / (ROUTE_SESSION_PREFIX + safe_chat_key(provider) + "-" + digest)
+    return base / (ROUTE_SESSION_PREFIX + legacy_chat_key(provider) + "-" + digest)
 
 
 def _route_dirs(workdir: Path) -> list[Path]:

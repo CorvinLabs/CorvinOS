@@ -3340,6 +3340,59 @@ function a2aLabelReply(ctx, tail) {
   };
 }
 
+// Commands a non-owner (guest) may reach through dispatch(). Each one is
+// either a harmless notice / read of the caller's own state, or its handler
+// carries its own owner / role check (and answers with its own denial text).
+const GUEST_COMMANDS = new Set([
+  // notices
+  '/help', '/hilfe', '/welcome', '/willkommen', '/start', '/hi',
+  '/personas', '/persona', '/whoami',
+  // GDPR Art. 13/14 information right, disclosure, opt-out
+  '/privacy', '/datenschutz', '/join', '/pass', '/leave',
+  // self-gated on ctx.isOwner
+  '/vault', '/all', '/debug', '/auth-up', '/auth-down', '/auth-status',
+  '/on', '/open', '/off', '/close', '/invite', '/uninvite', '/kick', '/who',
+  '/engine', '/goal', '/objective', '/objectives', '/consent', '/proactive',
+  '/a2a', '/a2a-label',
+  // self-gated on the caller's Layer-18 role
+  '/role', '/roles', '/grant', '/revoke', '/quota', '/audit',
+  '/decision-review', '/decision', '/propose', '/proposals', '/proposal',
+]);
+
+// Every head dispatch() answers. Kept next to dispatch() on purpose: a command
+// added there and not here is NOT covered by the guest gate, and
+// test_guest_gate.js fails on it.
+const _STATIC_COMMANDS = new Set([
+  '/persona', '/settings', '/einstellungen', '/config', '/workflow', '/workflows',
+  '/schedule', '/profile', '/lang',
+  '/voice-user', '/voice-user-help', '/voice-user-show', '/voice-user-set',
+  '/voice-user-clear', '/voice-user-preview',
+  '/memory', '/vault', '/all', '/debug',
+  '/dialectic-on', '/dialectic-off', '/dialectic-status', '/dialectic-show', '/dialectic-set',
+  '/engine', '/ldd-on', '/ldd-off', '/ldd-status', '/ldd-set', '/ldd-preset',
+  '/auth-up', '/auth-down', '/auth-status',
+  '/on', '/open', '/off', '/close', '/invite', '/uninvite', '/kick', '/who',
+  '/role', '/roles', '/grant', '/revoke', '/leave', '/join', '/pass', '/proactive',
+  '/quota', '/audit', '/privacy', '/datenschutz', '/decision-review', '/decision',
+  '/goal', '/objective', '/objectives', '/status',
+  '/propose', '/proposals', '/proposal', '/consent',
+  '/ps', '/kill', '/nice', '/sig', '/signal', '/pipe', '/pipes', '/svc', '/services',
+  '/budget', '/tools', '/tool', '/agents', '/a2a', '/a2a-label',
+]);
+
+function _isGuestCommand(head) {
+  return GUEST_COMMANDS.has(head)
+    || HELP_TRIGGERS.has(head) || WELCOME_TRIGGERS.has(head)
+    || PERSONAS_TRIGGERS.has(head) || WHOAMI_TRIGGERS.has(head);
+}
+
+function _isKnownCommand(head) {
+  return _STATIC_COMMANDS.has(head)
+    || RESET_TRIGGERS.has(head) || WELCOME_TRIGGERS.has(head)
+    || HELP_TRIGGERS.has(head) || PERSONAS_TRIGGERS.has(head)
+    || WHOAMI_TRIGGERS.has(head) || SKILLS_TRIGGERS.has(head);
+}
+
 function dispatch(ctx) {
   if (!ctx || typeof ctx.text !== 'string') return null;
   const raw = ctx.text.trim();
@@ -3349,6 +3402,16 @@ function dispatch(ctx) {
   const firstSpace = raw.search(/\s/);
   const head = (firstSpace === -1 ? raw : raw.slice(0, firstSpace)).toLowerCase();
   const tail = firstSpace === -1 ? '' : raw.slice(firstSpace + 1).trim();
+
+  // Guest gate (review 2026-11-19, R3-NEW-2). A sender the daemon admitted
+  // WITHOUT owner rights (`isOwner: false` — an `audience=all` guest or an SPG
+  // guest) reaches only the commands in GUEST_COMMANDS: those are harmless
+  // notices, or their handler enforces the owner / role check itself. Every
+  // other command recognised below is refused here, so a handler that forgot
+  // its own owner check is not reachable by a guest.
+  if (ctx.isOwner === false && _isKnownCommand(head) && !_isGuestCommand(head)) {
+    return { reply: `${head}: owner-only command.`, kind: 'owner-only' };
+  }
 
   try {
     if (RESET_TRIGGERS.has(head)) return resetReply(ctx);
@@ -3581,6 +3644,9 @@ module.exports = {
     // /engine without going through the full dispatch() entry point.
     engineReply,
     ENGINE_SWITCH_CLI,
+    GUEST_COMMANDS,
+    _isKnownCommand,
+    _isGuestCommand,
     // Phase 0.5 (ADR-0553) — proactive-contact consent /proactive on|off.
     proactiveReply,
     PROACTIVE_CLI,

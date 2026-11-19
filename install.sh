@@ -1,6 +1,7 @@
 #!/bin/bash
 # install.sh — CorvinOS installer for Linux and macOS.
-# Includes auto-detection and installation of Claude Code.
+# Detects an existing Claude Code CLI. It does NOT install one unless asked:
+# pass --with-claude-code to download and run the vendor installer.
 #
 # Installs ONLY from a local CorvinOS checkout — there is no download mode.
 #
@@ -8,11 +9,24 @@
 #   git clone https://github.com/CorvinLabs/CorvinOS.git && cd CorvinOS
 #   ./install.sh                                  # install from this checkout
 #   sh install.sh --editable /path/to/CorvinOS    # install from another checkout
-#   sh install.sh --no-claude-code                # skip Claude Code installation
+#   sh install.sh --with-claude-code              # also install the Claude Code CLI
 #
-# POSIX sh, ZERO prerequisites: it bootstraps `uv` (a single static binary that
-# also manages its own Python), so you need NO system Python, NO pip, and NO
-# package manager pre-installed. Self-contained + Production Ready.
+# Written in POSIX sh (the shebang says bash, `sh install.sh` works too). It
+# needs curl or wget and the usual coreutils, and bootstraps `uv` (a single
+# static binary that also manages its own Python) - so NO system Python, NO pip
+# and NO package manager are required. Helper scripts it calls
+# (scripts/ensure-node.sh, scripts/install_repair.sh, scripts/setup.sh) and the
+# optional Claude Code installer are bash scripts; the repair check and the
+# Claude Code install are skipped with a notice when bash is absent.
+#
+# What it downloads: the pinned uv installer, Python packages (via uv), a
+# Node.js runtime (scripts/ensure-node.sh) - and, ONLY with --with-claude-code,
+# https://claude.ai/install.sh.
+#
+# Log and lock live in ${XDG_STATE_HOME:-$HOME/.local/state}/corvinos/ (mode
+# 700), not in the world-writable /tmp: there another local user could
+# pre-create the lock (blocking every install) or plant a symlink where the
+# log is written.
 #
 # Supply-chain pins (2026-09-10 adversarial review, ADR-0666):
 #   * uv    — PINNED. The installer script for exactly UV_PIN_VERSION is fetched
@@ -22,7 +36,11 @@
 #             embedded checksums. No `curl | sh` of a moving target.
 #   * corvinos — installed EDITABLE from the local checkout; never fetched
 #             from an index.
-#   * claude — OPTIONAL. Auto-installs via official installer if available.
+#   * claude — OPT-IN (--with-claude-code). NOT pinned and NOT checksummed:
+#             https://claude.ai/install.sh is a moving target that this script
+#             cannot verify, which is why it never runs by default. Until
+#             2026-11-19 it was fetched and executed on every install unless
+#             --no-claude-code was given.
 set -eu
 
 PKG="${CORVIN_PKG:-corvinos}"
@@ -30,10 +48,14 @@ UV_PIN_VERSION="0.12.9"
 UV_INSTALLER_URL="https://github.com/astral-sh/uv/releases/download/${UV_PIN_VERSION}/uv-installer.sh"
 UV_INSTALLER_SHA256="222e006c0fe4a0d793031833e469b21df72311f4e3526ffecca0e19e6dfabc32"
 
-INSTALL_LOG="${CORVIN_INSTALL_LOG:-${TMPDIR:-/tmp}/corvinos-install.log}"
+# A relative XDG_STATE_HOME is invalid (XDG Base Directory spec) and is ignored:
+# it would put the lock under whatever directory each script happens to run in.
+case "${XDG_STATE_HOME:-}" in ""|/*) ;; *) echo "  ! ignoring XDG_STATE_HOME='$XDG_STATE_HOME' (not an absolute path) - using \$HOME/.local/state" >&2; unset XDG_STATE_HOME ;; esac
+STATE_DIR="${XDG_STATE_HOME:-${HOME:-}/.local/state}/corvinos"
+INSTALL_LOG="${CORVIN_INSTALL_LOG:-$STATE_DIR/corvinos-install.log}"
 OPEN_LAN=0
 EDITABLE=""
-SKIP_CLAUDE=0
+WITH_CLAUDE=0
 FORCE_AUTOSTART=0
 ALWAYS_ON=0
 PRESET=""
@@ -56,8 +78,38 @@ _await() {
     "$@" </dev/null >>"$INSTALL_LOG" 2>&1 &
     _aw_pid=$!
     while kill -0 "$_aw_pid" 2>/dev/null; do printf '.'; sleep 1; done
-    if wait "$_aw_pid"; then printf ' %s\n' "$(_green '✓')"; return 0
-    else printf ' %s  %s\n' "$(_yellow '⚠')" "$(_dim "(details: $INSTALL_LOG)")"; return 1; fi
+    if wait "$_aw_pid"; then _aw_pid=""; printf ' %s\n' "$(_green '✓')"; return 0
+    else _aw_pid=""; printf ' %s  %s\n' "$(_yellow '⚠')" "$(_dim "(details: $INSTALL_LOG)")"; return 1; fi
+}
+
+# _kill_tree PID - end a background step and everything it started. A step run
+# with "&" from a non-interactive sh ignores SIGINT, and a TERM sent to this
+# script alone never reaches it: after Ctrl-C the script exited, released its
+# lock, and the step (git fetch, uv sync, npm build) kept writing the tree.
+_tree_pids() {  # PID and its descendants, parents first
+    printf '%s\n' "$1"
+    for _tp_c in $(pgrep -P "$1" 2>/dev/null || ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$1" '$2 == p { print $1 }'); do
+        _tree_pids "$_tp_c"
+    done
+}
+_kill_tree() {
+    _kt_all="$(_tree_pids "$1")"
+    for _kt_p in $_kt_all; do kill -TERM "$_kt_p" 2>/dev/null || true; done
+    _kt_w=0
+    while [ "$_kt_w" -lt 10 ]; do
+        _kt_alive=0
+        for _kt_p in $_kt_all; do kill -0 "$_kt_p" 2>/dev/null && _kt_alive=1; done
+        [ "$_kt_alive" = 0 ] && return 0
+        sleep 1; _kt_w=$((_kt_w + 1))
+    done
+    for _kt_p in $_kt_all; do kill -KILL "$_kt_p" 2>/dev/null || true; done
+    return 0
+}
+# _on_signal CODE - INT/TERM: stop the running background step, THEN leave.
+_on_signal() {
+    trap '' INT TERM
+    if [ -n "${_aw_pid:-}" ] && kill -0 "$_aw_pid" 2>/dev/null; then _kill_tree "$_aw_pid"; fi
+    exit "$1"
 }
 
 _sha256_of() {
@@ -103,11 +155,14 @@ while [ $# -gt 0 ]; do
             PRESET="$2"; shift 2 ;;
         --lan)
             OPEN_LAN=1; shift ;;
+        --with-claude-code)
+            WITH_CLAUDE=1; shift ;;
         --no-claude-code)
-            SKIP_CLAUDE=1; shift ;;
+            # The default since 2026-11-19; still accepted so old command lines keep working.
+            WITH_CLAUDE=0; shift ;;
         *)
             die "Unknown argument: $1
-Usage: $0 [--editable|-e <path>] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}] [--no-claude-code]" ;;
+Usage: $0 [--editable|-e <path>] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}] [--with-claude-code]" ;;
     esac
 done
 
@@ -158,7 +213,17 @@ printf '\n%s — self-hosted, local-first AI operating system\n\n' "$(_bold 'Cor
 # a lock whose owner is gone (killed run, reboot) is stale and taken over —
 # otherwise it would block every later install AND keep the watchdog, which
 # stands down while the lock is held, silent forever. Older than 2 h: stale.
-LOCK_DIR="${TMPDIR:-/tmp}/corvinos-setup.lock"
+#
+# The lock (and the log) live in a per-user state directory, mode 700 - see the
+# header. update.sh uses the same path.
+LOCK_DIR="$STATE_DIR/corvinos-setup.lock"
+_prepare_state_dir() {
+    [ -n "${XDG_STATE_HOME:-}" ] || [ -n "${HOME:-}" ] || return 1
+    ( umask 077 && mkdir -p "$STATE_DIR" ) 2>/dev/null || return 1
+    chmod 700 "$STATE_DIR" 2>/dev/null || true
+    # Refuse a state directory that is a symlink or owned by someone else.
+    [ -d "$STATE_DIR" ] && [ ! -L "$STATE_DIR" ] && [ -O "$STATE_DIR" ]
+}
 _take_lock() {
     if mkdir "$LOCK_DIR" 2>/dev/null; then echo $$ >"$LOCK_DIR/pid"; return 0; fi
     _lk_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
@@ -173,8 +238,14 @@ _take_lock() {
 # No coreutils on PATH at all → no lock (the checks below then report what
 # is actually missing, instead of a phantom "another install is running").
 if command -v mkdir >/dev/null 2>&1 && command -v rm >/dev/null 2>&1; then
+    _prepare_state_dir || die "cannot create a private state directory at $STATE_DIR (set XDG_STATE_HOME or HOME to a directory you own)."
     _take_lock || die "another CorvinOS install/update is running (lock: $LOCK_DIR, pid $(cat "$LOCK_DIR/pid" 2>/dev/null))."
-    trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
+    # A signal must END the run: a handler that only removes the lock returns
+    # into the script, which then carries on without it. exit runs the EXIT trap.
+    trap 'rm -rf "$LOCK_DIR"' EXIT
+    # The background step of _await is stopped first (see _kill_tree).
+    trap '_on_signal 130' INT
+    trap '_on_signal 143' TERM
 fi
 
 # Corporate networks (Citrix, Zscaler, TLS-inspecting proxies) re-sign HTTPS
@@ -228,24 +299,24 @@ echo "  uv $(uv --version 2>/dev/null | awk '{print $2}') — $(_green OK)"
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 1b: Claude Code detection & installation (optional, Production Ready)
 # ─────────────────────────────────────────────────────────────────────────────
-if [ "$SKIP_CLAUDE" != "1" ]; then
-    CLAUDE_CODE_PATH=""
-
-    # Try to find existing Claude Code installation
-    if command -v claude >/dev/null 2>&1; then
-        CLAUDE_CODE_PATH="$(command -v claude)"
-        echo "  Claude Code found at $CLAUDE_CODE_PATH — $(_green OK)"
+# Detection always runs. Installation is opt-in (--with-claude-code): the vendor
+# installer is an unpinned, unverifiable download that executes as this user.
+CLAUDE_CODE_PATH=""
+if command -v claude >/dev/null 2>&1; then
+    CLAUDE_CODE_PATH="$(command -v claude)"
+    echo "  Claude Code found at $CLAUDE_CODE_PATH — $(_green OK)"
+elif [ "$WITH_CLAUDE" != "1" ]; then
+    printf '  %s Claude Code not found — not installed (the console chat needs it).\n' "$(_yellow '⚠')"
+    printf '    Install it yourself (https://claude.ai/install.sh) or re-run with --with-claude-code.\n'
+else
+    echo "  Claude Code not found — installing it (--with-claude-code) ..."
+    # The official installer is a bash script (`#!/bin/bash`, arrays, `[[`):
+    # under `sh` (dash on Debian/Ubuntu) it dies at line 9 with a syntax error.
+    if ! command -v bash >/dev/null 2>&1; then
+        printf '  %s bash not found — Claude Code not installed; chat needs it (https://claude.ai/install.sh).\n' "$(_yellow '⚠')"
     else
-        # Install it without asking — the console chat runs on it, and the
-        # installer is unattended by design (one run, no questions).
-        echo "  Claude Code not found — installing it ..."
         _claude_install_sh="$(mktemp "${TMPDIR:-/tmp}/claude-install.XXXXXX")" || die "mktemp failed"
-        # The official installer is a bash script (`#!/bin/bash`, arrays, `[[`):
-        # under `sh` (dash on Debian/Ubuntu) it dies at line 9 with a syntax error
-        # and every fresh Debian/Ubuntu install was left without a chat engine.
-        if ! command -v bash >/dev/null 2>&1; then
-            printf '  %s bash not found — Claude Code not installed; chat needs it (https://claude.ai/install.sh).\n' "$(_yellow '⚠')"
-        elif _fetch "https://claude.ai/install.sh" "$_claude_install_sh" 60 2>/dev/null \
+        if _fetch "https://claude.ai/install.sh" "$_claude_install_sh" 60 2>/dev/null \
            && _await "Installing Claude Code" bash "$_claude_install_sh"; then
             export PATH="$HOME/.local/bin:$HOME/.claude/local:$PATH"
             CLAUDE_CODE_PATH="$(command -v claude 2>/dev/null || true)"
@@ -302,7 +373,12 @@ fi
 # Phase 1c: Cross-platform compatibility check (ADR-0666 supplement)
 # ─────────────────────────────────────────────────────────────────────────────
 REPAIR_SCRIPT="$REPO_DIR/scripts/install_repair.sh"
-if [ -f "$REPAIR_SCRIPT" ]; then
+if [ -f "$REPAIR_SCRIPT" ] && ! command -v bash >/dev/null 2>&1; then
+    # install_repair.sh is a bash script. Without bash the check cannot run;
+    # calling it anyway made `bash: not found` read as "platform issues
+    # detected" and ended the install in a repair that could never succeed.
+    printf '  %s bash not found — cross-platform compatibility check skipped.\n' "$(_yellow '⚠')"
+elif [ -f "$REPAIR_SCRIPT" ]; then
     echo "  Checking cross-platform compatibility (operator→corvin_operator rename) ..."
     if ! bash "$REPAIR_SCRIPT" --diagnose >/dev/null 2>&1; then
         printf '  %s Platform issues detected. Attempting repair...\n' "$(_yellow '⚠')"

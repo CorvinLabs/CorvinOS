@@ -2,8 +2,10 @@
 
 Operators author forge tools directly in the console. Tools are stored
 in the user-scope forge directory and picked up by the existing tool
-listing endpoint. A preview endpoint runs the tool with sample input
-inside a subprocess (bwrap sandbox in production; plain subprocess in dev).
+listing endpoint. A preview endpoint runs the tool with sample input in a
+plain child process of the console. There is NO sandbox (no bwrap, no
+container): the child runs as the console's OS user with a minimal
+environment and a throwaway working directory - see ``preview_tool``.
 
 Routes:
   GET    /tools/manual                  list manually created tools
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -31,9 +34,12 @@ from pydantic import BaseModel, Field
 from .. import audit as console_audit
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
+from .license_gates import require_forge_capability
 
 from .. import _bootstrap
 _forge_paths = _bootstrap.forge_paths
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -263,17 +269,70 @@ def delete_manual_tool(
     return {"ok": True, "name": name}
 
 
+def _require_owner(rec: Any) -> None:
+    """Running operator code is an owner action (same rule as
+    ``skill_forge_distribution_routes._owner``)."""
+    if getattr(rec, "tier", None) not in {"owner", "admin"}:
+        raise HTTPException(http_status.HTTP_403_FORBIDDEN, "owner or admin required")
+
+
+#: Variables a preview child may inherit. Everything else of the console's
+#: environment - provider API keys, bridge tokens, CORVIN_* paths, the audit
+#: anchor key path - is withheld (review 2026-11-19 round 3, R3-NEW-9).
+_PREVIEW_ENV_PASSTHROUGH = ("PATH", "LANG", "LC_ALL", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR")
+
+
+def _preview_env(workdir: str) -> dict[str, str]:
+    """Minimal environment for the preview child: an allowlist of the console's
+    variables, with HOME and the temp dir pointed at the throwaway *workdir*."""
+    env = {k: os.environ[k] for k in _PREVIEW_ENV_PASSTHROUGH if os.environ.get(k)}
+    env.setdefault("PATH", "/usr/bin:/bin")
+    env.update({
+        "HOME": workdir, "USERPROFILE": workdir,
+        "TMPDIR": workdir, "TEMP": workdir, "TMP": workdir,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    })
+    return env
+
+
+def _run_preview(runner_code: str) -> "subprocess.CompletedProcess[str]":
+    """Run *runner_code* with a minimal env in a fresh temp cwd (removed after).
+
+    ``-I`` isolates the interpreter from PYTHON* variables, the user site and
+    the current directory on ``sys.path``."""
+    with tempfile.TemporaryDirectory(prefix="corvin-tool-preview-") as workdir:
+        return subprocess.run(  # noqa: S603 - argv list, no shell
+            [sys.executable, "-I", "-c", runner_code],
+            capture_output=True,
+            text=True,
+            timeout=_PREVIEW_TIMEOUT, encoding="utf-8", errors="replace",
+            env=_preview_env(workdir),
+            cwd=workdir,
+            stdin=subprocess.DEVNULL,
+        )
+
+
 @router.post("/tools/preview")
 def preview_tool(
     body: ToolPreviewRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _lic: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
 ) -> dict[str, Any]:
     """Run the tool impl with sample inputs and return stdout/stderr.
 
-    SECURITY: Executes operator-supplied Python in a plain subprocess (no bwrap).
-    Access is gated by CSRF + session — only authenticated console operators can call
-    this endpoint. Do NOT expose it to untrusted users.
+    SECURITY - what this is and is not. The impl runs in a plain child process
+    as the console's OS user. It is NOT sandboxed: it can read and write every
+    file that user can, and open network connections. What the endpoint does
+    guarantee: the child gets a minimal environment (none of the console's
+    secrets), a throwaway working directory, no stdin and a hard timeout; the
+    caller must hold an owner session (CSRF-checked) and the ``forge.create``
+    capability. Isolation against hostile tool code needs an OS-level sandbox
+    and is not provided here.
     """
+    _require_owner(rec)
+    if not _TOOL_NAME_RE.match(body.name):
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid tool name")
     meta = _load_tool_meta(rec.tenant_id, body.name)
     if meta is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"tool {body.name!r} not found")
@@ -295,12 +354,7 @@ inputs = _json.loads({_inputs_json!r})
 """ + impl_path.read_text(encoding="utf-8")
 
     try:
-        result = subprocess.run(
-            [sys.executable, "-c", runner_code],
-            capture_output=True,
-            text=True,
-            timeout=_PREVIEW_TIMEOUT, encoding="utf-8", errors="replace",
-        )
+        result = _run_preview(runner_code)
         console_audit.action_performed(
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,

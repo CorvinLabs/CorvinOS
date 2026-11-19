@@ -124,6 +124,9 @@ DEFAULT_ENGINE_HOSTS: dict[str, str] = {
     "video_producer_openai": "api.openai.com",             # tts_engine "openai" (default) and the first tier of "auto"
     "video_producer_edge":   "speech.platform.bing.com",   # edge-tts, the second tier of "auto"
     "video_producer":        "translate.google.com",       # tts_engine "gtts" (legacy)
+    # Speech-to-text: the user's voice message is uploaded to the provider
+    # (voice/scripts/stt/resolver.py checks this before the OpenAI provider runs).
+    "stt_openai":            "api.openai.com",
 }
 
 

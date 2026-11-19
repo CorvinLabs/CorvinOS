@@ -12,6 +12,11 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
+import {
+  controlPlaneErrorText,
+  controlPlaneFetch,
+  isControlPlaneUnavailable,
+} from "@/lib/control-plane";
 
 const API_BASE = "/v1/console/control-plane/plugins";
 
@@ -28,14 +33,12 @@ export default function ControlPlanePluginsPage() {
   const [searchTerm, setSearchTerm] = React.useState("");
 
   // Fetch plugins
-  const { data: plugins, isLoading } = useQuery<Plugin[]>({
+  const { data: plugins, isLoading, error } = useQuery<Plugin[]>({
     queryKey: ["control-plane-plugins"],
-    queryFn: async () => {
-      const res = await fetch(`${API_BASE}`);
-      if (!res.ok) throw new Error("Failed to load plugins");
-      return res.json();
-    },
+    queryFn: () => controlPlaneFetch<Plugin[]>(API_BASE),
+    retry: false,
   });
+  const unavailable = isControlPlaneUnavailable(error);
 
   // There is no install here. A plugin is installed through the ONE marketplace
   // install route (POST /api/v1/marketplace/plugins/{id}/install, ADR-0892): it
@@ -53,11 +56,9 @@ export default function ControlPlanePluginsPage() {
       enable: boolean;
     }) => {
       const endpoint = enable ? "enable" : "disable";
-      const res = await fetch(`${API_BASE}/${pluginId}/${endpoint}`, {
+      return controlPlaneFetch(`${API_BASE}/${encodeURIComponent(pluginId)}/${endpoint}`, {
         method: "PATCH",
       });
-      if (!res.ok) throw new Error(`Failed to ${endpoint} plugin`);
-      return res.json();
     },
     onSuccess: (_, { enable }) => {
       queryClient.invalidateQueries({ queryKey: ["control-plane-plugins"] });
@@ -67,26 +68,32 @@ export default function ControlPlanePluginsPage() {
           : "Plugin disabled successfully",
       });
     },
-    onError: () => {
-      toast({ title: "Operation failed", variant: "destructive" });
+    onError: (err, { enable }) => {
+      toast({
+        title: enable ? "Plugin was not enabled" : "Plugin was not disabled",
+        description: controlPlaneErrorText(err),
+        variant: "destructive",
+      });
     },
   });
 
   // Uninstall plugin
   const uninstallMutation = useMutation({
     mutationFn: async (pluginId: string) => {
-      const res = await fetch(`${API_BASE}/${pluginId}`, {
+      return controlPlaneFetch(`${API_BASE}/${encodeURIComponent(pluginId)}`, {
         method: "DELETE",
       });
-      if (!res.ok) throw new Error("Failed to uninstall plugin");
-      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["control-plane-plugins"] });
       toast({ title: "Plugin uninstalled successfully" });
     },
-    onError: () => {
-      toast({ title: "Failed to uninstall plugin", variant: "destructive" });
+    onError: (err) => {
+      toast({
+        title: "Plugin was not uninstalled",
+        description: controlPlaneErrorText(err),
+        variant: "destructive",
+      });
     },
   });
 
@@ -112,18 +119,42 @@ export default function ControlPlanePluginsPage() {
         </Button>
       </div>
 
-      {/* Search */}
-      <div className="mb-4">
-        <Input
-          placeholder="Search plugins..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
-      </div>
+      {/* Search — only when there is a list to search */}
+      {!unavailable && !error && (
+        <div className="mb-4">
+          <Input
+            placeholder="Search plugins..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+      )}
 
       {/* Plugin List */}
       <div className="space-y-3">
-        {isLoading ? (
+        {unavailable ? (
+          <div
+            className="rounded-lg border border-dashed p-8 text-center"
+            data-testid="control-plane-plugins-unavailable"
+            role="status"
+          >
+            <p className="text-gray-600">
+              Plugin management from this page is not available on this build.
+            </p>
+            <p className="mt-2 text-sm text-gray-600">
+              Installed plugins and their real state are in the{" "}
+              <Link className="underline" to="/app/marketplace?tab=installed">
+                Marketplace
+              </Link>
+              .
+            </p>
+          </div>
+        ) : error ? (
+          <div className="rounded-lg border border-destructive p-8 text-center" role="alert">
+            <p className="font-medium">Plugins could not be loaded</p>
+            <p className="mt-1 text-sm text-gray-600">{controlPlaneErrorText(error)}</p>
+          </div>
+        ) : isLoading ? (
           <>
             <Skeleton className="h-12" />
             <Skeleton className="h-12" />

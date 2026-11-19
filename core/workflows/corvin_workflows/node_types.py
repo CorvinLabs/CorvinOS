@@ -163,6 +163,25 @@ def _execute_fan_out(*, node, engine, state, inputs, audit) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+class DelegationLoopFailed(RuntimeError):
+    """The manager of a delegation_loop ended the loop without a result: it said FAIL, or its
+    answer was not a decision the protocol knows (unparseable / unknown ``decision``).
+
+    Raised so the runner's ordinary failure path applies (``node.failed``, then ``abort`` or
+    ``fail_branch``). Returning it as a successful node output made the run ``complete`` and
+    let downstream nodes consume a result that does not exist (review PLS-1). ``final_failure``
+    keeps the runner from retrying: a retry would re-run the whole loop, spawn its workers
+    again and repeat their side effects for a verdict the manager already gave.
+    """
+
+    final_failure = True
+
+    def __init__(self, message: str, *, iteration: int, workers_spawned: int) -> None:
+        super().__init__(message)
+        self.iteration = iteration
+        self.workers_spawned = workers_spawned
+
+
 def _validate_delegation_loop(node: dict[str, Any]) -> None:
     cfg = node.get("config") or {}
     manager = cfg.get("manager")
@@ -213,7 +232,7 @@ def _execute_delegation_loop(*, node, engine, state, inputs, audit) -> dict[str,
 
     iterations: list[dict[str, Any]] = []
     workers_spawned = 0
-    terminal = None  # set by COMPLETE / FAIL / budget-hit
+    terminal = None  # set by COMPLETE / budget-hit; FAIL and an unknown decision raise
 
     for it in range(1, max_loops + 1):
         manager_call = EngineCall(
@@ -237,6 +256,12 @@ def _execute_delegation_loop(*, node, engine, state, inputs, audit) -> dict[str,
             workers_spawned=workers_spawned,
         )
         decision = engine.spawn(manager_call)
+        if not isinstance(decision, dict):
+            raise DelegationLoopFailed(
+                f"delegation loop: the manager's answer is not a decision object "
+                f"({type(decision).__name__}) at iteration {it}",
+                iteration=it, workers_spawned=workers_spawned,
+            )
         kind = decision.get("decision")
 
         if kind == "COMPLETE":
@@ -250,24 +275,34 @@ def _execute_delegation_loop(*, node, engine, state, inputs, audit) -> dict[str,
             break
 
         if kind == "FAIL":
-            terminal = {
-                "state": "failed",
-                "iteration": it,
-                "reason": decision.get("reason", "manager said FAIL"),
-            }
-            iterations.append({"iteration": it, "manager": decision, "workers": []})
-            break
+            # PLS-1: a manager FAIL is a node failure, never a successful output.
+            reason = str(decision.get("reason") or "manager said FAIL")
+            raise DelegationLoopFailed(
+                f"delegation loop: the manager reported FAIL at iteration {it}: {reason[:500]}",
+                iteration=it, workers_spawned=workers_spawned,
+            )
 
         if kind != "DELEGATE":
-            terminal = {
-                "state": "failed",
-                "iteration": it,
-                "reason": f"unknown manager decision: {kind!r}",
-            }
-            iterations.append({"iteration": it, "manager": decision, "workers": []})
-            break
+            raise DelegationLoopFailed(
+                f"delegation loop: the manager returned an unknown decision "
+                f"({str(kind)[:80]!r}) at iteration {it}",
+                iteration=it, workers_spawned=workers_spawned,
+            )
 
-        workers_spec = list(decision.get("workers") or [])
+        # A DELEGATE without workers delegates nothing: the loop would call the manager
+        # again and again until max_loops and end "partial" for a decision that was never
+        # actionable (the legacy executor raises here too). Same for a `workers` that is
+        # not a list of {agent, ...} objects — outside the protocol, never retried.
+        raw_workers = decision.get("workers")
+        if (not isinstance(raw_workers, list) or not raw_workers
+                or not all(isinstance(w, dict) and isinstance(w.get("agent"), str) and w.get("agent")
+                           for w in raw_workers)):
+            raise DelegationLoopFailed(
+                f"delegation loop: the manager said DELEGATE without a usable workers list "
+                f"({type(raw_workers).__name__}) at iteration {it}",
+                iteration=it, workers_spawned=workers_spawned,
+            )
+        workers_spec = list(raw_workers)
         # Trim to budget so we never overshoot max_total_workers
         remaining = max_total_workers - workers_spawned
         if len(workers_spec) > remaining:

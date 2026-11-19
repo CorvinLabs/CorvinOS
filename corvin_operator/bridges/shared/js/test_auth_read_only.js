@@ -16,7 +16,7 @@
 //                                          authOk path remains the gate
 //   6. collision (whitelist ∩ read_only) → classify=owner,    isReadOnly=false
 //                                          (whitelist beats read_only)
-//   7. audience='all' on a chat profile  → classify=owner,    isReadOnly=false
+//   7. audience='all' on a chat profile  → classify=guest (never owner), isReadOnly=false
 //                                          (chat-open trumps read_only)
 //   8. chain integrity: voice-audit verify rc=0 over the events written
 //
@@ -143,8 +143,13 @@ t('no extra drop event for collision-uid',
 
 // 7. audience='all' on a chat profile → read_only is bypassed in that chat
 console.log('\n[audience=all on a chat profile bypasses read_only]');
-t('classify(observer-uid) on open-chat = owner',
-  auth.classify('observer-uid', 'open-chat') === 'owner');
+// 2026-11-19 (R3-NEW-2): an open chat admits the sender as GUEST. It used to
+// classify as 'owner', which handed /vault and the owner surface to everyone
+// in a `/all on` chat.
+t('classify(observer-uid) on open-chat = guest (never owner)',
+  auth.classify('observer-uid', 'open-chat') === 'guest');
+t('isOwner(observer-uid) is false', auth.isOwner('observer-uid') === false);
+t('isOwner(owner-uid) is true', auth.isOwner('owner-uid') === true);
 const r7 = auth.readOnlyOk('observer-uid', 'hi from open chat', 'open-chat');
 t('readOnlyOk false in audience=all chat',
   r7.isReadOnly === false);

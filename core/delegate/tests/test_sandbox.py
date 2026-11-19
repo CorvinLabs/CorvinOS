@@ -200,7 +200,9 @@ class DecideSandboxTests(unittest.TestCase):
 
 class _RecordingEngine:
     name = "fake"
-    capabilities: dict = {}
+    # Declares launcher-prefix support, like the real CLI engines do; an engine
+    # without it is never handed a bwrap prefix (see NoPrefixSupportTests).
+    capabilities: dict = {"argv_prefix": True}
 
     def __init__(self):
         self.spawn_kwargs: dict = {}

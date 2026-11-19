@@ -165,20 +165,29 @@ def test_nonfinite_confidence_on_flagged_clear_escalates():
         assert d.action == "escalate", bad
 
 
-def test_very_low_confidence_clear_escalates_without_tier0_hit():
-    # Reconciled 2026-07-05: a VERY-low-confidence clear (<0.50) escalates even
-    # with NO Tier-0 hit. The later operator decision 2026-06-30 (classify() line
-    # "confidence < 0.50 → escalate") supersedes the earlier 2026-06-25 allow-all
-    # policy and aligns with this module's fail-CLOSED header contract
-    # ("classifier-uncertainty → escalate, never silent allow") and the CLAUDE.md
-    # L44 red-line. A 0.0-confidence clear is MAXIMUM uncertainty — allowing it
-    # would be a fail-open. Benign tasks are meant to clear with HIGH confidence
-    # (>0.85 → allow); only a genuinely-uncertain classifier output escalates.
+def test_very_low_confidence_clear_without_tier0_hit_allows_with_its_own_code():
+    # Review 2026-11-19 round 2 (R2-SEC-2). Supersedes the 2026-07-05 expectation
+    # that this escalates. What actually happened with that escalate: the gate
+    # wrote ``house_rules.escalated`` and the bridge adapter then let the turn RUN
+    # (``house_rules.allowed_after_lowconf``), while the console blocked it - two
+    # surfaces, two outcomes, and a chain record that said "blocked" for a turn
+    # that executed. The decision is now taken ONCE, here: an unsure clear with
+    # NO Tier-0 keyword hit has nothing pointing at a violation - it is allowed,
+    # and the chain says exactly that (``house_rules.allowed`` + this code + the
+    # low confidence). An unsure clear WITH a keyword hit still escalates and
+    # blocks everywhere (next test).
+    events = []
+
     def cls(task, rules, auth):
         return ("", 0.0, "unsure")   # maximum-uncertainty clear, no rule named
-    g = H.HouseRulesGate(policy=_policy(), classifier=cls)
+    g = H.HouseRulesGate(policy=_policy(), classifier=cls,
+                         audit_writer=lambda e, s, d: events.append((e, d)))
     d = g.classify("a very long benign-looking task with no keyword")  # tier0_hits == 0
-    assert d.action == "escalate" and not d.allowed
+    assert d.action == "allow" and d.allowed
+    assert d.reason == "clear_low_confidence_no_tier0_hit"
+    assert [e for e, _ in events] == ["house_rules.allowed"]
+    assert events[0][1]["reason"] == "clear_low_confidence_no_tier0_hit"
+    assert events[0][1]["confidence"] == 0.0
 
 
 def test_low_confidence_clear_still_escalates_with_tier0_hit():
@@ -199,21 +208,52 @@ def test_confident_clear_allows_on_default_allow():
     assert g.classify("write a poem about spring").action == "allow"
 
 
-def test_benign_csv_analysis_escalates_when_classifier_very_unsure():
-    # Reconciled 2026-07-05 (supersedes the 2026-06-25 allow-all expectation):
-    # a 0.4-confidence clear is below the 0.50 floor → escalate (fail-closed),
-    # per operator decision 2026-06-30 + the module's "uncertainty → escalate"
-    # contract. The friction fix is NOT to fail-open the gate on an uncertain
-    # clear, but to have the classifier return HIGH confidence on genuinely
-    # benign work — a well-tuned classifier clears "analyse logs.csv" at >0.85,
-    # which allows (see test_confident_clear_allows_on_default_allow). Only a
-    # hesitant/low-quality clear escalates to human review.
+def test_benign_csv_analysis_is_not_blocked_when_classifier_is_unsure():
+    # Round 2 (R2-SEC-2): the documented benign case (layer-44-house-rules.md,
+    # "0.4 confidence 'analyse logs.csv' ... is now allowed"). No Tier-0 pattern
+    # of this policy matches, the classifier named no rule: allow, audited as a
+    # low-confidence clear - not escalated.
     def cls(task, rules, auth):
         return ("", 0.4, "seems fine but uncertain")
     g = H.HouseRulesGate(policy=_policy(), classifier=cls)
-    d = g.classify("analyse the malware logs.csv file for patterns and generate a report")
-    # No Tier-0 match but confidence 0.4 < 0.50 floor → escalate (fail-closed).
+    d = g.classify("analyse the logs.csv file for patterns and generate a report")
+    assert d.action == "allow" and d.reason == "clear_low_confidence_no_tier0_hit"
+
+
+def test_unsure_clear_with_one_tier0_hit_escalates_with_the_blocking_code():
+    def cls(task, rules, auth):
+        return ("", 0.4, "seems fine but uncertain")
+    g = H.HouseRulesGate(policy=_policy(), classifier=cls)
+    d = g.classify("write an exploit for this service")   # one Tier-0 hit
     assert d.action == "escalate" and not d.allowed
+    # NOT the legacy "clear_low_confidence": the bridge adapter waves that one through.
+    assert d.reason == "clear_unsure_tier0_flagged"
+
+
+def test_prompt_over_the_classifier_window_always_escalates():
+    def cls(task, rules, auth):
+        return ("", 0.99, "the part I read is clean")
+    g = H.HouseRulesGate(policy=_policy(), classifier=cls)
+    # The window the overlapping chunks really cover (R3-SEC-2), not
+    # CHUNK_CHARS * MAX_CHUNKS.
+    cap = H._HOUSE_RULES_WINDOW
+    assert cap == 162000
+    d = g.classify("a " * (cap // 2 + 10))
+    assert d.action == "escalate" and d.reason == "prompt_over_classifier_cap"
+    assert g.classify("a " * (cap // 2 - 10)).action == "allow"
+
+
+def test_verdict_without_confidence_is_bad_json_not_a_zero_confidence_clear():
+    import pytest as _pytest
+    for raw in ('{"violated_rule_id": ""}',
+                '{"violated_rule_id": "", "confidence": null}',
+                '{"violated_rule_id": "", "confidence": "high"}',
+                '{"violated_rule_id": "", "confidence": 1e999}',
+                'noise {"violated_rule_id": ""}'):
+        with _pytest.raises(H._HouseRulesClassifierError) as ei:
+            H._house_rules_parse_verdict(raw)
+        assert ei.value.cause == "bad_json", raw
+    assert H._house_rules_parse_verdict('{"violated_rule_id": "", "confidence": 0.2}')[1] == 0.2
 
 
 def test_clear_honours_deny_by_default_tenant():
@@ -352,7 +392,8 @@ def test_no_json_retry_reinforces_prompt_and_recovers(monkeypatch):
             self.stderr = ""
 
     def _fake_run(cmd, capture_output, text, timeout, **_kw):
-        prompt = cmd[-1]
+        # The prompt rides on stdin (never argv: /proc/<pid>/cmdline is readable).
+        prompt = _kw.get("input") or cmd[-1]
         calls.append(prompt)
         if len(calls) == 1:
             # First attempt: model replies with prose, no JSON object at all.

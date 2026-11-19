@@ -218,9 +218,9 @@ class SkillForgeMCPServer:
         """The prefix this caller may mutate: ``""`` = the operator's wildcard,
         ``None`` = no persona (owns nothing). A persona with a ``persona_namespaces``
         entry gets that prefix; a wildcard launcher name with a verified launch record
-        gets ``""``; every other persona gets its own name (RL-5/RL-6), with every
-        character a skill name cannot carry mapped to ``_`` (``my-persona`` →
-        ``my_persona.``)."""
+        gets ``""``; every other persona gets its own name (RL-5/RL-6). A name a skill
+        name cannot carry does NOT collapse onto another persona's (``my-persona`` is
+        not ``my_persona.``): see :func:`persona_namespace` (review R3-NEW-37)."""
         if not self.caller_persona:
             return None
         policy = self._get_policy()
@@ -229,8 +229,8 @@ class SkillForgeMCPServer:
             return prefix
         if self.caller_persona in launch_record.WILDCARD_PERSONAS and self._launch_record is not None:
             return ""
-        import re  # noqa: PLC0415
-        return re.sub(r"[^A-Za-z0-9_]", "_", self.caller_persona)
+        own_namespace = persona_namespace(self.caller_persona)
+        return own_namespace
 
     def _get_policy(self):
         """Lazy-load the bundle-default forge.policy.Policy. Returns None
@@ -719,6 +719,26 @@ class SkillForgeMCPServer:
 
     def _tool_error(self, msgid: Any, text: str) -> None:
         self._tool_envelope(msgid, ok=False, error=text)
+
+
+def persona_namespace(persona: str) -> str:
+    """The implicit namespace of a persona without a ``persona_namespaces`` entry.
+
+    A persona whose name is a valid skill-name segment owns exactly that name. Any
+    other name (``my-persona``) used to be mapped character by character to ``_`` -
+    onto ``my_persona``, the namespace of a DIFFERENT persona, so the two could
+    update, grade and purge each other's skills (review R3-NEW-37). Such a name now
+    gets its sanitised form plus a digest of the real name
+    (``my_persona_x1f3a9c2e``): distinct personas get distinct namespaces. An
+    operator who wants a readable one sets ``persona_namespaces`` in the policy.
+    """
+    import hashlib  # noqa: PLC0415
+    import re  # noqa: PLC0415
+
+    if re.fullmatch(r"[A-Za-z0-9_]+", persona):
+        return persona
+    digest = hashlib.sha256(persona.encode("utf-8")).hexdigest()[:8]
+    return re.sub(r"[^A-Za-z0-9_]", "_", persona) + "_x" + digest
 
 
 class _ServerPolicy:

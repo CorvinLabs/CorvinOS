@@ -19,6 +19,8 @@ the value ever entering the model context.
 """
 from __future__ import annotations
 
+from typing import Callable
+
 import ipaddress
 import logging
 import re
@@ -241,14 +243,23 @@ def check_egress(
     *,
     allowlist: list[str] | None,
     forbidden: list[str] | None,
+    host_gate: "Callable[[str], tuple[bool, str]] | None" = None,
 ) -> EgressDecision:
     """Validate a navigation target against the tenant egress policy.
 
-    Semantics (mirrors L35):
+    Semantics:
       * a host on ``forbidden`` is ALWAYS denied (fail-closed, wins over allow);
+      * ``host_gate`` - the tenant's REAL L35 gate (``spec.egress``), when the
+        tenant has one - must admit the host; a gate that raises denies;
       * if an ``allowlist`` is set, the host MUST be on it (deny-by-default);
       * no allowlist → allow, but the navigation is still audited.
     Host matching is suffix-aware: ``example.com`` matches ``www.example.com``.
+
+    Review 2026-11-19 (SEC-13): this function only ever saw ``spec.browser``'s
+    own two lists - it "mirrored" L35 without consulting it, so a tenant whose
+    ``spec.egress`` denies a host (or denies by default) could still drive a
+    browser there. ``host_gate`` closes that: the browser list can only narrow
+    what L35 admits, never widen it.
     """
     host = _host(url)
     if not host:
@@ -272,6 +283,14 @@ def check_egress(
 
     if forbidden and _match(forbidden):
         return EgressDecision(False, host, "host is on the forbidden list")
+
+    if host_gate is not None:
+        try:
+            ok, why = host_gate(host)
+        except Exception:  # noqa: BLE001 - a gate that cannot answer denies
+            return EgressDecision(False, host, "tenant egress gate error (fail-closed)")
+        if not ok:
+            return EgressDecision(False, host, f"denied by the tenant egress policy (L35): {why}"[:200])
 
     # BR-F2 SSRF / DNS-rebind guard: a private/link-local target (or a DNS name
     # that RESOLVES into one) is blocked UNLESS an explicit allowlist names this

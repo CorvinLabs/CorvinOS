@@ -73,16 +73,16 @@ def validate(data: Any) -> dict[str, Any]:
     if data.get("schema") != SCHEMA:
         raise ManifestError(f"unsupported schema {data.get('schema')!r} (expected {SCHEMA})")
     pid = data.get("id")
-    if not isinstance(pid, str) or not PROJECT_ID_RE.match(pid):
+    if not isinstance(pid, str) or not PROJECT_ID_RE.fullmatch(pid):
         raise ManifestError("id must be lowercase kebab-case, 1-28 characters")
     if pid in RESERVED_IDS:
         raise ManifestError(f"the id {pid!r} is reserved")
     check_title(data.get("title", pid))
     tenant = data.get("tenant")
-    if not isinstance(tenant, str) or not _TENANT_RE.match(tenant):
+    if not isinstance(tenant, str) or not _TENANT_RE.fullmatch(tenant):
         raise ManifestError("tenant must name the owning tenant")
     template = data.get("template")
-    if template is not None and (not isinstance(template, str) or not TEMPLATE_RE.match(template)):
+    if template is not None and (not isinstance(template, str) or not TEMPLATE_RE.fullmatch(template)):
         raise ManifestError("template must look like '<id>@<n>'")
     if data.get("docs_mode", "nested") not in DOCS_MODES:
         raise ManifestError(f"docs_mode must be one of {DOCS_MODES}")
@@ -94,7 +94,7 @@ def validate(data: Any) -> dict[str, Any]:
         raise ManifestError(f"assistant_access must be one of {ACCESS}")
     feats = data.get("features", {})
     if not isinstance(feats, dict) or not all(
-            isinstance(k, str) and FEATURE_ID_RE.match(k) and isinstance(v, bool) for k, v in feats.items()):
+            isinstance(k, str) and FEATURE_ID_RE.fullmatch(k) and isinstance(v, bool) for k, v in feats.items()):
         raise ManifestError("features must map feature ids to true/false")
     directory = data.get("directory")
     if directory is not None:
@@ -106,7 +106,7 @@ def validate(data: Any) -> dict[str, Any]:
         if not isinstance(videos, dict):
             raise ManifestError("videos must be a mapping")
         langs = videos.get("languages", ["de", "en"])
-        if not isinstance(langs, list) or not all(isinstance(x, str) and re.match(r"^[a-z]{2}$", x) for x in langs):
+        if not isinstance(langs, list) or not all(isinstance(x, str) and re.fullmatch(r"[a-z]{2}", x) for x in langs):
             raise ManifestError("videos.languages must be a list of two-letter codes")
         root = videos.get("root")
         if root is not None and (not isinstance(root, str) or "\x00" in root or len(root) > 500):
@@ -116,7 +116,7 @@ def validate(data: Any) -> dict[str, Any]:
 
 def is_new_id_allowed(pid: str) -> bool:
     """A NEW project id: the id rules, not a route word, and not a Windows device name (it is the default folder name)."""
-    return bool(isinstance(pid, str) and PROJECT_ID_RE.match(pid)) and pid not in RESERVED_IDS and pid not in WINDOWS_DEVICE_NAMES
+    return bool(isinstance(pid, str) and PROJECT_ID_RE.fullmatch(pid)) and pid not in RESERVED_IDS and pid not in WINDOWS_DEVICE_NAMES
 
 
 def parse(text: str) -> dict[str, Any]:

@@ -38,16 +38,24 @@ class TelemetryAPIServer:
         self,
         aggregator,
         html_path: Optional[Path] = None,
-        host: str = "0.0.0.0",
+        host: str = "127.0.0.1",
         port: int = 8765,
+        tenant_id: str = "_default",
     ):
         """Initialize API server.
 
         Args:
             aggregator: TelemetryAggregator instance
             html_path: Path to dashboard HTML file
-            host: Host to listen on
+            host: Host to listen on. Defaults to loopback: this server has
+                no authentication, so it must not listen on every interface
+                unless the operator asks for that explicitly (it defaulted
+                to ``0.0.0.0`` until 2026-11-19).
             port: Port to listen on
+            tenant_id: The ONE tenant this server serves. It is fixed at
+                construction and never taken from the request: an
+                unauthenticated ``?tenant_id=`` query parameter used to
+                select any tenant's instances and statistics.
         """
         if not HAS_FLASK:
             raise RuntimeError("Flask is required for TelemetryAPIServer")
@@ -58,6 +66,8 @@ class TelemetryAPIServer:
         )
         self.host = host
         self.port = port
+        from core.tenants import validate_tenant_id  # noqa: PLC0415
+        self.tenant_id = validate_tenant_id(tenant_id)
 
         self.app = Flask(__name__)
         CORS(self.app)
@@ -88,7 +98,7 @@ class TelemetryAPIServer:
         @self.app.route("/api/metrics/stats", methods=["GET"])
         def api_stats():
             """Get aggregated cluster statistics."""
-            tenant_id = request.args.get("tenant_id", "_default")
+            tenant_id = self.tenant_id  # never from the request
             try:
                 stats = self.aggregator.get_cluster_stats(tenant_id)
                 return jsonify(stats.to_dict())
@@ -99,7 +109,9 @@ class TelemetryAPIServer:
         def telemetry_submit():
             """Accept telemetry submission from instance."""
             try:
-                data = request.get_json()
+                data = request.get_json(silent=True)
+                if not isinstance(data, dict):
+                    return jsonify({"error": "JSON object required"}), 400
 
                 # Validate required fields
                 required = ["instance_id", "tenant_id", "turn_count", "total_tokens"]
@@ -110,7 +122,12 @@ class TelemetryAPIServer:
                     )
 
                 instance_id = data["instance_id"]
-                tenant_id = data["tenant_id"]
+                # The body's tenant is a claim by an unauthenticated sender.
+                # It must name the tenant this server serves; anything else
+                # is refused rather than filed under a tenant of its choosing.
+                if data["tenant_id"] != self.tenant_id:
+                    return jsonify({"error": "tenant mismatch"}), 403
+                tenant_id = self.tenant_id
 
                 # Register instance if needed
                 if instance_id not in self.aggregator.instances:
@@ -153,7 +170,7 @@ class TelemetryAPIServer:
         @self.app.route("/api/telemetry/instances", methods=["GET"])
         def telemetry_instances():
             """List active instances."""
-            tenant_id = request.args.get("tenant_id", "_default")
+            tenant_id = self.tenant_id  # never from the request
             try:
                 instances = self.aggregator.get_active_instances(tenant_id)
                 return jsonify({
@@ -197,7 +214,7 @@ class TelemetryAPIServer:
                 "version": "1.0.0",
                 "timestamp": datetime.utcnow().isoformat(),
                 "instances": len(self.aggregator.instances),
-                "active_instances": len(self.aggregator.get_active_instances("_default")),
+                "active_instances": len(self.aggregator.get_active_instances(self.tenant_id)),
                 "subscribers": self.aggregator.get_active_subscribers(),
             }), 200
 
@@ -207,16 +224,15 @@ class TelemetryAPIServer:
         Args:
             debug: Enable Flask debug mode
         """
-        print("\n" + "="*70)
-        print("⚡ CorvinOS Telemetry API Server")
-        print("="*70)
-        print("\n📊 Dashboard:  http://localhost:8765/stats")
-        print("🔌 API:        http://localhost:8765/api/metrics/stats")
-        print("📡 Submit:     POST http://localhost:8765/api/telemetry/submit")
-        print("📋 Instances:  http://localhost:8765/api/telemetry/instances")
-        print("🩺 Health:     http://localhost:8765/health")
-        print("\n💡 Press Ctrl+C to stop")
-        print("="*70 + "\n")
+        base = f"http://{self.host}:{self.port}"
+        print("CorvinOS Telemetry API Server")
+        print(f"  Dashboard:  {base}/stats")
+        print(f"  API:        {base}/api/metrics/stats")
+        print(f"  Submit:     POST {base}/api/telemetry/submit")
+        print(f"  Instances:  {base}/api/telemetry/instances")
+        print(f"  Health:     {base}/health")
+        print(f"  Tenant:     {self.tenant_id}")
+        print("Press Ctrl+C to stop")
 
         self.app.run(host=self.host, port=self.port, debug=debug, use_reloader=False)
 

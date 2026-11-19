@@ -145,7 +145,7 @@ def console_client(tmp_path: Path, engine=None, *, live: bool = False,
     orig_stats = dict(route._skill_stats)
 
     if not live:
-        sc.resolve_llm_client = lambda explicit=None: engine
+        sc.resolve_llm_client = lambda explicit=None, **_kw: engine
 
     route._generation_runs.clear()
     route._skill_stats.update({"total_generated": 0, "avg_quality": 0.0,
@@ -645,7 +645,7 @@ def test_refine_updates_the_skill_in_place(tmp_path):
 
         # Second run answers the refine prompt with a changed body.
         from skill_creator import skill_creator as sc
-        sc.resolve_llm_client = lambda explicit=None: refine_engine_for(name)
+        sc.resolve_llm_client = lambda explicit=None, **_kw: refine_engine_for(name)
 
         second = _generate(client, "ergaenze eine Pruefung auf doppelte Schluessel",
                            base=name)
@@ -778,7 +778,7 @@ def test_a_refine_run_diffs_the_previous_body_against_the_refined_one(tmp_path):
         first = _generate(client)
         name = first["skill"]["name"]
         from skill_creator import skill_creator as sc
-        sc.resolve_llm_client = lambda explicit=None: refine_engine_for(name)
+        sc.resolve_llm_client = lambda explicit=None, **_kw: refine_engine_for(name)
         second = _generate(client, "ergaenze eine Pruefung auf doppelte Schluessel", base=name)
         assert second["status"] == "success", second
         rid = next(i for i, r in route.forge_runs.runs.items() if r.get("base_skill") == name)

@@ -15,11 +15,13 @@ import hashlib
 import json
 import os
 import re
+import socket
 import tempfile
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Annotated, Any
 
 import yaml  # type: ignore[import-not-found]
@@ -32,6 +34,7 @@ from .. import auth as session_auth
 from ..deps import require_csrf, require_session
 
 from .. import _bootstrap
+from . import datasources_http as _ds_guard
 _forge_paths = _bootstrap.forge_paths
 
 import logging
@@ -44,6 +47,120 @@ _VALID_LOCALITIES = frozenset({"local", "eu_cloud", "us_cloud"})
 _VALID_EGRESS = frozenset({"none", "restricted", "full"})
 _VALID_CLASSIFICATIONS = frozenset({"PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET"})
 _ENGINE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+# ── Ping hardening (review 2026-11-19 round 3, R3-NEW-5) ──────────────────────
+#
+# ``ping_custom_engine`` used to read ``os.environ[<auth_env>]`` for ANY name the
+# caller stored and send it as ``Authorization: Bearer`` to ANY ``base_url``
+# through ``urllib.request.urlopen`` (which also opens ``file://``). A console
+# session could therefore ship any secret of the console process to a host of
+# its choosing. The four guards, all fail-closed:
+#   * ``auth_env`` must follow the engine-credential convention below,
+#   * ``base_url`` is http/https only, without userinfo,
+#   * the tenant's L35 egress gate must admit the host before any connect,
+#   * the connect is pinned to the validated address and redirects are refused.
+
+#: Engine credentials live in env vars of this shape. Mirrors the data-source
+#: convention (``CORVIN_DS_*`` in ``datasources_http``).
+_AUTH_ENV_RE = re.compile(r"^CORVIN_ENGINE_[A-Z0-9_]{1,100}$")
+_AUTH_ENV_HINT = (
+    "auth_env must name an engine-credential env var matching "
+    "CORVIN_ENGINE_[A-Z0-9_]+ (arbitrary env vars are refused)"
+)
+_PING_MAX_BYTES = 1024 * 1024
+
+
+class _PingRefused(Exception):
+    """The ping target failed a guard. ``code`` is a closed set."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _split_base_url(base_url: str) -> tuple[str, str]:
+    """``(scheme, host)`` of an acceptable base URL, else :class:`_PingRefused`.
+
+    http/https only (``urlopen`` would also open ``file:``/``ftp:``), a host is
+    required, and userinfo is refused (``http://key@host`` would put a
+    credential into a URL that is stored and hashed)."""
+    try:
+        parts = urlsplit(base_url)
+        scheme = (parts.scheme or "").lower()
+        host = (parts.hostname or "").strip().rstrip(".").lower()
+        has_userinfo = parts.username is not None or parts.password is not None
+        _ = parts.port  # raises ValueError on a malformed port
+    except ValueError as exc:
+        raise _PingRefused("invalid_base_url") from exc
+    if scheme not in ("http", "https"):
+        raise _PingRefused("scheme_not_allowed")
+    if not host or has_userinfo:
+        raise _PingRefused("invalid_base_url")
+    return scheme, host
+
+
+def _local_pinned_ip(host: str) -> str:
+    """Address to pin for a ``locality: local`` engine (Ollama on this host or
+    the LAN). Loopback and private addresses are the POINT of a local engine,
+    so they are admitted here - link-local (cloud metadata, 169.254/16),
+    multicast, unspecified and the extra IMDS addresses never are."""
+    if host in ("metadata", "metadata.google.internal"):
+        raise _PingRefused("egress_blocked")
+    lit = _ds_guard._as_ip(host)
+    if lit is not None:
+        addrs = [lit]
+    else:
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise _PingRefused("unresolvable") from exc
+        addrs = []
+        for info in infos:
+            ip = _ds_guard._as_ip(str(info[4][0]))
+            if ip is None:
+                raise _PingRefused("egress_blocked")
+            addrs.append(ip)
+    if not addrs:
+        raise _PingRefused("unresolvable")
+    for ip in addrs:
+        inner = _ds_guard._embedded_ipv4(ip) or ip
+        for cand in (ip, inner):
+            if (cand.is_link_local or cand.is_multicast or cand.is_unspecified
+                    or str(cand) in _ds_guard._IMDS_EXTRA):
+                raise _PingRefused("egress_blocked")
+    return str(addrs[0])
+
+
+def _l35_admits(tenant_id: str, host: str, engine_id: str) -> bool:
+    """True when the tenant's L35 egress policy admits *host* (or the tenant
+    has no policy). Any error loading or asking the gate denies."""
+    try:
+        from egress_gate import load_egress_gate_for_tenant  # type: ignore[import]  # noqa: PLC0415
+        gate = load_egress_gate_for_tenant(tenant_id, corvin_home=_forge_paths.corvin_home())
+        if gate is None:
+            return True
+        return bool(gate.validate(host, engine_id=f"custom:{engine_id}", channel="web").allowed)
+    except Exception:  # noqa: BLE001 - a gate that cannot answer denies
+        _log.warning("L35 gate unavailable for custom engine ping; refusing", exc_info=True)
+        return False
+
+
+def _guarded_ping_opener(tenant_id: str, engine_id: str, manifest: dict[str, Any]):
+    """Run every guard for a ping and return ``(opener, base_url)``.
+
+    Raises :class:`_PingRefused`. No socket is opened before all guards pass."""
+    base_url = str(manifest.get("_base_url") or "")
+    _scheme, host = _split_base_url(base_url)
+    if not _l35_admits(tenant_id, host, engine_id):
+        raise _PingRefused("egress_blocked")
+    if manifest.get("locality") == "local":
+        pinned = _local_pinned_ip(host)
+    else:
+        try:
+            pinned = _ds_guard._validated_pinned_ip(base_url)
+        except _ds_guard._UnsafeUrl as exc:
+            raise _PingRefused("egress_blocked") from exc
+    return _ds_guard._build_no_redirect_opener(pinned), base_url
 
 
 # ── Storage ───────────────────────────────────────────────────────────────────
@@ -134,7 +251,8 @@ class EngineManifestRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=100)
     transport: str = Field(..., description="openai_compat | anthropic | ollama")
     base_url: str = Field(..., min_length=1, max_length=500)
-    auth_env: str | None = Field(None, description="Vault env-var name for API key")
+    auth_env: str | None = Field(
+        None, description="Env-var name of the API key; must match CORVIN_ENGINE_[A-Z0-9_]+")
     locality: str = Field("local")
     network_egress: str = Field("none")
     models: list[ModelEntry] = Field(default_factory=list)
@@ -175,6 +293,16 @@ def register_custom_engine(
                 http_status.HTTP_400_BAD_REQUEST,
                 f"{field} must be one of {sorted(valid)}",
             )
+
+    if body.auth_env and not _AUTH_ENV_RE.match(body.auth_env):
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, _AUTH_ENV_HINT)
+    try:
+        _split_base_url(body.base_url)
+    except _PingRefused as exc:
+        raise HTTPException(
+            http_status.HTTP_400_BAD_REQUEST,
+            "base_url must be an http:// or https:// URL with a host and no credentials",
+        ) from exc
 
     _tenant_data = _load_tenant_yaml(rec.tenant_id)
     _dr = (_tenant_data.get("spec") or {}).get("data_residency") or {}
@@ -252,8 +380,23 @@ def ping_custom_engine(
     if manifest is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"engine {engine_id!r} not found")
 
-    base_url = manifest.get("_base_url", "")
     transport = manifest.get("transport", "openai_compat")
+
+    def _refused(code: str) -> dict[str, Any]:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="engine.custom.ping",
+            target_kind="custom_engine",
+            target_id=engine_id,
+            reason=code,
+        )
+        return {"ok": False, "engine_id": engine_id, "reachable": False, "error": code}
+
+    try:
+        opener, base_url = _guarded_ping_opener(rec.tenant_id, engine_id, manifest)
+    except _PingRefused as exc:
+        return _refused(exc.code)
 
     if transport == "ollama":
         probe_url = base_url.rstrip("/") + "/api/tags"
@@ -263,13 +406,16 @@ def ping_custom_engine(
     try:
         req = urllib.request.Request(probe_url, method="GET")
         auth_env = manifest.get("auth_env")
-        if auth_env:
+        # Only an engine-credential env var is ever read - also for a manifest
+        # stored before the registration check existed. A non-matching name
+        # attaches NO credential; it never falls back to os.environ[<name>].
+        if isinstance(auth_env, str) and _AUTH_ENV_RE.match(auth_env):
             token = os.environ.get(auth_env, "")
             if token:
                 req.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(req, timeout=5.0) as resp:
-            data = json.loads(resp.read())
-        model_list = data.get("models", data.get("data", []))
+        with opener.open(req, timeout=5.0) as resp:
+            data = json.loads(resp.read(_PING_MAX_BYTES + 1)[:_PING_MAX_BYTES])
+        model_list = data.get("models", data.get("data", [])) if isinstance(data, dict) else []
         console_audit.action_performed(
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
@@ -283,6 +429,10 @@ def ping_custom_engine(
             "reachable": True,
             "model_count": len(model_list) if isinstance(model_list, list) else 0,
         }
+    except _ds_guard._UnsafeUrl:
+        # A 3xx answer. Following it would send the request (and the
+        # credential) to a host no guard has seen.
+        return _refused("redirect_blocked")
     except urllib.error.HTTPError as exc:
         console_audit.action_failed(
             tenant_id=rec.tenant_id,

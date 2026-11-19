@@ -252,6 +252,50 @@ def resolve_capability(
 # ---------------------------------------------------------------------------
 
 
+class UnsafeConfigTarget(OSError):
+    """A config target that is, or sits behind, a symlink / foreign file."""
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write *text* to *path* at 0600 without ever following a symlink.
+
+    The target directory is the worker's working dir — the hermetic tempdir, or
+    a directory the CALLER named. A file planted there under the config's name
+    (``opencode.json`` → ``~/.ssh/authorized_keys``, ``.codex_home`` → any
+    directory) used to be followed by ``write_text``: the MCP config was
+    written through the link, over whatever it pointed at (review 2026-11-19,
+    A2A-14). Now: the parent must be a real directory, an existing entry at the
+    name is removed if it is a link and refused if it is not a regular file,
+    and the file is created with ``O_NOFOLLOW`` at mode 0600 from its first byte.
+    """
+    parent = path.parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise UnsafeConfigTarget(f"config directory is not a real directory: {parent.name}")
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    if st is not None:
+        import stat as _stat  # noqa: PLC0415
+        if _stat.S_ISLNK(st.st_mode):
+            os.unlink(path)          # drop the link itself, never its target
+        elif not _stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+            raise UnsafeConfigTarget(f"config target is not a plain file: {path.name}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        try:
+            os.fchmod(fd, 0o600)     # an existing plain file keeps its old mode otherwise
+        except (AttributeError, OSError):
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fd = -1
+            fh.write(text)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def materialise_claude_code_config(
     *,
     specs: list[McpServerSpec],
@@ -272,14 +316,7 @@ def materialise_claude_code_config(
         return {}
     payload = {"mcpServers": _specs_to_dict_for_claude(specs)}
     out_path = tempdir / "mcp_config.json"
-    out_path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    try:
-        os.chmod(out_path, 0o600)
-    except OSError:
-        pass
+    _write_private(out_path, json.dumps(payload, indent=2, ensure_ascii=False))
     return {"mcp_config_path": str(out_path)}
 
 
@@ -301,20 +338,16 @@ def materialise_codex_config(
     if not specs:
         return {}
     codex_home = tempdir / ".codex_home"
-    codex_home.mkdir(parents=True, exist_ok=True)
+    if codex_home.is_symlink():
+        # A planted link would make "our" CODEX_HOME someone else's directory.
+        raise UnsafeConfigTarget(".codex_home is a symlink")
+    codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         os.chmod(codex_home, 0o700)
     except OSError:
         pass
     config_path = codex_home / "config.toml"
-    config_path.write_text(
-        _specs_to_toml_for_codex(specs),
-        encoding="utf-8",
-    )
-    try:
-        os.chmod(config_path, 0o600)
-    except OSError:
-        pass
+    _write_private(config_path, _specs_to_toml_for_codex(specs))
     return {"CODEX_HOME": str(codex_home)}
 
 
@@ -340,14 +373,7 @@ def materialise_opencode_config(
         "mcp": _specs_to_dict_for_opencode(specs),
     }
     out_path = working_dir / "opencode.json"
-    out_path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    try:
-        os.chmod(out_path, 0o600)
-    except OSError:
-        pass
+    _write_private(out_path, json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 # ---------------------------------------------------------------------------

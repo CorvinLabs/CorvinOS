@@ -353,18 +353,8 @@ export async function removeOrgMember(
   );
 }
 
-export async function updateOrgMemberRole(
-  handle: string,
-  actor_id: string,
-  role: "owner" | "admin" | "editor" | "agent",
-  csrf: string,
-): Promise<{ ok: true; members: OrgMember[]; ts: number }> {
-  return api(`/orgs/${encodeURIComponent(handle)}/members`, {
-    method: "PATCH",
-    csrf,
-    body: { actor_id, role },
-  });
-}
+// No updateOrgMemberRole: the backend serves only POST and DELETE on
+// /orgs/{handle}/members. A role change is remove + add until a route exists.
 
 export async function affiliateOrgAgent(
   handle: string,

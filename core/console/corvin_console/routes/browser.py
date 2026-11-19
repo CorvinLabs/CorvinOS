@@ -62,10 +62,16 @@ def _vault_resolver(tenant_id: str, key: str):
 
 def _allowlist_resolver(tenant_id: str):
     """(allowlist, forbidden) from spec.browser in tenant.corvin.yaml.
-    None allowlist → all hosts allowed (still audited).
+    None allowlist (the key is ABSENT) → all hosts allowed (still audited).
     Raises on config parse errors — callers must treat this as fail-closed
     (a broken tenant.corvin.yaml must block session creation, not silently
-    fall back to unrestricted egress)."""
+    fall back to unrestricted egress).
+
+    Review 2026-11-19 (SEC-6): ``allowed_hosts: []`` was folded into None by an
+    ``... and allow else None`` test, so the one spelling that means "deny
+    everything" (``check_egress``: "even [] means deny-all") produced an
+    UNRESTRICTED browser. An explicit list stays a list, empty or not; a value
+    that is present but not a list is a malformed policy and raises."""
     import yaml  # type: ignore  # raised, not swallowed
     cfg = _forge_paths.tenant_global_dir(tenant_id) / "tenant.corvin.yaml"
     if not cfg.exists():
@@ -75,9 +81,63 @@ def _allowlist_resolver(tenant_id: str):
     br = spec.get("browser", {}) if isinstance(spec.get("browser"), dict) else {}
     allow = br.get("allowed_hosts")
     forbid = br.get("forbidden_hosts")
-    allow = allow if isinstance(allow, list) and allow else None
-    forbid = forbid if isinstance(forbid, list) and forbid else None
+    if not isinstance(data, dict):
+        raise ValueError("tenant.corvin.yaml is not a mapping")
+    for _name, _val in (("allowed_hosts", allow), ("forbidden_hosts", forbid)):
+        if _val is not None and not isinstance(_val, list):
+            raise ValueError(f"spec.browser.{_name} must be a list")
+    allow = [str(h) for h in allow] if isinstance(allow, list) else None
+    forbid = [str(h) for h in forbid] if isinstance(forbid, list) and forbid else None
     return (allow, forbid)
+
+
+#: How long one host verdict of the L35 gate is reused inside a session. The
+#: network-layer handler asks for EVERY request of a page; without this each
+#: sub-resource would write its own egress audit record.
+_L35_VERDICT_TTL_S = 30.0
+
+
+def _host_gate_resolver(tenant_id: str):
+    """The tenant's real L35 gate as ``(host) -> (allowed, reason)``, or None
+    when the tenant has no ``tenant.corvin.yaml`` (no egress policy exists).
+
+    SEC-13 (2026-11-19). ``load_egress_gate_for_tenant`` already fails CLOSED
+    (a deny-all gate) on an unparseable or invalid policy; an import error
+    propagates and the manager refuses the session.
+    """
+    import time as _time  # noqa: PLC0415
+    from egress_gate import load_egress_gate_for_tenant  # type: ignore  # noqa: PLC0415
+
+    gate = load_egress_gate_for_tenant(tenant_id, corvin_home=_forge_paths.corvin_home())
+    if gate is None:
+        return None
+    seen: dict[str, tuple[float, bool, str]] = {}
+
+    def _check(host: str) -> tuple[bool, str]:
+        now = _time.monotonic()
+        hit = seen.get(host)
+        if hit is not None and now - hit[0] < _L35_VERDICT_TTL_S:
+            return hit[1], hit[2]
+        dec = gate.validate(host, engine_id="browser", channel="web")
+        out = (bool(dec.allowed), str(getattr(dec, "matched_rule", "") or "policy"))
+        if len(seen) > 2048:
+            seen.clear()
+        seen[host] = (now, out[0], out[1])
+        return out
+
+    def _peek(host: str) -> "tuple[bool, str] | None":
+        """The cached verdict for *host*, or None. No I/O, no audit write - safe
+        on the event loop (round 2, R2-SEC-6)."""
+        hit = seen.get(host)
+        if hit is not None and _time.monotonic() - hit[0] < _L35_VERDICT_TTL_S:
+            return hit[1], hit[2]
+        return None
+
+    # ``gate.validate`` writes one hash-chained egress record per call. The
+    # session calls ``_check`` through ``asyncio.to_thread`` and only ``peek``
+    # on the event loop itself (browser/session.py::_egress_decision).
+    _check.peek = _peek  # type: ignore[attr-defined]
+    return _check
 
 
 def _notify_resolver(tenant_id: str) -> tuple[str | None, str | None]:
@@ -136,6 +196,7 @@ def _mgr():
             audit_fn=_audit_fn,
             vault_resolver=_vault_resolver,
             allowlist_resolver=_allowlist_resolver,
+            host_gate_resolver=_host_gate_resolver,
             notify_fn=_notify_fn,
         )
     return _manager
@@ -664,6 +725,37 @@ async def run_agent(sid: str, body: AgentReq,
     task = (body.task or "").strip()
     if not task:
         raise HTTPException(status_code=400, detail="empty task")
+    # Review 2026-11-19 (SEC-6): the browser agent hands this task text to a
+    # `claude -p` planner and then acts on the web with it - a worker spawn like
+    # any other - and it was the one console spawn path that ran NO pre-spawn
+    # gate: no L44 acceptable-use check, no L34 data-flow check, no L35 engine
+    # egress check. The shared console chokepoint runs all of them, fail-closed
+    # (any gate error is a refusal), and each gate audits its own deny before
+    # this returns. Off the event loop: L44 may spawn the classifier.
+    try:
+        _owned_session(rec, sid)   # 404 before any gate work for a foreign/unknown sid
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    import asyncio as _asyncio  # noqa: PLC0415
+    try:
+        from .. import _spawn_gates  # noqa: PLC0415
+        refusal = await _asyncio.to_thread(
+            _spawn_gates.check_console_spawn_or_refusal,
+            task, tenant_id=rec.tenant_id, persona="assistant", channel="web",
+            chat_key=f"browser:{sid}", engine_id="claude_code",
+        )
+    except Exception as exc:  # noqa: BLE001 - a gate that cannot run refuses
+        logger.error("browser agent pre-spawn gate failed (%s) - refusing", type(exc).__name__)
+        refusal = "[gate] The pre-spawn compliance gates could not run - request blocked (fail-closed)."
+    if refusal:
+        try:
+            console_audit.action_denied(
+                tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+                action="browser.agent.start", target_kind="browser_session", target_id=sid,
+                reason="pre_spawn_gate_refused")
+        except Exception:  # noqa: BLE001 - the gate already audited its own deny
+            logger.debug("browser agent denial audit skipped", exc_info=True)
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail=refusal)
     try:
         started = _mgr().start_agent(rec.tenant_id, sid, task,
                                      max_steps=max(1, min(body.max_steps, 30)),

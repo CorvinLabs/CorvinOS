@@ -297,16 +297,20 @@ class HappyPathTests(unittest.TestCase):
 
     def test_model_and_working_dir_pass_through(self):
         fake = _FakeEngine()
-        run_delegate(
-            engine="opencode",
-            prompt="hi",
-            model="anthropic/claude-sonnet-5",
-            working_dir="/tmp",
-            engine_factory=_make_factory(fake),
-            audit=False,
-        )
-        self.assertEqual(fake.spawn_kwargs.get("model"), "anthropic/claude-sonnet-5")
-        self.assertEqual(fake.spawn_kwargs.get("working_dir"), Path("/tmp"))
+        # A directory BELOW the temp root: the shared temp root itself is no
+        # longer a valid worker workspace (review 2026-11-19, R2-A2A-7).
+        import tempfile as _t
+        with _t.TemporaryDirectory() as wd:
+            run_delegate(
+                engine="opencode",
+                prompt="hi",
+                model="anthropic/claude-sonnet-5",
+                working_dir=wd,
+                engine_factory=_make_factory(fake),
+                audit=False,
+            )
+            self.assertEqual(fake.spawn_kwargs.get("model"), "anthropic/claude-sonnet-5")
+            self.assertEqual(fake.spawn_kwargs.get("working_dir"), Path(wd).resolve())
 
     def test_env_extra_pass_through(self):
         fake = _FakeEngine()
@@ -969,7 +973,7 @@ class HermeticWorkingDirTests(unittest.TestCase):
                 audit=False,
             )
             wd = fake.spawn_kwargs.get("working_dir")
-            self.assertEqual(wd, Path(caller_dir))
+            self.assertEqual(wd, Path(caller_dir).resolve())
 
 
 class StaleTempdirReaperTests(unittest.TestCase):

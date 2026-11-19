@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 from api_server import MeasurementReader
+from measurement_hooks import measurement_root
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -38,7 +39,7 @@ def export_measurements_to_website(
         True if successful, False otherwise
     """
     if measurements_dir is None:
-        measurements_dir = Path.home() / ".corvin" / "measurement"
+        measurements_dir = measurement_root()
 
     if output_dir is None:
         env_dir = os.environ.get("CORVIN_WEBSITE_STATS_DIR")

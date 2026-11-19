@@ -615,7 +615,7 @@ def test_no_uid_in_audit_events() -> None:
         captured_calls: list[dict] = []
 
         def _fake_audit(event_type, *, channel, chat_key, uid,
-                        details=None, severity=None):
+                        details=None, severity=None, tenant_id=None):
             body = {
                 "event_type": event_type,
                 "channel": channel,

@@ -30,9 +30,11 @@ Hybrid, three tiers:
             adjudicator is INJECTED (``adjudicator=`` callable) so this module
             never imports anthropic — the bridge wires a helper-model call.
   Decision — deny / escalate / warn / allow. Policy/integrity error → fail-closed
-            (deny). Classifier UNCERTAINTY (backend ran, low confidence / anomalous
-            output) → escalate, never silent allow. Classifier BACKEND UNAVAILABLE
-            (raised — e.g. a fresh install before the claude CLI is logged in) → degrade
+            (deny). Classifier UNCERTAINTY: an uncertain VIOLATION, anomalous
+            output, an unsure clear that Tier-0 keywords contradict, or a task
+            longer than the classifier window → escalate (blocks). An unsure
+            clear with NO Tier-0 hit → allow, audited with its own reason code.
+            Classifier BACKEND UNAVAILABLE (raised — e.g. a fresh install before the claude CLI is logged in) → degrade
             to the deterministic Tier-0 floor: prohibited-class patterns still BLOCK,
             benign passes. Fail-TO-FLOOR, not fail-open (the policy default ALLOW is
             reached only when NO rule pattern matches). See ``classify``.
@@ -284,7 +286,26 @@ _REASON_INTEGRITY = "integrity_failed"
 _REASON_CLASSIFIER_VIOLATION = "classifier_violation"
 _REASON_CLASSIFIER_LOWCONF = "classifier_violation_low_confidence"
 _REASON_CLASSIFIER_CLEARED = "classifier_cleared"
-_REASON_CLEAR_LOWCONF = "clear_low_confidence"   # any low-conf clear → escalate
+# Legacy code. The gate no longer produces it (review 2026-11-19 round 2,
+# R2-SEC-2): it stood for "escalate" in the chain while the bridge let the turn
+# run, and it lumped three different situations together. Kept as a name only
+# because the adapter still has a branch for it; see the three codes below.
+_REASON_CLEAR_LOWCONF = "clear_low_confidence"
+# The classifier named no rule but was not sure, and NO Tier-0 keyword matched:
+# nothing points at a violation, so the turn is ALLOWED and the chain says so
+# (``house_rules.allowed`` with this code and the low confidence) - never an
+# "escalated" record for a request that ran.
+_REASON_CLEAR_LOWCONF_ALLOWED = "clear_low_confidence_no_tier0_hit"
+# The classifier named no rule but was not sure, and Tier-0 keyword(s) DID match
+# (below 50 % with one hit, or below the clear floor with several): two weak
+# signals pointing the same way. ESCALATE, and the escalate blocks on every
+# surface - the code is deliberately not the legacy one the bridge waves through.
+_REASON_CLEAR_UNSURE_FLAGGED = "clear_unsure_tier0_flagged"
+# The task is longer than the classifier's window (_HOUSE_RULES_WINDOW - the
+# chars the overlapping chunks really cover, NOT CHUNK_CHARS * MAX_CHUNKS), so
+# part of it was never read. A clear of the part that was read says nothing about
+# the rest: always ESCALATE (blocks), whatever confidence came back.
+_REASON_OVER_CLASSIFIER_CAP = "prompt_over_classifier_cap"
 _REASON_CLASSIFIER_ERROR = "classifier_error"
 # Semantic backend unreachable (fresh install before the claude CLI is ready, or a
 # transient outage) → we degrade to the deterministic Tier-0 floor instead of
@@ -298,6 +319,11 @@ _REASON_NO_MATCH = "no_rule_matched"
 # keeps meaning "a classifier that should have run did not".
 _REASON_FLOOR_ONLY_MATCH = "floor_only_rule_match"
 _REASON_FLOOR_ONLY_NO_MATCH = "floor_only_no_rule_matched"
+# floor_only because the tenant's config EXISTS but could not be read or
+# evaluated (a YAML typo, a truncated write, a missing import) - not because an
+# operator chose an egress policy. Same verdict (escalate), its own code, so the
+# chain and the refusal name the cause instead of looking like a policy decision.
+_REASON_FLOOR_ONLY_POLICY_UNREADABLE = "floor_only_policy_unreadable"
 
 
 # ── repo policy file location + integrity ────────────────────────────────────
@@ -490,6 +516,9 @@ class HouseRulesGate:
                 action = _stricter(floor.action, "escalate")
                 dec = HouseRulesDecision(action, floor.rule_id,
                                          _REASON_FLOOR_ONLY_MATCH, floor.confidence)
+            elif getattr(_fo, "cause", "") == _FLOOR_CAUSE_POLICY_UNREADABLE:
+                dec = HouseRulesDecision("escalate", "",
+                                         _REASON_FLOOR_ONLY_POLICY_UNREADABLE, 1.0)
             else:
                 dec = HouseRulesDecision("escalate", "", _REASON_FLOOR_ONLY_NO_MATCH, 1.0)
             self._emit_floor_only(dec, getattr(_fo, "tenant_id", ""), persona,
@@ -539,17 +568,26 @@ class HouseRulesGate:
                                    _REASON_CLASSIFIER_ERROR_DEGRADED, floor.confidence),
                 persona, channel, chat_key, engine_id, tier0_hits)
 
-        # Defense-in-depth: a non-finite confidence (NaN/+Inf) would make the
-        # "< floor" comparisons below evaluate False and slip a flagged-but-
-        # cleared task through to allow (re-review R-4/R-8). Clamp to 0.0 so any
-        # uncertainty resolves toward escalate, regardless of which classifier is
-        # wired or what it returns.
-        try:
-            confidence = float(confidence)
-            if not math.isfinite(confidence):
-                confidence = 0.0
-        except (TypeError, ValueError):
-            confidence = 0.0
+        # Defense-in-depth: a non-finite or non-numeric confidence (NaN/+Inf,
+        # None, a string) is ANOMALOUS classifier output, not a low confidence.
+        # It used to be clamped to 0.0 and ride the low-confidence-clear path;
+        # since that path can allow (round 2, R2-SEC-2 a), an unreadable
+        # confidence must not reach it: escalate as a classifier error.
+        # Round 3 (R3-SEC-8): a bool (True reads as 1.0 = a fully confident
+        # clear), a numeric string, a negative value or one above 1.0 is not a
+        # probability either - same anomaly, same verdict.
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            _conf_ok = False
+        else:
+            try:
+                confidence = float(confidence)
+                _conf_ok = math.isfinite(confidence) and 0.0 <= confidence <= 1.0
+            except (TypeError, ValueError):
+                _conf_ok = False
+        if not _conf_ok:
+            return self._decide(
+                HouseRulesDecision("escalate", "", _REASON_CLASSIFIER_ERROR, 0.0),
+                persona, channel, chat_key, engine_id, tier0_hits)
 
         # A non-empty but UNKNOWN rule id (classifier hallucination/typo) is
         # anomalous output — escalate rather than fall through to the clear path
@@ -576,14 +614,27 @@ class HouseRulesGate:
                                          _REASON_CLASSIFIER_LOWCONF, confidence)
             return self._decide(dec, persona, channel, chat_key, engine_id, tier0_hits)
 
-        # Classifier cleared the task (named no rule). A low-confidence clear
-        # escalates ONLY when genuinely suspicious: either VERY unsure (<50%) OR
-        # MULTIPLE tier-0 hits + modestly unsure (<85%). A single keyword match
-        # with a confident-enough clear (>50%) now allows — reduces false escalates
-        # of legitimate work (debugging, CSV analysis, security engineering).
-        # Operator decision 2026-06-30: stricter escalate bar to prevent user friction.
-        if (confidence < 0.50) or (confidence < _CLEAR_MIN_CONFIDENCE and tier0_hits > 1):
-            dec = HouseRulesDecision("escalate", "", _REASON_CLEAR_LOWCONF, confidence)
+        # Classifier cleared the task (named no rule). ONE place decides what a
+        # doubtful clear means, for every surface (round 2, R2-SEC-2) - the
+        # callers act on ``decision.allowed`` and never reinterpret an escalate:
+        #
+        #   over the classifier window          -> escalate  (part was never read)
+        #   unsure AND Tier-0 keyword(s) hit    -> escalate  (two weak signals agree)
+        #   unsure, NO Tier-0 hit               -> allow, audited with its own code
+        #   confident clear                     -> policy default
+        #
+        # "Unsure" is below 50 %, or below the clear floor with several Tier-0
+        # hits; a single keyword with a clear above 50 % allows (operator decision
+        # 2026-06-30: debugging / CSV / security-engineering work must not be
+        # escalated on one keyword).
+        if len(task_text or "") > _HOUSE_RULES_WINDOW:
+            dec = HouseRulesDecision("escalate", "", _REASON_OVER_CLASSIFIER_CAP, confidence)
+        elif (confidence < 0.50 and tier0_hits >= 1) or (
+                confidence < _CLEAR_MIN_CONFIDENCE and tier0_hits > 1):
+            dec = HouseRulesDecision("escalate", "", _REASON_CLEAR_UNSURE_FLAGGED, confidence)
+        elif confidence < 0.50:
+            dec = HouseRulesDecision(self.policy.default_action, "",
+                                     _REASON_CLEAR_LOWCONF_ALLOWED, confidence)
         else:
             dec = HouseRulesDecision(self.policy.default_action, "",
                                      _REASON_CLASSIFIER_CLEARED, confidence)
@@ -701,9 +752,37 @@ except Exception:  # noqa: BLE001 — registry absent in minimal/test contexts
 
 _HOUSE_RULES_ADJ_TIMEOUT_S = 20.0     # cloud Haiku spawn timeout
 _HOUSE_RULES_CHUNK_CHARS = 12000      # per-call window (Haiku handles this easily)
-_HOUSE_RULES_MAX_CHUNKS = 16          # covers ~192K chars — well above the 60K OS-turn cap
+_HOUSE_RULES_MAX_CHUNKS = 16          # see _HOUSE_RULES_WINDOW for what they cover
 _HOUSE_RULES_CHUNK_OVERLAP = 2000     # consecutive windows overlap so a forbidden
                                       # phrase cannot hide in a chunk seam (round-4 review)
+_HOUSE_RULES_CHUNK_STEP = _HOUSE_RULES_CHUNK_CHARS - _HOUSE_RULES_CHUNK_OVERLAP
+# The ONE statement of how many chars the classifier reads (round 3, R3-SEC-2).
+# Overlapping windows advance by STEP, so MAX_CHUNKS of them cover
+# STEP * (MAX_CHUNKS - 1) + CHUNK_CHARS = 162 000 chars - not CHUNK_CHARS *
+# MAX_CHUNKS = 192 000. The cap used the product while the chunker stopped at
+# the sum, so chars 162 001..192 000 were never read and still cleared. The
+# chunker, the gate's cap and the chunker's own zero-confidence fallback all
+# read this constant; never recompute it at a call site.
+_HOUSE_RULES_WINDOW = (_HOUSE_RULES_CHUNK_STEP * (_HOUSE_RULES_MAX_CHUNKS - 1)
+                       + _HOUSE_RULES_CHUNK_CHARS)
+
+
+def _house_rules_chunks(text: str) -> "list[str]":
+    """The overlapping windows the classifier reads for ``text``.
+
+    Covers exactly ``text[:_HOUSE_RULES_WINDOW]``: every char below the window
+    is in at least one chunk, and a text longer than the window is the gate's
+    ``prompt_over_classifier_cap`` escalate, never a clear."""
+    span = _HOUSE_RULES_CHUNK_CHARS
+    covered = (text or "")[:_HOUSE_RULES_WINDOW]
+    if len(covered) <= span:
+        return [covered]
+    chunks: "list[str]" = []
+    for start in range(0, len(covered), _HOUSE_RULES_CHUNK_STEP):
+        chunks.append(covered[start:start + span])
+        if start + span >= len(covered) or len(chunks) >= _HOUSE_RULES_MAX_CHUNKS:
+            break
+    return chunks
 # ADR-0157 M1/D — retry budget raised to 2 extra attempts (3 total) with
 # exponential backoff.  spawn_missing is still abort-immediately (no CLI → no
 # point retrying).  All other causes (timeout, no_json, bad_json, empty_output,
@@ -808,6 +887,32 @@ def _house_rules_make_prompt(norm: str, rules_block: str, auth_str: str, *, stri
     )
 
 
+def _house_rules_verdict_confidence(verdict: dict) -> float:
+    """The verdict's ``confidence`` as a finite float, or ``bad_json``.
+
+    Round 2 (R2-SEC-2 d): a verdict WITHOUT the key used to read as confidence
+    0.0 - "the model is not sure at all" - when what happened is that the model
+    did not return the requested envelope. A malformed envelope is retried and
+    then degrades to the Tier-0 floor like every other ``bad_json``; it must not
+    be scored as an opinion. Same for a non-numeric or non-finite value."""
+    if "confidence" not in verdict:
+        raise _HouseRulesClassifierError("bad_json", "missing confidence")
+    raw = verdict.get("confidence")
+    if isinstance(raw, bool) or raw is None:
+        raise _HouseRulesClassifierError("bad_json", "confidence is not a number")
+    try:
+        conf = float(raw)
+    except (TypeError, ValueError) as e:
+        raise _HouseRulesClassifierError("bad_json", "confidence is not a number") from e
+    if not math.isfinite(conf):
+        raise _HouseRulesClassifierError("bad_json", "confidence is not finite")
+    if not 0.0 <= conf <= 1.0:
+        # Round 3 (R3-SEC-8): the envelope asks for 0.0-1.0; anything else is a
+        # malformed envelope, not an opinion.
+        raise _HouseRulesClassifierError("bad_json", "confidence is out of range")
+    return conf
+
+
 def _house_rules_parse_verdict(raw: str) -> "tuple[str, float, str]":
     """Extract (violated_rule_id, confidence, detail) from a raw JSON string.
 
@@ -832,9 +937,7 @@ def _house_rules_parse_verdict(raw: str) -> "tuple[str, float, str]":
         if "violated_rule_id" not in verdict:
             raise _HouseRulesClassifierError("bad_json", "missing violated_rule_id")
         rid = str(verdict.get("violated_rule_id", "") or "")
-        conf = float(verdict.get("confidence", 0.0))
-        if not math.isfinite(conf):
-            conf = 0.0
+        conf = _house_rules_verdict_confidence(verdict)
         detail = str(verdict.get("reason", ""))[:200]
         return rid, conf, detail
     except _HouseRulesClassifierError:
@@ -848,14 +951,14 @@ def _house_rules_parse_verdict(raw: str) -> "tuple[str, float, str]":
         verdict = _json.loads(raw[start:end + 1], parse_constant=_house_rules_reject_nonfinite)
         if not isinstance(verdict, dict):
             raise _HouseRulesClassifierError("bad_json", f"top-level {type(verdict).__name__}, not object")
+        if "violated_rule_id" not in verdict:
+            raise _HouseRulesClassifierError("bad_json", "missing violated_rule_id")
         rid = str(verdict.get("violated_rule_id", "") or "")
-        conf = float(verdict.get("confidence", 0.0))
+        conf = _house_rules_verdict_confidence(verdict)
     except _HouseRulesClassifierError:
         raise
     except (ValueError, TypeError, AttributeError) as e:
         raise _HouseRulesClassifierError("bad_json", str(e)) from e
-    if not math.isfinite(conf):
-        conf = 0.0
     detail = str(verdict.get("reason", ""))[:200]
     return rid, conf, detail
 
@@ -1042,36 +1145,107 @@ class HouseRulesFloorOnly(Exception):
     It is NOT a classifier failure: ``HouseRulesGate.classify`` catches it
     BEFORE its generic backend-unavailable handler, so it never takes the
     ``classifier_error_tier0_degraded`` path (whose no-match outcome is the
-    policy default ``allow``). Carries only the tenant id — never task text."""
+    policy default ``allow``). Carries only the tenant id and WHY the order is
+    ``floor_only`` (a :data:`_FLOOR_CAUSE_*` code) — never task text."""
 
-    def __init__(self, tenant_id: str = "") -> None:
+    def __init__(self, tenant_id: str = "", cause: str = "") -> None:
         super().__init__("house-rules classifier order is floor_only")
         self.tenant_id = tenant_id or ""
+        self.cause = cause or ""
+
+
+def _house_rules_tenant_config(tenant_id: str) -> Path:
+    """``<tenant>/global/tenant.corvin.yaml`` via the shared resolver (the same
+    root every other reader of that file uses); ``CORVIN_HOME`` / ``~/.corvin``
+    only when the resolver cannot be imported."""
+    try:
+        import paths as _paths  # type: ignore  # noqa: PLC0415
+        return Path(_paths.tenant_global_dir(tenant_id)) / "tenant.corvin.yaml"
+    except Exception:  # noqa: BLE001
+        env = os.environ.get("CORVIN_HOME")
+        home = Path(os.path.expanduser(env)) if env else (Path.home() / ".corvin")
+        return home / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
+
+
+_FLOOR_CAUSE_OPERATOR_FORCED = "operator_forced"       # CORVIN_HOUSE_RULES_CLASSIFIER_ORDER
+_FLOOR_CAUSE_EGRESS_DENIED = "egress_denied"           # the tenant's L35 policy denies the host
+_FLOOR_CAUSE_POLICY_UNREADABLE = "policy_unreadable"   # config exists, cannot be evaluated
+_floor_unreadable_logged: set[str] = set()
+
+
+def _house_rules_cloud_egress_probe(tenant_id: "str | None" = None) -> "tuple[bool, str]":
+    """``(allowed, cause)`` for the cloud classifier host under the tenant's L35 policy.
+
+    ``cause`` is ``""`` when allowed, else :data:`_FLOOR_CAUSE_EGRESS_DENIED` or
+    :data:`_FLOOR_CAUSE_POLICY_UNREADABLE`.
+
+    Review 2026-11-19 (SEC-14): fail-CLOSED on a policy that exists but cannot
+    be evaluated. The whole read + parse + gate evaluation sat under one
+    ``except Exception: return True``, so a truncated write, a YAML typo or a
+    missing ``yaml`` / ``egress_gate`` import turned an egress-denied tenant
+    into ``cloud_only`` and its raw task text went to the cloud classifier -
+    a subprocess no L35 gate sees, so this probe IS the enforcement there.
+    Only "no tenant config file at all" (a zero-config install: no policy
+    exists) still answers allowed.
+
+    Round 2 (R2-SEC-10): the unreadable case is told apart from a real denial
+    and logged once per tenant with the exception class, so an operator whose
+    every request suddenly "needs approval" can see that the cause is a broken
+    ``tenant.corvin.yaml`` and not a policy somebody set.
+    """
+    tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+    def _unreadable(exc_name: str, where: str) -> "tuple[bool, str]":
+        if tid not in _floor_unreadable_logged:
+            _floor_unreadable_logged.add(tid)
+            logging.getLogger(__name__).error(
+                "[house-rules] tenant config for %s could not be evaluated (%s: %s) - "
+                "acceptable-use runs floor_only (every unmatched request escalates) "
+                "until tenant.corvin.yaml is fixed", tid, where, exc_name)
+        return False, _FLOOR_CAUSE_POLICY_UNREADABLE
+
+    try:
+        cfg = _house_rules_tenant_config(tid)
+        if not cfg.is_file():
+            return True, ""
+    except Exception as exc:  # noqa: BLE001 — cannot even tell whether a policy exists
+        return _unreadable(type(exc).__name__, "locate")
+    try:
+        import yaml  # type: ignore
+        from egress_gate import EgressGate  # type: ignore
+        doc = yaml.safe_load(cfg.read_text("utf-8"))
+        if doc is None:
+            doc = {}
+        if not isinstance(doc, dict):
+            return _unreadable(type(doc).__name__, "top-level is not a mapping")
+        # audit_writer=None → the probe emits NO egress audit event (read-only hint).
+        gate = EgressGate.from_tenant_config(doc, audit_writer=None)
+        if gate.validate(_HOUSE_RULES_CLOUD_HOST).allowed:
+            _floor_unreadable_logged.discard(tid)
+            return True, ""
+        return False, _FLOOR_CAUSE_EGRESS_DENIED
+    except Exception as exc:  # noqa: BLE001 — the probe must never raise; unparseable ⇒ floor_only
+        return _unreadable(type(exc).__name__, "read/parse/evaluate")
 
 
 def _house_rules_cloud_egress_allowed(tenant_id: "str | None" = None) -> bool:
     """True when the tenant's L35 egress policy permits the cloud classifier host.
 
-    Returns False — i.e. the tenant runs ``floor_only`` and no task text is
-    sent to the cloud classifier — when a tenant policy denies
-    ``api.anthropic.com``. Absent/unreadable policy or any error → True (cloud
-    reachable), preserving the legacy assumption (see the KNOWN_BUG tests in
-    test_adr0157_classifier.py for the read-error case)."""
+    False — the tenant runs ``floor_only`` and no task text is sent to the cloud
+    classifier — when the policy denies ``api.anthropic.com`` OR exists and
+    cannot be evaluated (see :func:`_house_rules_cloud_egress_probe`)."""
+    return _house_rules_cloud_egress_probe(tenant_id)[0]
+
+
+def _house_rules_floor_only_cause(tenant_id: "str | None" = None) -> str:
+    """Why this tenant's order is ``floor_only`` - a :data:`_FLOOR_CAUSE_*` code."""
+    env_order = (os.environ.get("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", "") or "").strip().lower()
+    if env_order == _HOUSE_RULES_ORDER_FLOOR_ONLY:
+        return _FLOOR_CAUSE_OPERATOR_FORCED
     try:
-        tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
-        env = os.environ.get("CORVIN_HOME")
-        home = Path(os.path.expanduser(env)) if env else (Path.home() / ".corvin")
-        cfg = home / "tenants" / tid / "global" / "tenant.corvin.yaml"
-        if not cfg.is_file():
-            return True
-        import yaml  # type: ignore
-        from egress_gate import EgressGate  # type: ignore
-        doc = yaml.safe_load(cfg.read_text("utf-8")) or {}
-        # audit_writer=None → the probe emits NO egress audit event (read-only hint).
-        gate = EgressGate.from_tenant_config(doc, audit_writer=None)
-        return bool(gate.validate(_HOUSE_RULES_CLOUD_HOST).allowed)
-    except Exception:  # noqa: BLE001 — the probe must never raise
-        return True
+        return _house_rules_cloud_egress_probe(tenant_id)[1] or _FLOOR_CAUSE_EGRESS_DENIED
+    except Exception:  # noqa: BLE001
+        return _FLOOR_CAUSE_POLICY_UNREADABLE
 
 
 def _house_rules_resolve_order(tenant_id: "str | None" = None) -> str:
@@ -1118,7 +1292,7 @@ def _house_rules_classify_with_chain(
     if order != _HOUSE_RULES_ORDER_FLOOR_ONLY:
         order = _house_rules_resolve_order(tenant_id)
     if order == _HOUSE_RULES_ORDER_FLOOR_ONLY:
-        raise HouseRulesFloorOnly(tenant_id or "")
+        raise HouseRulesFloorOnly(tenant_id or "", _house_rules_floor_only_cause(tenant_id))
     return _house_rules_classify_chunk(chunk, rules_block, auth_str)
 
 
@@ -1179,24 +1353,14 @@ def _house_rules_classifier(
     auth_str = ", ".join(f"{k}={v}" for k, v in (auth or {}).items()) or "none stated"
 
     text = task or ""
-    span = _HOUSE_RULES_CHUNK_CHARS
-    overlap = _HOUSE_RULES_CHUNK_OVERLAP
-    step = span - overlap
-    covered = text[: span * _HOUSE_RULES_MAX_CHUNKS]
-    if len(covered) <= span:
-        chunks = [covered]
-    else:
-        # F-04: cap at MAX_CHUNKS — range(0, covered_len, step) can yield more
-        # windows than MAX_CHUNKS when overlap > 0 (step < span).
-        chunks = [covered[i:i + span] for i in range(0, len(covered), step)
-                  if i < len(covered)][:_HOUSE_RULES_MAX_CHUNKS] or [""]
+    chunks = _house_rules_chunks(text)
     # ADR-0161: resolve the provider order ONCE per task (not per chunk) so the
     # egress probe / yaml read happens at most once even for multi-chunk tasks.
     order = _house_rules_resolve_order(tenant_id)
     if order == _HOUSE_RULES_ORDER_FLOOR_ONLY:
         # ADR-2091: no classifier subprocess, no network, no cache — the gate
         # decides on the deterministic floor (HouseRulesGate.classify).
-        raise HouseRulesFloorOnly(tenant_id or "")
+        raise HouseRulesFloorOnly(tenant_id or "", _house_rules_floor_only_cause(tenant_id))
     min_clear_conf = 1.0
     for chunk in chunks:
         now = time.monotonic()  # F-08: per-chunk timestamp so TTL is accurate
@@ -1235,7 +1399,7 @@ def _house_rules_classifier(
         if rid:
             return rid, conf, detail
         min_clear_conf = min(min_clear_conf, conf)
-    if len(text) > span * _HOUSE_RULES_MAX_CHUNKS:
+    if len(text) > _HOUSE_RULES_WINDOW:
         min_clear_conf = 0.0
     return "", min_clear_conf, "all chunks clear"
 

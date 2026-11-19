@@ -41,7 +41,14 @@ REPO_URL="${CORVIN_REPO_URL:-https://github.com/CorvinLabs/CorvinOS}"
 PORT="${CORVIN_CONSOLE_PORT:-8765}"
 BASE_URL="http://127.0.0.1:${PORT}"
 MANAGED_SRC="${CORVIN_SRC_DIR:-${XDG_DATA_HOME:-${HOME:-}/.local/share}/corvinos/src}"
-LOG="${CORVIN_UPDATE_LOG:-${TMPDIR:-/tmp}/corvinos-update.log}"
+# Log and lock: a per-user state directory (mode 700), never the world-writable
+# /tmp - the same location install.sh uses (the lock is shared with it).
+# A relative XDG_STATE_HOME is invalid (XDG Base Directory spec) and is ignored:
+# it would put the lock under whatever directory each script happens to run in.
+case "${XDG_STATE_HOME:-}" in ""|/*) ;; *) echo "  ! ignoring XDG_STATE_HOME='$XDG_STATE_HOME' (not an absolute path) - using \$HOME/.local/state" >&2; unset XDG_STATE_HOME ;; esac
+STATE_DIR="${XDG_STATE_HOME:-${HOME:-}/.local/state}/corvinos"
+( umask 077 && mkdir -p "$STATE_DIR" ) 2>/dev/null && chmod 700 "$STATE_DIR" 2>/dev/null || true
+LOG="${CORVIN_UPDATE_LOG:-$STATE_DIR/corvinos-update.log}"
 UV_PIN_VERSION="0.12.9"
 UV_INSTALLER_SHA256="222e006c0fe4a0d793031833e469b21df72311f4e3526ffecca0e19e6dfabc32"
 REBUILD_ONLY=0; NO_RESTART=0; ROLLBACK=1
@@ -87,8 +94,41 @@ _quiet() {
     "$@" </dev/null >>"$LOG" 2>&1 &
     _q_pid=$!
     while kill -0 "$_q_pid" 2>/dev/null; do printf '.'; sleep 2; done
-    if wait "$_q_pid"; then printf ' %s\n' "$(_g '✓')"; return 0; fi
-    printf ' %s\n' "$(_r '✗')"; return 1
+    if wait "$_q_pid"; then _q_pid=""; printf ' %s\n' "$(_g '✓')"; return 0; fi
+    _q_pid=""; printf ' %s\n' "$(_r '✗')"; return 1
+}
+
+# _kill_tree PID - end a background step and everything it started. A step run
+# with "&" from a non-interactive sh ignores SIGINT, and a TERM sent to this
+# script alone never reaches it: after Ctrl-C the script exited, released its
+# lock, and the step (git fetch, uv sync, npm build) kept writing the tree.
+_tree_pids() {  # PID and its descendants, parents first
+    printf '%s\n' "$1"
+    for _tp_c in $(pgrep -P "$1" 2>/dev/null || ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$1" '$2 == p { print $1 }'); do
+        _tree_pids "$_tp_c"
+    done
+}
+_kill_tree() {
+    _kt_all="$(_tree_pids "$1")"
+    for _kt_p in $_kt_all; do kill -TERM "$_kt_p" 2>/dev/null || true; done
+    _kt_w=0
+    while [ "$_kt_w" -lt 10 ]; do
+        _kt_alive=0
+        for _kt_p in $_kt_all; do kill -0 "$_kt_p" 2>/dev/null && _kt_alive=1; done
+        [ "$_kt_alive" = 0 ] && return 0
+        sleep 1; _kt_w=$((_kt_w + 1))
+    done
+    for _kt_p in $_kt_all; do kill -KILL "$_kt_p" 2>/dev/null || true; done
+    return 0
+}
+# _on_signal CODE - INT/TERM: stop the running background step, THEN leave.
+_on_signal() {
+    trap '' INT TERM
+    if [ -n "${_q_pid:-}" ] && kill -0 "$_q_pid" 2>/dev/null; then
+        _kill_tree "$_q_pid"
+        echo "  (interrupted - stopped the running step)" >>"$LOG" 2>/dev/null
+    fi
+    exit "$1"
 }
 
 _retry() {  # _retry N cmd… — backoff 2,4,8 s
@@ -123,7 +163,7 @@ export UV_NATIVE_TLS="${UV_NATIVE_TLS:-1}"
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 # ── Lock (shared with install.sh; the watchdog stands down while it exists) ──
-LOCK_DIR="${TMPDIR:-/tmp}/corvinos-setup.lock"
+LOCK_DIR="$STATE_DIR/corvinos-setup.lock"
 # Same PID-checked lock as install.sh: a dead owner's lock is stale.
 _take_lock() {
     if mkdir "$LOCK_DIR" 2>/dev/null; then echo $$ >"$LOCK_DIR/pid"; return 0; fi
@@ -136,8 +176,30 @@ _take_lock() {
     fi
     return 1
 }
+{ [ -d "$STATE_DIR" ] && [ ! -L "$STATE_DIR" ] && [ -O "$STATE_DIR" ]; } \
+    || die "cannot use a private state directory at $STATE_DIR (set XDG_STATE_HOME or HOME to a directory you own)" 3
 _take_lock || die "another CorvinOS install/update is running (lock: $LOCK_DIR, pid $(cat "$LOCK_DIR/pid" 2>/dev/null))" 3
-trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
+# On ANY non-zero exit while an autostash is still pending, say where the
+# operator's uncommitted work is. Until 2026-11-19 a failure after the
+# autostash ended in "git update failed - nothing changed" with the working
+# tree silently emptied into a stash nobody was told about.
+_on_exit() {
+    _rc=$?
+    rm -rf "$LOCK_DIR"
+    if [ "${STASHED:-0}" = 1 ] && [ "$_rc" != 0 ]; then
+        printf '\n  %s\n' "$(_r 'Your uncommitted changes are in git stash - they are NOT lost.')" >&2
+        # Named by its commit: "stash pop" would take whatever is on top.
+        printf '  Put them back with:  git -C "%s" stash apply %s\n' "${SRC:-.}" "${STASH_SHA:-}" >&2
+    fi
+}
+trap _on_exit EXIT
+# A signal must END the run. The handler used to remove the lock and return,
+# so after Ctrl-C / SIGTERM the script carried on without its lock (and the
+# watchdog no longer stood down). exit runs _on_exit, which removes the lock.
+# The background step of _quiet is stopped first: it used to outlive the script
+# and keep changing the tree after the lock was gone.
+trap '_on_signal 130' INT
+trap '_on_signal 143' TERM
 
 # ── 1. Tooling: uv (self-bootstrapping, pinned + checksummed) ───────────────
 step "[1/6] Tools"
@@ -237,6 +299,60 @@ fetch_managed() {  # managed tree → exactly origin/$BRANCH
     : >"$SRC/.corvin-managed"
 }
 
+# The autostash is identified by its COMMIT, never by position. `git stash
+# push` exits 0 without creating an entry when there is nothing it can stash
+# (a tree that is dirty only inside a submodule shows up in `git status` and
+# stashes nothing): STASHED=1 was set anyway, and the later pop/apply+drop took
+# stash@{0} - somebody's older, unrelated stash - re-applied it over the update
+# and, on a conflict, reset --hard. Now STASHED=1 only when refs/stash moved,
+# and every later step names that commit.
+_autostash() {
+    STASH_SHA=""
+    _stash_before="$(_git rev-parse -q --verify refs/stash 2>/dev/null || true)"
+    _git stash push -q -m "corvin-update autostash $(date +%Y%m%d-%H%M%S)" >>"$LOG" 2>&1 || return 1
+    _stash_after="$(_git rev-parse -q --verify refs/stash 2>/dev/null || true)"
+    if [ -n "$_stash_after" ] && [ "$_stash_after" != "$_stash_before" ]; then
+        STASH_SHA="$_stash_after"
+        STASHED=1
+    fi
+    return 0
+}
+
+_drop_autostash() {  # drop OUR entry (found by commit), wherever it sits in the list
+    _stash_ref="$(_git stash list --format='%H %gd' 2>/dev/null | awk -v s="$STASH_SHA" '$1 == s { print $2; exit }')"
+    [ -n "$_stash_ref" ] || return 0
+    _git stash drop -q "$_stash_ref" >>"$LOG" 2>&1 || true
+}
+
+# Re-apply OUR stash with its index state. Plain "stash apply" drops it: a
+# staged change came back unstaged ("MM" -> " M") and a staged new file came
+# back merely added. --index refuses when the staged part no longer applies;
+# then the changes are applied without it - unstaged beats left in the stash.
+# The tree holds nothing else (the autostash emptied it), so the reset between
+# the two attempts only removes the first attempt's leftovers.
+_apply_autostash() {
+    _git stash apply -q --index "$STASH_SHA" >>"$LOG" 2>&1 && return 0
+    _git reset -q --hard HEAD >>"$LOG" 2>&1 || true
+    _git stash apply -q "$STASH_SHA" >>"$LOG" 2>&1 || return 1
+    warn "your staged changes came back unstaged (the index state did not apply on top of the update)"
+}
+
+_restore_stash() {  # a failed update puts the autostash back - or says where it is
+    [ "${STASHED:-0}" = 1 ] && [ -n "${STASH_SHA:-}" ] || return 0
+    if _apply_autostash; then
+        _drop_autostash
+        STASHED=0
+        warn "the update failed - your local changes were put back in the working tree"
+    else
+        # A conflicting apply keeps the stash entry; drop the half-applied
+        # result of OUR stash so no conflict markers stay behind (the tree held
+        # nothing else: the autostash had just emptied it). STASHED stays 1:
+        # _on_exit names the commit.
+        _git reset -q --hard HEAD >>"$LOG" 2>&1 || true
+        warn "the update failed and your local changes could not be re-applied - changes are in git stash"
+    fi
+}
+
 fetch_checkout() {  # developer checkout — never lose work
     command -v git >/dev/null 2>&1 || { warn "git not found — code not updated"; return 0; }
     _cur="$(_git symbolic-ref --short -q HEAD || echo DETACHED)"
@@ -246,8 +362,7 @@ fetch_checkout() {  # developer checkout — never lose work
         return 0
     fi
     if [ -n "$(_git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-        _git stash push -q -m "corvin-update autostash $(date +%Y%m%d-%H%M%S)" >>"$LOG" 2>&1 || return 1
-        STASHED=1
+        _autostash || return 1
     fi
     if _git merge-base --is-ancestor HEAD "origin/$BRANCH" 2>/dev/null; then
         _git merge -q --ff-only "origin/$BRANCH" >>"$LOG" 2>&1 || return 1
@@ -265,8 +380,8 @@ fetch_checkout() {  # developer checkout — never lose work
     # leaves the tree clean and the stash in place — never conflict markers in
     # files the build below would choke on.
     if [ "$STASHED" = 1 ]; then
-        if _git stash apply -q >>"$LOG" 2>&1; then
-            _git stash drop -q >>"$LOG" 2>&1 || true
+        if _apply_autostash; then
+            _drop_autostash
             STASHED=0
             ok "local changes re-applied on top of the update"
         else
@@ -276,7 +391,7 @@ fetch_checkout() {  # developer checkout — never lose work
     fi
 }
 
-STASHED=0
+STASHED=0; STASH_SHA=""
 if [ "$REBUILD_ONLY" = 1 ]; then
     progress delivery skipped "rebuild-only"
     ok "code unchanged (--rebuild-only)"
@@ -284,7 +399,14 @@ else
     progress delivery running
     case "$KIND" in
         managed) _quiet "fetching $BRANCH" fetch_managed || { progress delivery failed "download failed"; die "could not download the update — nothing changed (see $LOG)"; } ;;
-        checkout) fetch_checkout || { progress delivery failed "git update failed"; die "git update failed — nothing changed (see $LOG)"; } ;;
+        checkout) fetch_checkout || {
+                progress delivery failed "git update failed"
+                _restore_stash
+                if [ "$STASHED" = 1 ]; then
+                    die "git update failed — code unchanged, but your uncommitted changes are in git stash (see $LOG)"
+                fi
+                die "git update failed — nothing changed (see $LOG)"
+            } ;;
     esac
     NEW_REV="$(_git rev-parse HEAD 2>/dev/null || echo tarball)"
     progress delivery ok "$NEW_REV"
@@ -474,7 +596,7 @@ if [ "$VERIFY_OK" = 1 ]; then
     printf '\n%s\n' "$(_g "$(_b 'CorvinOS is up to date and running.')")"
     printf '  %s/console/   (reload the tab: Ctrl+Shift+R / Cmd+Shift+R)\n' "$BASE_URL"
     [ -n "$BACKUP_REF" ] && printf '  previous code kept on branch: %s\n' "$BACKUP_REF"
-    [ "$STASHED" = 1 ] && printf '  your local changes: git stash list  (re-apply: git stash pop)\n'
+    [ "$STASHED" = 1 ] && printf '  your local changes: git stash list  (re-apply: git stash apply %s)\n' "$STASH_SHA"
     exit 0
 fi
 

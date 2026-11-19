@@ -36,7 +36,8 @@ Architecture:
     in declared order, persists the plan + per-layer results to
     ``<tenant>/global/erasure/<request_id>.json``.
   * Audit events on L16 hash chain (allow-list enforced):
-    - ``erasure.requested`` (WARNING) — emitted FIRST, before any
+    - ``erasure.requested`` (WARNING) — written FIRST and audit-first
+      (``audit_write_or_die``; no commit, no purge), before any
       handler runs
     - ``erasure.applied`` (INFO) — per layer, on each successful purge
     - ``erasure.skipped`` (INFO) — per layer, when handler finds nothing
@@ -156,13 +157,21 @@ def _derive_reason_code(status: "LayerStatus", code: str | None) -> str:
     return ReasonCode.STORE_ERROR.value
 
 
-# Subject-id shape — operator-chosen pseudonymous identifier.
-# Allowed: alphanumeric + dash/underscore + dot + colon, 1–128 chars.
-# Forbidden: path separators, control chars, whitespace, @-sign,
-# spaces, slashes. The colon is admitted so "channel:chat_key" style
-# identifiers work directly — the email-shape check still rejects
-# PII because "@" is not in the allowed set.
-_SUBJECT_ID_RE = re.compile(r"^[A-Za-z0-9.:_\-]{1,128}$")
+# Subject-id shape — the identifier the stores actually hold for the subject.
+# Allowed: alphanumeric + dash/underscore + dot + colon + "@" + "+", 1–128 chars.
+# Forbidden: path separators, control chars, whitespace.
+#
+# Review 2026-11-19 (SEC-5): "@" and "+" were excluded to force a pseudonym.
+# The effect was the opposite of protective: the bridges key a person by the
+# id the channel hands them - a WhatsApp JID (``49151...@s.whatsapp.net``), an
+# e-mail channel chat key, a ``+49...`` number - so exactly those subjects could
+# not be named in an Art. 17 request at all, and a hashed stand-in matches no
+# stored record. ``subject_id`` is in ``security_events._AUDIT_PSEUDONYM_KEYS``,
+# so an e-mail- or phone-shaped value is written to the chain as its
+# sha256[:8] fingerprint, never verbatim. Round 2 (R2-SEC-7): that includes a
+# messenger JID (``49151...@s.whatsapp.net``) - its local part is the person's
+# phone number - both in the chain record and in the 0600 trail file.
+_SUBJECT_ID_RE = re.compile(r"^[A-Za-z0-9.:_\-@+]{1,128}$")
 
 
 def validate_subject_id(subject_id: str) -> str:
@@ -170,9 +179,9 @@ def validate_subject_id(subject_id: str) -> str:
     unchanged on validation pass); raises :class:`ValueError` on
     shape failure.
 
-    Conservative shape — operators sometimes pass raw email or
-    other PII as subject_id; this regex forces them to use a
-    pseudonym (or hash-of-email) first.
+    Conservative shape — no path separator, no whitespace, no control
+    character. ``@`` and ``+`` are admitted because channel ids carry them
+    (see :data:`_SUBJECT_ID_RE`); the audit record pseudonymises such a value.
 
     Uses :func:`re.fullmatch` (NOT :func:`re.match`) so the whole
     string must match end-to-end. ``re.match`` with a trailing ``$``
@@ -186,7 +195,7 @@ def validate_subject_id(subject_id: str) -> str:
     if not _SUBJECT_ID_RE.fullmatch(subject_id):
         raise ValueError(
             f"subject_id {subject_id!r} fails shape check "
-            f"{_SUBJECT_ID_RE.pattern} — use a pseudonymous identifier"
+            f"{_SUBJECT_ID_RE.pattern} — no path separators or whitespace"
         )
     return subject_id
 
@@ -252,6 +261,9 @@ class ErasureResult:
     completed_at: float = 0.0
     per_layer: list[ErasureLayerResult] = field(default_factory=list)
     overall_status: OverallStatus = OverallStatus.COMPLETED
+    #: R3-SEC-6: layers that APPLIED an erasure and additionally left records
+    #: standing that name the subject only by the lossy directory form.
+    unattributable_layers: list[str] = field(default_factory=list)
 
     @property
     def applied_count(self) -> int:
@@ -282,6 +294,7 @@ class ErasureResult:
                 }
                 for r in self.per_layer
             ],
+            "unattributable_layers": list(self.unattributable_layers),
         }
         return d
 
@@ -416,6 +429,11 @@ AuditWriter = Callable[[str, str, dict[str, Any]], None]
 
 # ----- orchestrator -------------------------------------------------
 
+class ErasureAuditError(RuntimeError):
+    """The audit-first ``erasure.requested`` record did not commit. No handler
+    ran; the request must be retried once the chain is writable again."""
+
+
 class ErasureScopeError(Exception):
     """Raised on cross-tenant erasure attempts. Tenants are siloed
     by ADR-0007; erasure NEVER crosses the boundary."""
@@ -528,8 +546,16 @@ class ErasureOrchestrator:
         except Exception:
             pass  # Best-effort: audit failure should not prevent continuation
 
-        # Audit emission: BEFORE any handler runs.
-        self._emit("erasure.requested", "WARNING", {
+        # Audit emission: BEFORE any handler runs - and it must COMMIT.
+        # Review 2026-11-19 (SEC-12): this went through the best-effort
+        # ``_emit``, which swallows every writer error, and the production
+        # writer swallowed its own on top. A full disk, a refused chain or a
+        # missing forge package therefore produced an erasure with NO
+        # ``erasure.requested`` record - the handlers deleted data and the
+        # trail could not say who asked. The request is now written through
+        # the writer's ``strict`` path (``security_events.audit_write_or_die``);
+        # if it does not commit, nothing is purged.
+        self._emit_or_die("erasure.requested", "WARNING", {
             "request_id": request.request_id,
             "subject_id": request.subject_id,
             "requester": request.requester,
@@ -543,6 +569,7 @@ class ErasureOrchestrator:
 
         for handler in self._handlers:
             t0 = time.time()
+            _safe_form_reset()
             try:
                 lr = handler.purge(request.subject_id, request.request_id)
                 # Validate handler return — must be ErasureLayerResult
@@ -576,6 +603,28 @@ class ErasureOrchestrator:
                     duration_ms=int((time.time() - t0) * 1000),
                 )
 
+            # R3-SEC-6: records that name the subject only by the lossy
+            # directory form were left in place (they may be another person's).
+            # A layer that would otherwise read as clean says so.
+            ambiguous = _safe_form_count()
+            if ambiguous and lr.status == LayerStatus.SKIPPED:
+                lr = ErasureLayerResult(
+                    layer_id=lr.layer_id, status=LayerStatus.SKIPPED, count=lr.count,
+                    reason=(f"{ambiguous} record(s) carry only the folded directory form of "
+                            "the subject id and no raw id - not attributable, left in place. "
+                            + (lr.reason or "")),
+                    code=ReasonCode.NOT_ERASABLE.value, duration_ms=lr.duration_ms,
+                )
+            elif ambiguous and lr.status == LayerStatus.APPLIED:
+                lr = ErasureLayerResult(
+                    layer_id=lr.layer_id, status=lr.status, count=lr.count,
+                    reason=((lr.reason + " ") if lr.reason else "")
+                    + (f"{ambiguous} further record(s) carry only the folded directory "
+                       "form of the subject id - not attributable, left in place."),
+                    code=lr.code, duration_ms=lr.duration_ms,
+                )
+                result.unattributable_layers.append(lr.layer_id)
+
             result.per_layer.append(lr)
 
             event_type = {
@@ -596,6 +645,18 @@ class ErasureOrchestrator:
                 "code": _derive_reason_code(lr.status, lr.code),
                 "duration_ms": lr.duration_ms,
             })
+            if ambiguous and lr.status == LayerStatus.APPLIED:
+                # The chain says it too: this layer deleted what it could
+                # attribute and left ``ambiguous`` record(s) it could not.
+                self._emit("erasure.skipped", "INFO", {
+                    "request_id": request.request_id,
+                    "subject_id": request.subject_id,
+                    "layer_id": lr.layer_id,
+                    "status": LayerStatus.SKIPPED.value,
+                    "count": ambiguous,
+                    "code": ReasonCode.NOT_ERASABLE.value,
+                    "duration_ms": 0,
+                })
 
         result.completed_at = time.time()
         result.overall_status = _aggregate_status(result.per_layer)
@@ -628,6 +689,74 @@ class ErasureOrchestrator:
 
     # ----- trail persistence ----------------------------------------
 
+    @staticmethod
+    def _trail_record(result: ErasureResult) -> dict[str, Any]:
+        """The trail document. Round 2 (R2-SEC-7): the trail outlives the erasure
+        it records, so a personal-shaped ``subject_id`` / ``requester`` (an
+        e-mail, a phone number, a messenger JID) is stored as the SAME
+        sha256[:8] pseudonym the chain record carries - never verbatim. The
+        operator correlates trail and chain through ``request_id`` and the
+        pseudonym; an opaque id (``user_42``) is kept as given."""
+        doc = result.to_dict()
+        req = doc.get("request")
+        if isinstance(req, dict):
+            try:
+                try:
+                    from forge.security_events import pseudonymise_identifier  # noqa: PLC0415
+                except ImportError:  # forge/ not on sys.path yet
+                    import sys as _sys  # noqa: PLC0415
+                    _forge = Path(__file__).resolve().parents[2] / "forge"
+                    if str(_forge) not in _sys.path:
+                        _sys.path.insert(0, str(_forge))
+                    from forge.security_events import pseudonymise_identifier  # noqa: PLC0415
+                pseudo: list[str] = []
+                swaps: list[tuple[str, str]] = []
+                for key in ("subject_id", "requester"):
+                    val = req.get(key)
+                    if isinstance(val, str) and val:
+                        new = pseudonymise_identifier(val)
+                        if new != val:
+                            req[key] = new
+                            pseudo.append(key)
+                            swaps.append((val, new))
+                            # ...and the adapter's directory form of the same id
+                            # (``4915..._s_whatsapp_net``), which store paths carry.
+                            safe = re.sub(r"[^A-Za-z0-9]", "_", val)[:64]
+                            if safe != val and len(safe) >= 6:
+                                swaps.append((safe, new))
+                if pseudo:
+                    doc["pii_fingerprinted"] = sorted(pseudo)
+                # The handlers' free-form ``reason`` texts quote the subject too
+                # ("no session artifacts at .../sessions/<subject>/artifacts"):
+                # the same value, the same substitution, everywhere in the
+                # document - otherwise the pseudonym above is decoration.
+                if swaps:
+                    def _scrub(node: Any) -> Any:
+                        if isinstance(node, str):
+                            for raw, fp in swaps:
+                                node = node.replace(raw, fp)
+                            return node
+                        if isinstance(node, dict):
+                            return {k: _scrub(v) for k, v in node.items()}
+                        if isinstance(node, list):
+                            return [_scrub(v) for v in node]
+                        return node
+                    doc = _scrub(doc)
+                    req = doc["request"]
+            except Exception:  # noqa: BLE001
+                # Fail closed: without the shared transform the identifiers are
+                # withheld rather than written as given.
+                raws = [str(req.get(k)) for k in ("subject_id", "requester") if req.get(k)]
+                for key in ("subject_id", "requester"):
+                    if req.get(key):
+                        req[key] = "<withheld>"
+                for layer in doc.get("per_layer") or []:
+                    if isinstance(layer, dict) and isinstance(layer.get("reason"), str):
+                        for raw in raws:
+                            layer["reason"] = layer["reason"].replace(raw, "<withheld>")
+                doc["pii_fingerprinted"] = ["subject_id", "requester"]
+        return doc
+
     def _persist_trail(self, result: ErasureResult) -> None:
         self.trail_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = self.trail_dir / f"{result.request.request_id}.json"
@@ -637,7 +766,7 @@ class ErasureOrchestrator:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             with open(tmp, "w", opener=lambda p, f: os.open(p, f, 0o600), encoding="utf-8") as fh:
-                fh.write(json.dumps(result.to_dict(), indent=2, sort_keys=True) + "\n")
+                fh.write(json.dumps(self._trail_record(result), indent=2, sort_keys=True) + "\n")
             os.replace(tmp, path)
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)
@@ -658,8 +787,55 @@ class ErasureOrchestrator:
         except Exception:  # noqa: BLE001
             pass
 
+    def _emit_or_die(self, event_type: str, severity: str, details: dict[str, Any]) -> None:
+        """Audit-FIRST write: returns only when the record committed.
+
+        Uses the writer's ``strict`` callable when it has one (the production
+        writer from :func:`make_forge_audit_writer`); a plain callable - a test
+        double, an explicit no-op - is called directly and its exception is NOT
+        swallowed. Raises :class:`ErasureAuditError`; the caller must not run a
+        handler after that.
+        """
+        _validate_audit_details(details)
+        writer = getattr(self.audit_writer, "strict", None)
+        if not callable(writer):
+            writer = self.audit_writer
+        try:
+            writer(event_type, severity, details)
+        except Exception as exc:  # noqa: BLE001
+            raise ErasureAuditError(
+                f"{event_type} could not be written to the audit chain "
+                f"({type(exc).__name__}) - erasure refused, nothing was purged"
+            ) from exc
+
 
 # ----- aggregate-status logic ---------------------------------------
+
+def _safe_form_reset() -> None:
+    """Reset the handlers' per-thread ambiguous-match counter (R3-SEC-6).
+
+    ``erasure_handlers`` imports this module, so it is looked up at call time;
+    an orchestrator used without the built-in handlers has nothing to reset.
+    """
+    import sys as _sys  # noqa: PLC0415
+    mod = _sys.modules.get("erasure_handlers")
+    if mod is not None:
+        try:
+            mod.reset_ambiguous_safe_form_count()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _safe_form_count() -> int:
+    import sys as _sys  # noqa: PLC0415
+    mod = _sys.modules.get("erasure_handlers")
+    if mod is None:
+        return 0
+    try:
+        return int(mod.ambiguous_safe_form_count())
+    except Exception:  # noqa: BLE001
+        return 0
+
 
 def _aggregate_status(per_layer: list[ErasureLayerResult]) -> OverallStatus:
     if not per_layer:
@@ -754,9 +930,18 @@ def make_forge_audit_writer(audit_path: Path) -> AuditWriter:
             if str(forge_pkg) not in sys.path:
                 sys.path.insert(0, str(forge_pkg))
         from forge.security_events import write_event  # type: ignore
-    except Exception:  # noqa: BLE001
+        from forge.security_events import audit_write_or_die  # type: ignore
+    except Exception as _imp_exc:  # noqa: BLE001
+        _cause = type(_imp_exc).__name__
+
         def _noop(event_type: str, severity: str, details: dict[str, Any]) -> None:
             return
+
+        def _strict_unavailable(event_type: str, severity: str, details: dict[str, Any]) -> None:
+            raise RuntimeError(f"audit writer unavailable (forge.security_events: {_cause})")
+
+        # Best-effort records stay a no-op; an audit-FIRST record must fail.
+        _noop.strict = _strict_unavailable  # type: ignore[attr-defined]
         return _noop
 
     def _writer(event_type: str, severity: str, details: dict[str, Any]) -> None:
@@ -768,4 +953,14 @@ def make_forge_audit_writer(audit_path: Path) -> AuditWriter:
         except Exception:  # noqa: BLE001
             pass
 
+    def _strict(event_type: str, severity: str, details: dict[str, Any]) -> None:
+        # No ``except``: AuditChainFull / AuditTenantMismatch / OSError reach
+        # ``ErasureOrchestrator._emit_or_die``, which refuses the erasure.
+        Path(audit_path).parent.mkdir(parents=True, exist_ok=True)
+        audit_write_or_die(
+            audit_path, event_type,
+            severity=severity, details=details,
+        )
+
+    _writer.strict = _strict  # type: ignore[attr-defined]
     return _writer

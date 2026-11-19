@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..pipeline.manifest import contained_path, validate_component_id
+
 _HAC_ALPHABET = string.ascii_letters + string.digits + "_-"
 
 
@@ -29,13 +31,44 @@ class SubManagerSpec:
     @classmethod
     def from_dict(cls, d: dict) -> SubManagerSpec:
         return cls(
-            manager_id=str(d["manager_id"]),
+            manager_id=validate_component_id(d["manager_id"], kind="manager_id"),
             stages=list(d.get("stages", [])),
             budget_fraction=float(d.get("budget_fraction", 0.33)),
             min_iterations=int(d.get("min_iterations", 10)),
             strategy=str(d.get("strategy", "bayesian")),
             steering_gate=bool(d.get("steering_gate", False)),
         )
+
+
+def require_unique_manager_ids(sub_managers: "list[SubManagerSpec]") -> None:
+    """Refuse a HAC run that names one ``manager_id`` twice.
+
+    Results, budgets, loss weights and the on-disk directory are all keyed by
+    ``manager_id``: two sub-managers sharing one id run two ComputeRuns whose
+    results overwrite each other, and only one of them was reachable by an
+    abort (the other kept executing tools after ``request_abort``).
+    """
+    # Case-insensitive (review R3-BR-5): ``m`` and ``M`` passed this check and are
+    # one directory on a case-insensitive filesystem.
+    seen: set[str] = set()
+    dupes: list[str] = []
+    for sm in sub_managers:
+        key = str(sm.manager_id).casefold()
+        if key in seen and sm.manager_id not in dupes:
+            dupes.append(sm.manager_id)
+        seen.add(key)
+        stage_keys: set[str] = set()
+        for stage in (getattr(sm, "stages", None) or []):
+            sid = str(stage.get("stage_id", "") if isinstance(stage, dict)
+                      else getattr(stage, "stage_id", "")).casefold()
+            if not sid:  # a HAC stage need not carry an id
+                continue
+            if sid in stage_keys:
+                raise ValueError(
+                    f"duplicate stage_id in sub-manager {sm.manager_id!r} (case-insensitive)")
+            stage_keys.add(sid)
+    if dupes:
+        raise ValueError(f"duplicate manager_id in sub_managers: {sorted(dupes)}")
 
 
 @dataclasses.dataclass
@@ -133,7 +166,8 @@ class HACStore:
         return json.loads(p.read_text(encoding="utf-8"))
 
     def manager_dir(self, manager_id: str) -> Path:
-        d = self.root / "sub_managers" / manager_id
+        validate_component_id(manager_id, kind="manager_id")
+        d = contained_path(self.root, "sub_managers", manager_id)
         d.mkdir(parents=True, exist_ok=True)
         os.chmod(d, 0o700)
         return d

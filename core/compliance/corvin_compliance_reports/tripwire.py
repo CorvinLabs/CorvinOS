@@ -397,10 +397,92 @@ def _last_record(path: Path) -> dict | None:
     return None
 
 
+def _anchored_chain_identity(path: Path) -> str:
+    """Genesis hash the out-of-tree identity record holds for *path*, or "".
+
+    Read through the chain writer's own helper so there is one definition of
+    where that record lives. A writer that cannot be imported answers "" here:
+    ``audit_writer_reachable`` refuses that boot on its own.
+    """
+    try:
+        from forge import security_events as _se  # type: ignore[import-not-found]  # noqa: PLC0415
+        rec = _se._read_chain_path_record(path)
+    except Exception:  # noqa: BLE001
+        return ""
+    if isinstance(rec, dict) and isinstance(rec.get("genesis"), str):
+        return rec["genesis"]
+    return ""
+
+
+def _chain_existence_evidence(path: Path) -> "tuple[str, int]":
+    """Out-of-tree evidence that a chain existed at *path*, beyond the identity
+    record: ``(path_keyed, host_markers)``.
+
+    Round 2 (R2-SEC-4). "Fresh install" used to be decided by ONE record,
+    ``chain_ids/<sha256(path)>``. Whoever removes the chain file and that one
+    record got a boot on "no chain yet" although the key directory still held
+    the rest of the chain's footprint.
+
+    ``path_keyed`` names a record keyed on THIS path that still exists: the
+    chain witness (``chain_witness/<sha256(realpath)>``) or, since round 3
+    (R3-SEC-5), a ``chain_tails/`` record whose ``path_sha`` is this path -
+    written on every chained append, so it exists before the first
+    verification creates a witness. It proves a chain
+    lived here and refuses the boot. (``forge.chain_loss`` - the one audited way
+    to continue after a lost chain - moves the witness to
+    ``chain_witness_retired/`` together with the identity record, so a recorded
+    loss does not trip this.)
+
+    ``host_markers`` counts what cannot be tied to a path: the genesis-keyed
+    ``chain_tails/`` and ``mac_active_chains/`` entries and the host-wide
+    ``audit_mac_active`` sentinel. One key directory serves every chain of the
+    host (each tenant, a second runtime root, every sandbox that shares the
+    key), so their presence does not say that THIS path had a chain - refusing
+    on them would refuse the first boot of every second tenant. They are
+    reported, not enforced.
+    """
+    try:
+        from forge import security_events as _se  # type: ignore[import-not-found]  # noqa: PLC0415
+        base = _se._mac_sentinel_path().parent
+    except Exception:  # noqa: BLE001
+        return "", 0
+    path_keyed = ""
+    try:
+        if _se._chain_witness_path(path).exists():
+            path_keyed = "chain_witness"
+    except Exception:  # noqa: BLE001
+        pass
+    if not path_keyed:
+        # R3-SEC-5: a tail record carries the sha256 of the chain path it was
+        # written for. Removing the chain, its identity record AND its witness
+        # used to leave only genesis-keyed markers, i.e. a warning and a clean
+        # boot on a fresh chain. Records from before ``path_sha`` stay
+        # unattributable and are counted as host markers below.
+        try:
+            if _se.chain_tail_records_for_path(path) > 0:
+                path_keyed = "a chain tail record"
+        except Exception:  # noqa: BLE001
+            pass
+    host = 0
+    for sub in ("chain_tails", "mac_active_chains"):
+        try:
+            host += sum(1 for _ in (base / sub).iterdir())
+        except OSError:
+            pass
+    try:
+        if (base / "audit_mac_active").exists():
+            host += 1
+    except OSError:
+        pass
+    return path_keyed, host
+
+
 def audit_chain_intact() -> TripwireResult:
     """BLOCKING: the audit writer must be sound RIGHT NOW.
 
-    An absent or empty chain passes — a fresh install has nothing to verify yet.
+    An absent or empty chain passes only when no chain was ever anchored for
+    its path (a fresh install has nothing to verify yet); an absent chain with
+    an out-of-tree identity record is ``chain_missing`` and refuses the boot.
 
     This deliberately asks "does the mechanism work now", not "has it ever been
     broken", and the distinction is load-bearing. It was written as a full-file
@@ -437,6 +519,47 @@ def audit_chain_intact() -> TripwireResult:
         return TripwireResult(name, False, f"audit_path() failed: {type(exc).__name__}")
 
     if not path.exists() or path.stat().st_size == 0:
+        # Review 2026-11-19 (SEC-8): "absent" is only a fresh install when
+        # nothing was ever anchored for this path. The out-of-tree identity
+        # record (beside the anchor key, out of reach of whoever removed the
+        # file) names a chain that existed here - a deleted or emptied chain
+        # used to boot as "no chain yet", which made removing the whole trail
+        # the one tampering the tripwire could not see.
+        anchored = _anchored_chain_identity(path)
+        if anchored:
+            return TripwireResult(
+                name, False,
+                "chain_missing: the audit chain file is absent or empty, but a chain was "
+                f"anchored for this path (genesis {anchored[:12]}...). Restore the chain "
+                "backup; if no backup exists, record the loss with "
+                "`python -m forge.chain_loss --chain <path> --cause \"...\"` - nothing "
+                "starts a fresh chain over a lost one silently",
+            )
+        # Round 2 (R2-SEC-4): the identity record is one file; a chain leaves
+        # more than that beside the key.
+        path_keyed, host_markers = _chain_existence_evidence(path)
+        if path_keyed:
+            return TripwireResult(
+                name, False,
+                "chain_missing: the audit chain file is absent or empty and its identity "
+                f"record is gone, but {path_keyed} beside the anchor key still names a "
+                "chain at this path - the chain AND its identity record were removed. "
+                "Restore both from backup; if no backup exists, record the loss with "
+                "`python -m forge.chain_loss --chain <path> --cause \"...\"` - nothing "
+                "starts a fresh chain over a lost one silently",
+            )
+        if host_markers:
+            # Not attributable to this path (see _chain_existence_evidence): the
+            # boot continues, the operator is told.
+            _log.warning(
+                "audit chain at %s is absent/empty with no identity record, while %d chain "
+                "marker(s) of this host exist beside the anchor key. Expected for a new "
+                "tenant or runtime root; NOT expected if this install already had a chain.",
+                path, host_markers)
+            return TripwireResult(
+                name, True,
+                f"no chain yet (no record for this path; {host_markers} marker(s) of other "
+                "chains exist beside the anchor key)")
         return TripwireResult(name, True, "no chain yet (fresh install)")
 
     try:
@@ -800,7 +923,8 @@ def l10_hook_registered() -> TripwireResult:
     registered directly in a settings file. Neither is something the platform
     can do for the operator, so this probe REPORTS (it never blocks a boot):
     a boot without the hook is a boot where Claude Code's own file writes
-    bypass the L10 gate.
+    bypass the L10 gate. The finding is CRITICAL (log, stderr and the chain
+    record), see :data:`CRITICAL_FINDINGS`.
     """
     name = "l10_hook_registered"
     checked: List[str] = []
@@ -819,12 +943,19 @@ def l10_hook_registered() -> TripwireResult:
             str(k).startswith("voice@") and v for k, v in enabled.items()
         ):
             return TripwireResult(name, True, f"voice plugin (carries hooks.json) enabled in {p}")
+    # Review 2026-11-19 (SEC-1): the remedy named a marketplace that does not
+    # exist (``claudeos-local``); the repo's marketplace is ``corvin-voice-local``
+    # (.claude-plugin/marketplace.json). The consequence is stated, not implied.
     return TripwireResult(
         name, False,
         "L10 path_gate is NOT registered as a Claude Code PreToolUse hook "
-        f"(checked {len(checked)} settings file(s)) — enable the `voice` plugin "
-        "(`/plugin install voice@claudeos-local`) or add the hook to ~/.claude/settings.json; "
-        "see docs/claude-ref/layer-10-path-gate.md",
+        f"(checked {len(checked)} settings file(s)): every worker file write and shell "
+        "command runs WITHOUT the fail-closed path gate - the audit chain, session "
+        "ledger and gate sources are writable by the worker. Enable the `voice` plugin "
+        "(`/plugin marketplace add <CorvinOS checkout>` then "
+        "`/plugin install voice@corvin-voice-local`) or register "
+        "corvin_operator/voice/hooks/path_gate.py as a PreToolUse hook in "
+        "~/.claude/settings.json; see docs/claude-ref/layer-10-path-gate.md",
     )
 
 
@@ -835,6 +966,11 @@ def l10_hook_registered() -> TripwireResult:
 REPORTING_ONLY: frozenset = frozenset({
     "audit_chain_history_clean", "audit_unification", "l10_hook_registered",
 })
+
+#: Reporting-only findings recorded at CRITICAL severity in the chain and
+#: repeated on stderr at boot (a log line at CRITICAL is easy to lose in a
+#: journal; an unguarded write path should not be).
+CRITICAL_FINDINGS: frozenset = frozenset({"l10_hook_registered"})
 
 #: plugin_ids that ``bootstrap_global()`` itself put on the compliance boot
 #: layer.  Written by the wheel's own boot code, read only here.
@@ -1006,7 +1142,15 @@ def assert_all() -> List[TripwireResult]:
     # refused still leaves the discontinuity on the record.
     reported = [r for r in failed if r.name in REPORTING_ONLY]
     for r in reported:
-        _log.critical("COMPLIANCE FINDING (non-fatal, permanent): %s: %s", r.name, r.detail)
+        if r.name in CRITICAL_FINDINGS:
+            _log.critical("COMPLIANCE FINDING (CRITICAL, boot continues): %s: %s", r.name, r.detail)
+            try:
+                print(f"[corvin] CRITICAL compliance finding: {r.name}: {r.detail}",
+                      file=sys.stderr, flush=True)
+            except Exception:  # noqa: BLE001 - a closed stderr must not stop the boot
+                pass
+        else:
+            _log.critical("COMPLIANCE FINDING (non-fatal, permanent): %s: %s", r.name, r.detail)
         _record_finding(r)
 
     fatal = [r for r in failed if r.name not in REPORTING_ONLY]
@@ -1072,9 +1216,20 @@ def _record_finding(result: TripwireResult) -> None:
         # tripwires (e.g. the L10 hook probe) record a generic finding.
         event = (SEAM_EVENT if result.name.startswith("audit_")
                  else "compliance.tripwire_finding")
-        audit.audit_event(
-            event,
-            details={"tripwire": result.name, "detail": result.detail},
-        )
+        # SEC-1: a missing L10 hook is recorded at CRITICAL, not at the generic
+        # finding's WARNING - it is an unguarded write path, not a note.
+        kwargs = {"severity": "CRITICAL"} if result.name in CRITICAL_FINDINGS else {}
+        try:
+            audit.audit_event(
+                event,
+                details={"tripwire": result.name, "detail": result.detail},
+                **kwargs,
+            )
+        except TypeError:
+            # Older bridge module without the ``severity`` keyword.
+            audit.audit_event(
+                event,
+                details={"tripwire": result.name, "detail": result.detail},
+            )
     except Exception as exc:  # noqa: BLE001
         _log.error("could not record compliance finding (%s)", type(exc).__name__)

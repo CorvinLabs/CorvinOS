@@ -84,13 +84,48 @@ def _operator_hint(exc: Exception) -> str:
     return text
 
 
-def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """The ``forge_runs.spawn`` arguments for a run — shared by the POST and by
-    the resume of a run a console restart interrupted."""
+def _engine_request(payload: Dict[str, Any]) -> str:
+    """The request text the engine receives: the operator's words plus the redacted
+    attachment projection (never the raw file, ADR-2254)."""
     request = str(payload["request"])
-    if payload.get("attachment_pack"):  # the redacted projection, never the raw file (ADR-2254)
+    if payload.get("attachment_pack"):
         from .forge_intake_api import pack_prompt_block  # noqa: PLC0415
         request += pack_prompt_block(payload["attachment_pack"])
+    return request
+
+
+def _gate_text(payload: Dict[str, Any]) -> str:
+    """What the request-time gate judges: everything of the payload an engine will see."""
+    panel = str(payload.get("panel_request") or "").strip()
+    return _engine_request(payload) + ("\n\n" + panel if panel else "")
+
+
+def _run_gate(kind: str, tenant_id: str, sid_fingerprint: str) -> Any:
+    """The per-spawn gate of one run (review R3-BR-2): the four console pre-spawn gates in
+    front of EVERY engine call the orchestrator makes, latched on the first refusal. The
+    route's own check covers the request; plan repairs, test generation and the reviewers
+    send text the model wrote in between."""
+    from skill_creator.autonomous import console_spawn_gate  # noqa: PLC0415
+    from skill_creator.llm_client import LatchedSpawnGate  # noqa: PLC0415
+    return LatchedSpawnGate(
+        console_spawn_gate(tenant_id, sid_fingerprint or "resumed-run", kind=kind))
+
+
+def _gated(gate: Any, fn: Any) -> Any:
+    from skill_creator.llm_client import run_gated  # noqa: PLC0415
+    try:
+        return run_gated(gate, fn)
+    except Exception as exc:
+        if exc is gate.refusal:
+            raise forge_runs.GenerationRefused(str(exc)) from exc
+        raise
+
+
+def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any], *,
+                  sid_fingerprint: str = "") -> Dict[str, Any]:
+    """The ``forge_runs.spawn`` arguments for a run — shared by the POST and by
+    the resume of a run a console restart interrupted."""
+    request = _engine_request(payload)
     panel_request = str(payload.get("panel_request") or "")
     if kind == "tool":
         def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
@@ -110,21 +145,27 @@ def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any
                                       phase="sandbox_test", data={"k": k, "passed": passed, "total": total})
                 forge_runs.snapshot(run_id, f"iteration {k}", tool_files(draft))
 
+            gate = _run_gate("tool", tenant_id, sid_fingerprint)
             orch = ToolCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress,
-                                           draft_cb=keep_draft, iteration_cb=on_iteration)
+                                           draft_cb=keep_draft, iteration_cb=on_iteration,
+                                           spawn_gate=gate)
             forge_runs.update_run(run_id, engine=orch.engine_id,
                                   model=str(getattr(orch.client, "model", None) or "unknown"))
-            tool = asyncio.run(orch.create_tool(request, resume_draft=payload.get("draft")))
+            tool = _gated(gate, lambda: asyncio.run(
+                orch.create_tool(request, resume_draft=payload.get("draft"))))
             return {"target_id": tool["name"], "phase": "promotion", "tool": tool,
                     "message": f"Tool '{tool['name']}' passed its sandbox tests and is registered."}
         success, failure = "tool.generated_created", "tool.generated_creation_failed"
     else:
         def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
             from skill_creator.plugin_creator import PluginCreatorOrchestrator  # noqa: PLC0415
-            orch = PluginCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress)
+            gate = _run_gate("plugin", tenant_id, sid_fingerprint)
+            orch = PluginCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress,
+                                             spawn_gate=gate)
             forge_runs.update_run(run_id, engine=orch.engine_id,
                                   model=str(getattr(orch.client, "model", None) or "unknown"))
-            plugin = asyncio.run(orch.create_plugin(request, panel_request=panel_request))
+            plugin = _gated(gate, lambda: asyncio.run(
+                orch.create_plugin(request, panel_request=panel_request)))
             try:  # the staged files as one snapshot: what the run produced, readable without leaving the console
                 staged = _forged_root(tenant_id) / str(plugin.get("dirname", ""))
                 forge_runs.snapshot(run_id, "staged", {
@@ -142,7 +183,9 @@ def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any
 
 for _k in ("tool", "plugin"):
     forge_runs.register_resumer(
-        _k, lambda run_id, rec, _k=_k: _spawn_kwargs(_k, rec["tenant_id"], run_id, rec["resume"]))
+        _k, lambda run_id, rec, _k=_k: _spawn_kwargs(
+            _k, rec["tenant_id"], run_id, rec["resume"],
+            sid_fingerprint=str(rec.get("sid_fingerprint") or "")))
 
 
 @router.post("/{kind}/generate", status_code=202)
@@ -157,19 +200,19 @@ async def generate(
         raise HTTPException(status_code=400, detail="Request must be at least 10 characters")
     if kind == "tool" and req.panel_request.strip():
         raise HTTPException(status_code=400, detail="panel_request applies to plugins only")
-    gate_text = request + ("\n\n" + req.panel_request.strip() if req.panel_request.strip() else "")
-    try:
-        forge_runs.check_spawn_gates(gate_text, tenant_id=rec.tenant_id,
-                                     sid_fingerprint=rec.sid_fingerprint, kind=kind)
-    except forge_runs.GenerationRefused as refused:
-        raise HTTPException(status_code=403, detail=str(refused))
-
     tenant_id = rec.tenant_id
     panel_request = req.panel_request.strip()
     payload = {"request": request, "panel_request": panel_request}
     if req.attachment_ids:
         from .forge_intake_api import resolve_pack  # noqa: PLC0415
         payload["attachment_pack"] = resolve_pack(req.attachment_ids, tenant_id=tenant_id, sid_fingerprint=rec.sid_fingerprint)
+    # R3-BR-2: the attachment block is resolved BEFORE the gate and judged with the
+    # request (it used to be appended to the engine text after this check).
+    try:
+        forge_runs.check_spawn_gates(_gate_text(payload), tenant_id=rec.tenant_id,
+                                     sid_fingerprint=rec.sid_fingerprint, kind=kind)
+    except forge_runs.GenerationRefused as refused:
+        raise HTTPException(status_code=403, detail=str(refused))
     try:
         run_id = forge_runs.new_run(tenant_id=tenant_id, kind=kind, phases=_phases(kind),
                                     sid_fingerprint=rec.sid_fingerprint, resume=payload)
@@ -178,7 +221,8 @@ async def generate(
 
     forge_runs.spawn(run_id=run_id, kind=kind, tenant_id=tenant_id,
                      sid_fingerprint=rec.sid_fingerprint,
-                     **_spawn_kwargs(kind, tenant_id, run_id, payload))
+                     **_spawn_kwargs(kind, tenant_id, run_id, payload,
+                                     sid_fingerprint=rec.sid_fingerprint))
     return {"status": "accepted", "run_id": run_id, "kind": kind,
             "message": f"{kind.capitalize()} generation started. Poll /forge-creator/status/{run_id}."}
 
@@ -200,7 +244,7 @@ async def retry_tool(
                "panel_request": "", "attachment_pack": (old.get("resume") or {}).get("attachment_pack"),
                "draft": {k: v for k, v in draft.items() if k != "review_raw"}}
     try:
-        forge_runs.check_spawn_gates(payload["request"], tenant_id=rec.tenant_id,
+        forge_runs.check_spawn_gates(_gate_text(payload), tenant_id=rec.tenant_id,
                                      sid_fingerprint=rec.sid_fingerprint, kind="tool")
         new_id = forge_runs.new_run(tenant_id=rec.tenant_id, kind="tool", phases=_phases("tool"),
                                     sid_fingerprint=rec.sid_fingerprint, resume=payload)
@@ -210,7 +254,8 @@ async def retry_tool(
         raise HTTPException(status_code=429, detail=str(busy))
     forge_runs.spawn(run_id=new_id, kind="tool", tenant_id=rec.tenant_id,
                      sid_fingerprint=rec.sid_fingerprint,
-                     **_spawn_kwargs("tool", rec.tenant_id, new_id, payload))
+                     **_spawn_kwargs("tool", rec.tenant_id, new_id, payload,
+                                     sid_fingerprint=rec.sid_fingerprint))
     return {"status": "accepted", "run_id": new_id, "kind": "tool", "retry_of": run_id,
             "message": f"Retry started from the saved draft. Poll /forge-creator/status/{new_id}."}
 

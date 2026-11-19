@@ -171,6 +171,22 @@ try:
 except Exception:  # noqa: BLE001 — absent ⇒ no origin can verify as out-of-band (fail-closed)
     _oob = None  # type: ignore[assignment]
 
+# ── Worker tool policy (ADR-0144) — one derivation for every a2a worker spawn ──
+try:
+    from a2a_tool_policy import (  # type: ignore[import-not-found]
+        SHELL_TOOLS as _A2A_SHELL_TOOLS,
+        derive_tool_policy as _derive_tool_policy,
+    )
+except ImportError:
+    _here_dir = str(Path(__file__).resolve().parent)
+    if _here_dir not in sys.path:
+        sys.path.insert(0, _here_dir)
+    from a2a_tool_policy import (  # type: ignore[import-not-found]
+        SHELL_TOOLS as _A2A_SHELL_TOOLS,
+        derive_tool_policy as _derive_tool_policy,
+    )
+
+
 def _default_repo_relative(*parts: str) -> Path:
     """<repo_root>/operator/<parts>.
 
@@ -1663,85 +1679,18 @@ class RemoteTriggerReceiver:
         #   - Write/Edit/MultiEdit/NotebookEdit: blocked unless allow_write_files=true
         #     (path_gate hooks are inactive for /tmp workers — see ADR-0144 C8)
         # Operators who need these tools must explicitly opt in per-origin.
-        _a2a_allowed: list[str] | None = origin_config.get("allowed_tools")
-        _base_disallowed: list[str] = list(origin_config.get("disallowed_tools") or [])
-        # A shell IS network access (curl, ssh, a loopback call to this
-        # console): allow_bash without allow_network made "no network" a
-        # label, not a restriction (review R4). Bash therefore only runs when
-        # network is granted too; the combination is refused, fail-closed.
-        _bash_granted = bool(origin_config.get("allow_bash"))
-        if _bash_granted and not origin_config.get("allow_network"):
-            _bash_granted = False
+        # The derivation itself lives in a2a_tool_policy.derive_tool_policy — ONE
+        # source, shared with the federation conversation's local turn, which
+        # spawns the same worker on a peer's words.
+        _policy = _derive_tool_policy(origin_config)
+        for _event, _reason in _policy.notes:
             self._audit_best_effort(
-                "A2A.bash_denied_without_network", "WARNING",
+                _event, "WARNING",
                 {"task_id": env.task_id, "origin_id": env.origin_id,
-                 "reason": "allow_bash_requires_allow_network"},
+                 "reason": _reason},
             )
-        if not _bash_granted:
-            # "Bash" alone is not the shell capability. Verified against the
-            # installed Claude Code binary (2.1.282, tool defs carrying
-            # enablesCodeExecution) on 2026-09-25: Monitor (runs a command and
-            # streams its output), PowerShell, RemoteTrigger, CronCreate and
-            # Workflow all execute code; TaskStop (aliases KillShell/KillBash)
-            # and the legacy BashOutput/TaskOutput drive background shells.
-            # Denying an unknown name is a no-op, so older/newer CLIs are
-            # covered by listing both current and legacy names.
-            for _bt in _SHELL_TOOLS:
-                if _bt not in _base_disallowed:
-                    _base_disallowed.append(_bt)
-            # Keep "Bash" first (historic position; some tests read [0]).
-            _base_disallowed.remove("Bash")
-            _base_disallowed.insert(0, "Bash")
-        if not origin_config.get("allow_network"):
-            for _nt in ("WebFetch", "WebSearch"):
-                if _nt not in _base_disallowed:
-                    _base_disallowed.append(_nt)
-        if not origin_config.get("allow_read_files"):
-            # Grep/Glob/LS are Read-bypass; NotebookRead reads .ipynb content.
-            for _rt in ("Read", "Grep", "Glob", "LS", "NotebookRead"):
-                if _rt not in _base_disallowed:
-                    _base_disallowed.append(_rt)
-        if not origin_config.get("allow_write_files"):
-            for _wt in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
-                if _wt not in _base_disallowed:
-                    _base_disallowed.append(_wt)
-        # Corrected claim (A5, verified against code.claude.com docs
-        # 2026-07-20): claude-CLI subagents DO inherit the parent
-        # session's permission context ("the same block and allow rules
-        # as the parent session"), but the bare-name --disallowedTools
-        # form used here is documented as a *context-removal* mechanism,
-        # and its propagation into Task subagents is only inferred from
-        # the session-level scope — not contractually guaranteed. Non-
-        # claude engines guarantee nothing at all. Blocking Task/Todo*
-        # by default therefore stays the fail-closed posture against
-        # privilege escalation via subagent proxy (see layer-38 docs).
-        _allow_subagents = bool(origin_config.get("allow_subagents"))
-        # A5-HARDENING (2026-07-20 refutation): because that deny propagation
-        # into Task subagents is NOT guaranteed, granting allow_subagents while
-        # STILL denying a dangerous capability (bash / network / write) would
-        # let a Task subagent inherit default rights and bypass exactly those
-        # denies. Enforcement gap → force-restrict: whenever any of bash /
-        # network / write is denied, ignore the subagent grant so Task/Todo*
-        # stay blocked and the fail-closed denies keep binding. Deny-by-default
-        # is preserved; the downgrade is audited.
-        if _allow_subagents and (
-            not origin_config.get("allow_bash")
-            or not origin_config.get("allow_network")
-            or not origin_config.get("allow_write_files")
-        ):
-            self._audit_best_effort(
-                "A2A.subagents_force_restricted", "WARNING",
-                {"task_id": env.task_id, "origin_id": env.origin_id,
-                 "reason": "dangerous_capability_denied"},
-            )
-            _allow_subagents = False
-        if not _allow_subagents:
-            # "Agent" is the current name of the subagent tool; "Task" is its
-            # legacy alias (Claude Code 2.1.x). Deny both.
-            for _st in ("Task", "Agent", "TodoWrite", "TodoRead"):
-                if _st not in _base_disallowed:
-                    _base_disallowed.append(_st)
-        _a2a_disallowed: list[str] | None = _base_disallowed or None
+        _a2a_allowed: list[str] | None = _policy.allowed_tools
+        _a2a_disallowed: list[str] | None = _policy.disallowed_tools
 
         try:
             worker_result = spawn_a2a_worker(
@@ -2399,6 +2348,17 @@ class RemoteTriggerReceiver:
                                 "Running in lenient mode (CORVIN_ATTESTATION_LENIENT=1). "
                                 "Set CORVIN_CA_PUBKEY_HEX to enforce (ADR-0078/ADR-0099).",
                                 file=_sys.stderr, flush=True,
+                            )
+                            # The envelope is ACCEPTED without the trust level
+                            # its origin requires: that is a bypass of a
+                            # security control and belongs on the chain, not
+                            # only on stderr (review 2026-11-19, A2A-14). Same
+                            # event + shape as the CORVIN_A2A_ATTESTATION_DISABLED
+                            # bypass; the reason names the switch.
+                            self._audit_best_effort(
+                                "A2A.attestation_disabled_bypass", "WARNING",
+                                {"origin_id": getattr(env, "origin_id", ""),
+                                 "reason": "CORVIN_ATTESTATION_LENIENT"},
                             )
                         else:
                             raise ValidationError("ca_not_configured", recv_key)
@@ -3290,12 +3250,9 @@ class RemoteTriggerReceiver:
 
 
 # Tool names that execute code / drive shells in the worker (allow_bash=false
-# denies all of them — see _spawn_and_filter).
-_SHELL_TOOLS: tuple[str, ...] = (
-    "Bash", "Monitor", "PowerShell",
-    "TaskStop", "KillShell", "KillBash", "BashOutput", "TaskOutput",
-    "RemoteTrigger", "CronCreate", "Workflow",
-)
+# denies all of them). Defined once in a2a_tool_policy; re-exported here for the
+# readers that name it through this module.
+_SHELL_TOOLS: tuple[str, ...] = _A2A_SHELL_TOOLS
 
 
 # ── A2A work executor (2026-09-25, round 2) ────────────────────────────────

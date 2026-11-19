@@ -146,6 +146,9 @@ class WorkerServer:
         self.strategies_allowed = list(strategies_allowed) if strategies_allowed \
             else None  # None = permissive (every loaded strategy admitted)
         self.audit_emit = audit_emit or (lambda *a, **kw: None)
+        # How long stop() waits for pipeline / HAC coordinators to write their
+        # terminal record before it is written for them (seconds).
+        self.stop_drain_timeout_s: float = 10.0
 
         self._runs: dict[str, _RunEntry] = {}
         self._runs_lock = asyncio.Lock()
@@ -302,6 +305,32 @@ class WorkerServer:
                     # start continues it. (compute_abort is the final one.)
                     entry.run.request_interrupt()
                     aborted += 1
+        # Pipeline / HAC jobs have no flat run entry (run=None, task=None), so
+        # the loop above never reached them: their stages kept executing tools
+        # after stop(). Their engines stop them here.
+        for eng in self._extra_engines.values():
+            stop_all = getattr(eng, "interrupt_all", None)
+            if stop_all is None:
+                continue
+            try:
+                aborted += int(stop_all() or 0)
+            except Exception:  # noqa: BLE001 — shutdown must proceed
+                log.exception("engine %s interrupt_all failed",
+                              getattr(eng, "engine_id", "?"))
+        # interrupt_all only sets flags. Returning now tore the loop down under
+        # the coordinators: cancelled at their ``await asyncio.to_thread`` they
+        # ended ``aborted`` in memory with an empty on-disk summary and no
+        # terminal chain record. Wait (bounded) for each to write its terminal
+        # record; an engine writes it synchronously for whatever is still open.
+        for eng in self._extra_engines.values():
+            drain = getattr(eng, "wait_stopped", None)
+            if drain is None:
+                continue
+            try:
+                await drain(self.stop_drain_timeout_s)
+            except Exception:  # noqa: BLE001 — shutdown must proceed
+                log.exception("engine %s did not drain at stop",
+                              getattr(eng, "engine_id", "?"))
         # ADR-2041: worker termination is a processing-record fact (GDPR
         # Art. 30). Metadata only; best-effort like every compute.* emit, so
         # an audit failure never blocks shutdown.
@@ -581,7 +610,12 @@ class WorkerServer:
         if entry is not None and entry.engine_id != "flat":
             engine = self._extra_engines.get(entry.engine_id)
             if engine:
-                res = engine.result(handle, wait_s=wait_s)
+                # engine.result() polls with time.sleep until terminal or wait_s:
+                # called inline it froze the whole worker (status, abort, every
+                # other client) for up to wait_s. Run it off the loop, with the
+                # same 30 s cap the flat path applies.
+                res = await asyncio.to_thread(
+                    engine.result, handle, wait_s=max(0.0, min(wait_s, 30.0)))
                 return {"compute_handle": handle, "engine": entry.engine_id,
                         "state": res.state, **res.result}
         if entry is None:

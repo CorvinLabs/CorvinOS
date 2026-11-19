@@ -207,6 +207,7 @@ def set_approval_gate(gate):
 async def list_pending_approvals(
     skill_id: str,
     tenant_id: str = Query("_default", description="Tenant ID (default: _default)"),
+    current_user=Depends(_principal),  # authenticated principal (fail-closed), as on the POSTs
 ) -> PendingApprovalsListResponse:
     """
     List pending approvals for a skill.
@@ -232,6 +233,10 @@ async def list_pending_approvals(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Tenant mismatch: {tenant_id} != {gate.tenant_id}",
         )
+
+    # A read discloses pending decisions: the caller must be authenticated AND
+    # belong to the tenant it names — the same two checks the POST routes run.
+    _require_principal_tenant(current_user, tenant_id)
 
     try:
         # Get pending approvals for this skill
@@ -268,6 +273,7 @@ async def get_approval_status(
     skill_id: str,
     approval_id: str,
     tenant_id: str = Query("_default", description="Tenant ID (default: _default)"),
+    current_user=Depends(_principal),  # authenticated principal (fail-closed), as on the POSTs
 ) -> ApprovalStatusResponse:
     """
     Get status of a specific approval.
@@ -293,6 +299,10 @@ async def get_approval_status(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Tenant mismatch: {tenant_id} != {gate.tenant_id}",
         )
+
+    # A read discloses pending decisions: the caller must be authenticated AND
+    # belong to the tenant it names — the same two checks the POST routes run.
+    _require_principal_tenant(current_user, tenant_id)
 
     try:
         record = gate.get_approval_status(approval_id)

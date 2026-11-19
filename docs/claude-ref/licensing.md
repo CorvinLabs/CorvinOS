@@ -63,10 +63,11 @@ Every entitlement is a **capability** with an enforcement class per CONCEPT-0041
 | `space.domains` | L | 1 | ∞ | existing gates re-pointed |
 | `datasource.connections_concurrent` | L | 1 | ∞ | existing gates re-pointed |
 | `layers.custom_bc` | L | 1 | ∞ | `custom_layer_gate.py` |
-| `skill_forge_per_day` (skill authoring) | L | 5/day (UTC) | ∞ | `SkillRegistry.create` charges; console pre-checks (ADR-2095) |
+| `skill_forge_per_day` (skill authoring) | L | ∞ while `FORGE_FREE_UNLOCK` is on (today); 5/day (UTC) when off | ∞ | `SkillRegistry.create` charges; console pre-checks (ADR-2095). A Free install is reported as `free`, never as `member` |
 | `cost.optimize` (automatic model downgrading) | L | ≤ 10 % measured saving per UTC month (floor USD 5; operator may only lower it) | ∞ | `model_selector.resolve_os_model` via `bridges/shared/savings_cap.py` (ADR-2259) — deterrence, never a lock; pinned models are never capped |
-| **Member Only (Class L)** | | | | |
-| `forge.create` | L | ✗ | ∞ | ADR-0701 chokepoints — Tool Forge, panels, plugin builder; for SKILLS it is the member test only (ADR-2095) |
+| **Forge (Class L) — one switch, `corvin_operator/license/limits.py::FORGE_FREE_UNLOCK`** | | | | |
+| `tool_forge_per_day` (tool generation) | L | ∞ while `FORGE_FREE_UNLOCK` is on (today); 3/day (UTC) when off | ∞ | ADR-0365 |
+| `forge.create` | L | ∞ while `FORGE_FREE_UNLOCK` is on (today); ✗ (member-only) when off | ∞ | ADR-0701 chokepoints — Tool Forge, panels, plugin builder; for SKILLS it only opens the gate, the tier comes from the licence (ADR-2095) |
 | **Network Gates (Class N)** | | | | |
 | `marketplace.publish` | N | ✗ | ✓ | ADR-0704 §5 |
 | `a2a.network` | N | ✗ | ∞ peers | ADR-0702 credential verification |
@@ -143,8 +144,9 @@ result = require_capability(
 **Enforcement Sites (Chokepoints):**
 1. **L6 (ToolForge):** `operator/forge/forge/registry.py::Registry.create` → `require_capability("forge.create")`
 2. **L7 (SkillForge):** `operator/skill-forge/skill_forge/registry.py::SkillRegistry.create` →
-   `skill_authoring_tier()`: member (`forge.create` ALLOW) writes freely; the free tier writes
-   within `skill_forge_per_day` (5 per UTC day), charged by `charge_skill_quota()` right before
+   `skill_authoring_tier()`: a member (licence tier `member`, not merely `forge.create` ALLOW)
+   writes freely; the free tier writes within `skill_forge_per_day` (unlimited while
+   `FORGE_FREE_UNLOCK` is on, else 5 per UTC day), charged by `charge_skill_quota()` right before
    the write (a linter rejection costs nothing). `quota_exempt=True` only for a skill canary's
    approve / rollback — the canary FORK was the charged generation (ADR-2095).
 3. **Console UI:** `require_skill_forge_quota(rec)` on `/skill-creator/generate`,
@@ -393,6 +395,58 @@ No change; baseline features remain the same. Forge and A2A are now member-only 
 3. Update website: pricing table, checkout, refund, terms, imprint, privacy (all generated from CAPABILITIES or ADR-0704 table)
 4. Test migration: non-accepting members → automatic termination + refund via Paddle
 5. Monitor: licence refresh cadence (3h), CRL freshness (7d), clone detection (reinstate limit, contest)
+
+---
+
+## A2A delegation credentials (local authority store)
+
+`core/licensing/` holds a second, local credential system: an authority key per tenant
+(`<tenant_home>/licensing/authority/`) signs member credentials
+(`<tenant_home>/licensing/credentials/<credential_id>.json`), and
+`A2ADelegationVerifier.verify_signed_task` admits an RSA-signed delegation task only when the
+credential carries the authority's signature, is not expired, is not revoked, its tier permits
+delegation (`member` / `enterprise`), the task signature verifies, the task is inside its TTL
+and has not been seen before. Console routes: `/v1/licensing/a2a/*`
+(`routes/a2a_licensing_gate_routes.py`; issue and revoke are owner-only).
+
+A stored credential is a file. Everything read back from the store is treated as untrusted
+until the authority signature over it verifies (review 2026-11-19, refutation round):
+
+| Rule | Behaviour | Was |
+|---|---|---|
+| **Downgrade issues a new credential** | `downgrade_tier` signs a NEW `credential_id` (same member key and expiry, lower tier), revokes the old id, then stores the new one. Order: audit, revoke old, save new - a failure in between leaves no credential, never the old tier. `IssuanceResult.credential` is the new credential. | The same id was re-signed in place. The earlier file still carried a valid authority signature for the higher tier, so copying it back over the store entry restored the old tier (rollback). |
+| **Verify before re-signing** | `renew_credential` and `downgrade_tier` refuse a stored credential whose authority signature does not verify (`AuthorityServer.signature_valid`, read-only: it never creates a key). A revoked credential cannot be downgraded. | Both copied member, tier and public key from the file into a freshly signed credential: an edited file (tier raised, key swapped) was laundered into a valid one. |
+| **A deleted CRL is fail-closed** | The first save of `licensing/crl.json` leaves the marker `licensing/.crl_initialised`; the first issuance initialises both. "Marker present, `crl.json` absent" means every credential is treated as revoked, `revoke()` and issuance refuse, and `GET /v1/licensing/a2a/crl` answers 503. A list written before the marker existed is marked on first read. | A missing file read as "nothing revoked": deleting it lifted every revocation at once. |
+| **Credential info is signature-checked** | `get_credential_info` returns `signature_valid`; `is_valid` and `can_delegate` are false without it. | Tier and validity were reported straight from the file. |
+
+Third round (2026-11-19, `tests/unit/licensing/test_review_r3_licensing.py`):
+
+| Rule | Behaviour | Was |
+|---|---|---|
+| **A missing CRL is re-evaluated on every read** | `RevocationList._refresh_if_stale` calls `_load()` whenever `crl.json` is absent - only `_load()` looks at the marker. | An instance built before the first list existed compared "no file" with its own "never loaded", kept its empty list after the list was created, used and deleted, and accepted a revoked credential. |
+| **A downgrade covers the member** | `downgrade_tier` revokes the named credential AND every other unrevoked credential of that member above the new tier (`CredentialStore.list_for_member`); each gets its own `a2a.license_credential_revoked` (`source: "downgrade"`). | Only the named id was revoked: a sibling (the credential it had been renewed from) stayed at the old tier and could be renewed again. |
+| **Renewal replaces** | `renew_credential` revokes the old id (`source: "renewal"`) before it issues the successor. A bad `validity_days` is refused before anything is revoked. | The old credential stayed valid next to its successor. |
+| **One store lock** | Renew, downgrade and revoke run under `StoreLock` on `licensing/.store.lock` (re-entrant in-process lock + `flock`); `RevocationList` mutations (refresh, change, save) run under `licensing/.crl.lock`; the replay store's lock is per store, not process-wide. | A renewal and a downgrade of one credential interleaved; two processes revoking at once each wrote a list without the other's entry; one tenant's verifications queued behind another's. |
+| **A partial failure says so** | When the old credential is already revoked and the successor could not be stored, the error ends in "the old credential is revoked; issue a new one". | "Downgrade failed: OSError" - and the retry answered "revoked and cannot be downgraded". |
+| **TTL** | `SignedTask.effective_ttl_seconds` treats `inf`/`nan`/non-numbers as 0. | `int(float("inf"))` raised `OverflowError` out of the verifier. |
+
+Open, stated: the order is audit, then revoke. If the revocation record commits and the CRL
+write then fails, the chain holds an `a2a.license_credential_revoked` record for a credential
+the CRL does not list. The caller gets an error and the credential keeps verifying; nothing
+reconciles the two at boot yet.
+
+Recovery when `crl.json` is lost: restore it from a backup. Only if no copy exists, remove
+`licensing/.crl_initialised` deliberately - the earlier revocations are then gone, and that is an
+operator decision, not something the code does on its own.
+
+Boundary, stated: the marker and the authority key live in the same store as the credentials.
+These rules hold against a lost, restored or edited file. A process that can write arbitrary
+files in the store as the same OS user can replace the authority key itself.
+
+Audit: a downgrade writes `a2a.license_credential_downgraded` (new id as `cred_ref`, the old one
+as `previous_cred_ref`) followed by `a2a.license_credential_revoked` for the old id with
+`source: "downgrade"`. Tests: `tests/unit/licensing/test_review_r2_licensing.py`,
+`test_review_r3_licensing.py`.
 
 ---
 

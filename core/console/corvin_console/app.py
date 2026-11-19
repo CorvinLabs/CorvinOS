@@ -149,7 +149,7 @@ from .routes import (
     learning_analytics as learning_analytics_route,
     feedback_portal_routes as feedback_portal_routes_route,
     stream4_skill_feedback as stream4_skill_feedback_route,
-    deprecated_api_metrics as deprecated_api_metrics_route,
+    # deprecated_api_metrics: NOT mounted (see the note at its former include_router)
     world_map as world_map_route,
     infinite_session_api as infinite_session_route,
     method_discovery_api as method_discovery_api_route,
@@ -333,7 +333,7 @@ router.include_router(feedback_portal_routes_route.router, tags=["console-feedba
 router.include_router(stream4_skill_feedback_route.router, tags=["console-stream4-skill-feedback"])
 # TRACK I — DataHub Creator (6-phase project workspace with skill metrics + learning visualization)
 router.include_router(features_phase2_route.router, tags=["console-phase2-features"])
-router.include_router(deprecated_api_metrics_route.router, tags=["console-deprecated-api-metrics"])
+# routes/deprecated_api_metrics.py is NOT mounted: no production emitter of `deprecated_api_call`, no console reader. Line kept: learning_systems.yaml pins app.py line numbers.
 router.include_router(world_map_route.router, tags=["console-world-map"])
 router.include_router(infinite_session_route.router, tags=["console-infinite-session"])
 router.include_router(method_discovery_api_route.router, tags=["console-method-discovery"])

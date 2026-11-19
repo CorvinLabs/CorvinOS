@@ -32,9 +32,6 @@ const {
   TurnContext,
 } = require('botbuilder');
 
-// ── Express ───────────────────────────────────────────────────────────────────
-const express = require('express');
-
 // ── Shared bridge runtime ─────────────────────────────────────────────────────
 require('../shared/js/bridge_state').exitIfDisabled('teams');
 const { bridgeSettingsPath } = require('../shared/js/bridge_paths');
@@ -48,6 +45,7 @@ const { makeAnnouncer }        = require('../shared/js/local-announce');
 
 // ── Teams-specific ────────────────────────────────────────────────────────────
 const { makeHandler } = require('./handler');
+const { createApp, applyServerTimeouts } = require('./http_app');
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 const ROOT        = __dirname;
@@ -144,18 +142,11 @@ const { handleActivity, sendTeams } = makeHandler({
 });
 
 // ── Express app ───────────────────────────────────────────────────────────────
-const app = express();
-
-// Bot Framework requires the raw body for JWT signature verification.
-app.use((req, res, next) => {
-  let data = '';
-  req.setEncoding('utf8');
-  req.on('data', (chunk) => { data += chunk; });
-  req.on('end', () => { req.rawBody = data; next(); });
-});
-
-app.post('/api/messages', async (req, res) => {
-  await adapter.process(req, res, async (ctx) => {
+// Body parsing (size-limited JSON, review 2026-11-19 R3-NEW-7) and the
+// /api/messages route live in http_app.js.
+const app = createApp({
+  adapter,
+  onTurn: async (ctx) => {
     // Store ConversationReference on every turn so we can reply proactively.
     const ref = TurnContext.getConversationReference(ctx.activity);
     if (ctx.activity.conversation?.id) {
@@ -176,13 +167,10 @@ app.post('/api/messages', async (req, res) => {
       return;
     }
 
-    // Rate limiting per sender.
-    const sender = ctx.activity.from?.userPrincipalName || ctx.activity.from?.id || '';
-    if (sender && !auth.rateAllow(sender)) {
-      log(`rate limit exceeded for ${sender}`);
-      return;
-    }
-
+    // Rate limiting lives in handleActivity (after the auth gate, with the
+    // configured per-hour limit). A second, limit-less rateAllow(sender) here
+    // never limited anything, booked every sender twice and grew the map for
+    // unauthenticated senders (review 2026-11-19, R3-NEW-14).
     const msgId = await handleActivity(ctx);
 
     if (msgId) {
@@ -190,7 +178,7 @@ app.post('/api/messages', async (req, res) => {
       try { announce({ from: ctx.activity.from?.userPrincipalName || '', chat_id: ctx.activity.conversation?.id }, 'text'); }
       catch {}
     }
-  });
+  },
 });
 
 // ── Outbox poller ─────────────────────────────────────────────────────────────
@@ -227,10 +215,10 @@ startHealthServer({
 });
 
 // ── HTTP server ───────────────────────────────────────────────────────────────
-const server = app.listen(HTTP_PORT, '0.0.0.0', () => {
+const server = applyServerTimeouts(app.listen(HTTP_PORT, '0.0.0.0', () => {
   log(`Listening on http://0.0.0.0:${HTTP_PORT}/api/messages`);
   log(`Multi-tenant App ID: ${TEAMS_APP_ID ? TEAMS_APP_ID.slice(0, 8) + '…' : 'NOT SET'}`);
-});
+}));
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 process.on('unhandledRejection', (r) => log(`unhandledRejection: ${r && r.message || r}`));

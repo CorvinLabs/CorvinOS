@@ -167,7 +167,10 @@ def test_hac_drives_two_sub_managers_over_the_forged_tool(runner, forged, tmp_pa
 
     events = []
     engine = HACEngine(corvin_home=tmp_path / "hac-home", runner_fn=runner,
-                       audit_emit=lambda e, sev, d=None, **k: events.append((e, d)))
+                       # The production emitter contract: audit_emit(event, **fields)
+                       # (review 2026-11-19, A2A-3 — the positional (event, sev,
+                       # details) form raised TypeError in the real emitter).
+                       audit_emit=lambda e, **fields: events.append((e, fields)))
     loop = asyncio.new_event_loop()
     t = threading.Thread(target=loop.run_forever, daemon=True)
     t.start()

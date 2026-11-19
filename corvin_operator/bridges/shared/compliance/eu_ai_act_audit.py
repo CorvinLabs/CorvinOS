@@ -175,12 +175,20 @@ class ComplianceAuditor:
           - Audit-first invariant (event written BEFORE operation)
         """
         try:
-            audit_file = "~/.corvin/tenants/_default/global/audit.jsonl"
-
-            # Check if audit file exists
+            # THE chain of this install's tenant, from the one resolver every writer uses
+            # (CLAUDE.md "ONE audit chain per tenant"). The path used to be the literal
+            # "~/.corvin/tenants/_default/global/audit.jsonl": a legacy file under a
+            # hard-wired home, so the check judged a file no writer appends to and never
+            # the live chain (CORVIN_HOME is not ~/.corvin on a repo-local install).
             import os
             from pathlib import Path
-            audit_path = Path(audit_file).expanduser()
+            try:
+                from .. import paths as _paths  # type: ignore
+            except ImportError:
+                import paths as _paths  # type: ignore
+            audit_path = Path(_paths.tenant_audit_chain(
+                os.environ.get("CORVIN_TENANT_ID") or None))
+            audit_file = str(audit_path)
             if not audit_path.exists():
                 return ComplianceCheck(
                     layer=ComplianceLayer.L16_AUDIT,
@@ -626,8 +634,8 @@ class ComplianceAuditor:
 
             for check in checks:
                 self.results.append(check)
-                status_icon = "✅" if check.status == "pass" else ("⚠️" if check.status == "skip" else "❌")
-                logger.info(f"{status_icon} {check.layer.value}: {check.status.upper()}")
+                # A log line carries the status as text, never as a status icon.
+                logger.info(f"{check.layer.value}: {check.status.upper()}")
                 if check.error:
                     logger.info(f"   Error: {check.error}")
 
@@ -645,10 +653,10 @@ class ComplianceAuditor:
         logger.info(f"Skipped: {skipped}")
 
         if failed > 0:
-            logger.error("\n❌ COMPLIANCE AUDIT FAILED - EU AI Act compliance not met")
+            logger.error("\nERROR: COMPLIANCE AUDIT FAILED - EU AI Act compliance not met")
             logger.error("Failed checks must be resolved before production deployment")
         else:
-            logger.info("\n✅ COMPLIANCE AUDIT PASSED - EU AI Act compliance verified")
+            logger.info("\nOK: COMPLIANCE AUDIT PASSED - EU AI Act compliance verified")
 
         return {
             "total_checks": len(self.results),

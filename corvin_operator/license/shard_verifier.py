@@ -193,6 +193,13 @@ def _check_shard_d(tier_is_free: bool) -> dict[str, str]:
 def _resolve_corvin_home() -> Path:
     _shared_on_path()
     try:
+        # ``paths`` is three different files under one bare name; the validator's
+        # resolver picks the one that owns the audit-chain functions whatever
+        # ``sys.modules["paths"]`` currently is.
+        v = _import_validator()
+        resolver = getattr(v, "_forge_paths_module", None) if v is not None else None
+        if resolver is not None:
+            return resolver().corvin_home()
         from paths import corvin_home  # type: ignore[import]
 
         return corvin_home()

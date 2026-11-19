@@ -670,7 +670,8 @@ async def voice_transcribe(
             # reason; this route must stay async for the awaited UploadFile.read()).
             result = await run_in_threadpool(_stt_transcribe, path, lang=lang)
         except STTTimeout as e:
-            console_audit.action_failed(
+            await asyncio.to_thread(
+                console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="voice.transcribe",
@@ -681,7 +682,8 @@ async def voice_transcribe(
             _log.warning("STT timeout", exc_info=True)
             raise HTTPException(http_status.HTTP_504_GATEWAY_TIMEOUT, "upstream timeout")
         except (STTProviderUnavailable, STTError) as e:
-            console_audit.action_failed(
+            await asyncio.to_thread(
+                console_audit.action_failed,
                 tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint,
                 action="voice.transcribe",
@@ -708,7 +710,8 @@ async def voice_transcribe(
 
     # ── METADATA-ONLY audit (CLAUDE.md § Layer 23) ────────────────────
     # Text must NEVER appear in any audit field.
-    console_audit.action_performed(
+    await asyncio.to_thread(
+        console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="voice.transcribed",

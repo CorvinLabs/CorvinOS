@@ -304,13 +304,15 @@ def _downgrade_claimed_origin(
     Downgrading rather than raising, again for the same reason: an over-reaching
     line costs that entry its privilege, not the whole registry its readability.
 
-    NARROW ON PURPOSE — only a CONTRADICTED ``builtin`` is downgraded:
+    NARROW ON PURPOSE — only a CONTRADICTED claim is downgraded (``builtin``
+    whenever the class is not in the wheel; ``vetted`` only when the class lies in a
+    community-by-location tree, see the R3-NEW-19 note in the body):
 
     * ``builtin`` is the claim worth making. It means "ships in the wheel", and
       it is the value the ADR-0249 trust gate short-circuits on and the value
       ADR-0250 exempts from the provider-slot refusal. It is checkable: the
       class either lives under the in-wheel root or it does not.
-    * ``vetted`` is NOT downgraded here. The install path derives it from
+    * ``vetted`` is NOT blanket-downgraded here. The install path derives it from
       location too (ADR-0643 ``record_from_manifest``), so the stored value is
       normally a fact, not a claim — and a false ``vetted`` is already caught
       where it matters, by the trust gate, which demands a valid signature from
@@ -321,7 +323,7 @@ def _downgrade_claimed_origin(
       that it is in the wheel is not proof that the operator's own installer
       lied, and the runtime load path derives the origin independently anyway.
     """
-    if record.origin is not PluginOrigin.BUILTIN:
+    if record.origin not in (PluginOrigin.BUILTIN, PluginOrigin.VETTED):
         return record
     if not record.class_path:
         return record
@@ -332,11 +334,23 @@ def _downgrade_claimed_origin(
     derived, _source = _origin_for_class_path(record.class_path)
     if derived is None or derived == PluginOrigin.BUILTIN.value:
         return record
+    if record.origin is PluginOrigin.VETTED:
+        # Review R3-NEW-19. The paragraph above relied on the trust gate to catch
+        # a false ``vetted`` - but that gate ships OFF, and with it off a record
+        # that says ``origin: vetted`` skipped ``consent_required()`` and was
+        # enabled without the operator ever being asked. Still narrow: only a
+        # ``vetted`` claim the location CONTRADICTS is downgraded - the class file
+        # was found and it lies in a tree that is community by location (the
+        # contributor tree, a private plugin root). A class under the marketplace
+        # root, and one whose tree says nothing either way, keep their record, so
+        # a legitimately installed plugin never needs fresh consent.
+        if derived != PluginOrigin.COMMUNITY.value:
+            return record
     log.error(
-        "registry record %r in %s claims origin=builtin but its class file "
+        "registry record %r in %s claims origin=%s but its class file "
         "resolves to %s — downgrading to community (provenance is derived from "
         "where the code lives, not from tenant state)",
-        record.plugin_id, path.name, derived,
+        record.plugin_id, path.name, record.origin.value, derived,
     )
     _audit(
         "plugin.origin_downgraded",

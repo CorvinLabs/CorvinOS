@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -25,58 +26,100 @@ logger = logging.getLogger(__name__)
 _METRICS_LOCK = threading.Lock()
 
 
+_WINDOW_HOURS = 24
+
+
+def _current_hour() -> int:
+    """Index of the current wall-clock hour (hours since the epoch).
+
+    A module-level function so tests can move the clock.
+    """
+    return int(time.time() // 3600)
+
+
 @dataclass
 class FlagMetrics:
-    """In-memory metrics for one flag (rolling 24h window)."""
+    """In-memory metrics for one flag (rolling 24h window).
+
+    Both deques hold one bucket per hour, newest last, and always have the
+    same length. ``_bucket_hour`` is the hour the newest bucket belongs to.
+    Every read and write first calls :meth:`_rotate`, which appends one empty
+    bucket per elapsed hour (the ``maxlen`` drops the oldest), so a count older
+    than 24 hours leaves the window.
+
+    Until 2026-11-19 nothing ever appended a second bucket: every count since
+    process start accumulated in bucket 0 and "24h" meant "since boot".
+    """
 
     flag_id: str
     # Hourly invocation counts (deque, max 24 items for rolling 24h)
-    hourly_invocations: deque[int] = field(default_factory=lambda: deque(maxlen=24))
+    hourly_invocations: deque[int] = field(default_factory=lambda: deque(maxlen=_WINDOW_HOURS))
     # Hourly error counts (same 24h window)
-    hourly_errors: deque[int] = field(default_factory=lambda: deque(maxlen=24))
+    hourly_errors: deque[int] = field(default_factory=lambda: deque(maxlen=_WINDOW_HOURS))
     # Timestamp of last error (for "days_since_last_error")
     last_error_time: datetime | None = None
+    # Hour index of the newest bucket; None until the first event.
+    _bucket_hour: int | None = field(default=None, repr=False)
+
+    def _rotate(self) -> None:
+        """Advance the window to the current hour. Caller holds the lock."""
+        now_hour = _current_hour()
+        if self._bucket_hour is None or not self.hourly_invocations:
+            self.hourly_invocations.clear()
+            self.hourly_errors.clear()
+            self.hourly_invocations.append(0)
+            self.hourly_errors.append(0)
+            self._bucket_hour = now_hour
+            return
+        elapsed = now_hour - self._bucket_hour
+        if elapsed <= 0:
+            # Same hour, or the clock stepped back: keep counting in place.
+            return
+        for _ in range(min(elapsed, _WINDOW_HOURS)):
+            self.hourly_invocations.append(0)
+            self.hourly_errors.append(0)
+        self._bucket_hour = now_hour
+
+    def _mark_invocation_locked(self) -> None:
+        self._rotate()
+        self.hourly_invocations[-1] += 1
+
+    def _mark_error_locked(self) -> None:
+        self._rotate()
+        self.hourly_errors[-1] += 1
+        self.last_error_time = datetime.utcnow()
 
     def mark_invocation(self, lock: threading.Lock | None = None) -> None:
         """Record one invocation of this flag (atomic)."""
         # If called with lock, caller holds it; if not, acquire here
         if lock:
-            if not self.hourly_invocations:
-                self.hourly_invocations.append(0)
-            self.hourly_invocations[-1] += 1
+            self._mark_invocation_locked()
         else:
             with _METRICS_LOCK:
-                if not self.hourly_invocations:
-                    self.hourly_invocations.append(0)
-                self.hourly_invocations[-1] += 1
+                self._mark_invocation_locked()
 
     def mark_error(self, exc: Exception, lock: threading.Lock | None = None) -> None:
         """Record one error for this flag (atomic)."""
         if lock:
-            if not self.hourly_errors:
-                self.hourly_errors.append(0)
-            self.hourly_errors[-1] += 1
-            self.last_error_time = datetime.utcnow()
+            self._mark_error_locked()
         else:
             with _METRICS_LOCK:
-                if not self.hourly_errors:
-                    self.hourly_errors.append(0)
-                self.hourly_errors[-1] += 1
-                self.last_error_time = datetime.utcnow()
+                self._mark_error_locked()
+
+    def _snapshot_locked(self) -> tuple[int, int, datetime | None]:
+        if self._bucket_hour is not None:
+            self._rotate()  # expire buckets even when no new event arrived
+        return sum(self.hourly_invocations), sum(self.hourly_errors), self.last_error_time
 
     def get_24h_stats(self, lock: threading.Lock | None = None) -> dict[str, Any]:
         """Compute rolling 24h metrics (atomic snapshot)."""
         if lock:
             # Caller holds lock, make atomic snapshot
-            invocation_sum = sum(list(self.hourly_invocations)) if self.hourly_invocations else 0
-            error_sum = sum(list(self.hourly_errors)) if self.hourly_errors else 0
-            last_error_time = self.last_error_time
+            invocation_sum, error_sum, last_error_time = self._snapshot_locked()
         else:
             # Acquire lock for atomic snapshot
             with _METRICS_LOCK:
-                invocation_sum = sum(list(self.hourly_invocations)) if self.hourly_invocations else 0
-                error_sum = sum(list(self.hourly_errors)) if self.hourly_errors else 0
-                last_error_time = self.last_error_time
+                invocation_sum, error_sum, last_error_time = self._snapshot_locked()
 
         error_rate = (error_sum / invocation_sum) if invocation_sum > 0 else 0.0
 

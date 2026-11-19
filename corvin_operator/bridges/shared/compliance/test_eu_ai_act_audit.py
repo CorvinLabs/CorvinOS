@@ -64,3 +64,30 @@ def test_l10_path_gate_import_uses_bare_module_not_dotted():
         None,
     )
     assert offender is None, f"found a dotted `operator.` import: {offender!r}"
+
+
+def test_l16_reads_the_resolver_chain_not_a_literal_home_path(tmp_path, monkeypatch):
+    """The L16 check judged "~/.corvin/tenants/_default/global/audit.jsonl" — a legacy file
+    under a hard-wired home. It must read tenant_audit_chain() of THIS install."""
+    import json
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    import paths  # type: ignore
+    chain = paths.tenant_audit_chain("_default")
+    assert str(chain).startswith(str(tmp_path)), chain
+    # No chain yet: the failure names the resolver's path, not the legacy literal.
+    missing = ComplianceAuditor().audit_l16_audit_chain("claude_code")
+    assert missing.status == "fail" and str(chain) in (missing.error or "")
+    chain.parent.mkdir(parents=True)
+    chain.write_text(
+        json.dumps({"event_type": "a", "prev_hash": "", "hash": "h1"}) + "\n"
+        + json.dumps({"event_type": "b", "prev_hash": "h1", "hash": "h2"}) + "\n", encoding="utf-8")
+    ok = ComplianceAuditor().audit_l16_audit_chain("claude_code")
+    assert ok.status == "pass", ok.error
+    # Discriminating: a record with a forbidden field in THAT file fails the check.
+    with chain.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"event_type": "c", "prev_hash": "h2", "hash": "h3", "prompt": "x"}) + "\n")
+    assert ComplianceAuditor().audit_l16_audit_chain("claude_code").status == "fail"
+    src = (Path(__file__).resolve().parent / "eu_ai_act_audit.py").read_text(encoding="utf-8")
+    code = [l for l in src.splitlines() if not l.strip().startswith("#")]
+    assert not any("~/.corvin" in l for l in code)

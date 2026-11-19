@@ -140,10 +140,43 @@ class TestBootTripwire:
             tripwire.assert_all()
         assert "tail_truncated" in str(exc.value)
 
-    def test_missing_chain_is_a_fresh_install(self, chain):
+    def test_deleted_anchored_chain_is_not_a_fresh_install(self, chain):
+        # Review 2026-11-19 (SEC-8). This test used to assert the opposite: delete
+        # a chain that HAD records and the boot passes as "fresh install" - which
+        # made removing the whole trail the one tampering the tripwire could not
+        # see. The out-of-tree identity record names the chain that lived here.
         chain.unlink()
-        results = tripwire.assert_all()
-        r = next(r for r in results if r.name == "audit_chain_intact")
+        with pytest.raises(tripwire.TripwireError) as exc:
+            tripwire.assert_all()
+        assert "chain_missing" in str(exc.value)
+
+    def test_deleting_the_identity_record_too_is_still_chain_missing(self, chain):
+        # Round 2 (R2-SEC-4): the identity record is one file; the chain witness of
+        # the same path is a second, path-keyed proof.
+        import shutil
+        witness = se._chain_witness_path(chain)
+        witness.parent.mkdir(parents=True, exist_ok=True)
+        if not witness.exists():
+            witness.write_text("{}", encoding="utf-8")
+        chain.unlink()
+        shutil.rmtree(se._mac_sentinel_path().parent / "chain_ids", ignore_errors=True)
+        tripwire._verify_cache.clear()
+        with pytest.raises(tripwire.TripwireError) as exc:
+            tripwire.assert_all()
+        assert "chain_missing" in str(exc.value) and "chain_witness" in str(exc.value)
+
+    def test_never_anchored_path_is_a_fresh_install(self, tmp_path, monkeypatch):
+        home = tmp_path / "fresh-home"
+        home.mkdir()
+        monkeypatch.setenv("CORVIN_HOME", str(home))
+        monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+        monkeypatch.delenv("FORGE_ROOT", raising=False)
+        monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(tmp_path / "fresh-anchor.key"))
+        monkeypatch.setattr(se, "_ANCHOR_KEY", None)
+        monkeypatch.setattr(se, "_ANCHOR_KEY_LOADED", False)
+        monkeypatch.setattr(se, "_ANCHOR_KEY_REFUSED", None)
+        tripwire._verify_cache.clear()
+        r = tripwire.audit_chain_intact()
         assert r.ok and "fresh install" in r.detail
 
     def test_no_override_env_var(self, chain, monkeypatch):

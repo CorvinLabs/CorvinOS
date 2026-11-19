@@ -38,6 +38,76 @@ class StagingError(Exception):
     pass
 
 
+# ── Archive checks shared by every ZIP intake (review 2026-11-19, R3-NEW-22) ──
+#
+# Two intakes validated archives on their own and both were thin: this module
+# refused only ``..`` and a leading ``/`` and took ANY entry whose name ended
+# in ``manifest.json`` (``docs/old-manifest.json``, ``xmanifest.json``) as the
+# manifest; the console package upload read the whole body into memory and
+# called ``extractall`` with no bound on entries or unpacked size (a ZIP bomb).
+# Both now call :func:`check_zip_archive`, which reuses the installer's entry
+# validator (``SkillInstaller._validate_zip_entries``: traversal, backslash,
+# names differing only in case) so the three intakes cannot drift apart.
+
+#: Most entries an uploaded archive may hold.
+MAX_ZIP_ENTRIES = 5_000
+#: Most bytes an uploaded archive may unpack to (sum of declared file sizes;
+#: zipfile never reads more than an entry's declared size).
+MAX_ZIP_UNPACKED_BYTES = 200 * 1024 * 1024
+#: Largest ``manifest.json`` that is read into memory.
+MAX_MANIFEST_BYTES = 1024 * 1024
+
+
+def check_zip_archive(
+    zf: zipfile.ZipFile,
+    target_dir: Path,
+    *,
+    max_entries: int = MAX_ZIP_ENTRIES,
+    max_unpacked_bytes: int = MAX_ZIP_UNPACKED_BYTES,
+) -> None:
+    """Refuse an archive that must not be unpacked into ``target_dir``.
+
+    Raises :class:`StagingError` when the archive holds more than
+    ``max_entries`` entries, unpacks to more than ``max_unpacked_bytes``, or an
+    entry name is unsafe (path traversal, absolute path, backslash, a name
+    that collides with another one on a case-insensitive file system, or a
+    path that resolves outside ``target_dir``). ``target_dir`` need not exist.
+    """
+    from core.skills.skill_installer import InstallationError, SkillInstaller  # noqa: PLC0415
+
+    infos = zf.infolist()
+    if len(infos) > max_entries:
+        raise StagingError(f"archive holds {len(infos)} entries (limit {max_entries})")
+    total = 0
+    for info in infos:
+        total += max(0, int(info.file_size))
+        if total > max_unpacked_bytes:
+            raise StagingError(
+                f"archive unpacks to more than {max_unpacked_bytes // (1024 * 1024)} MB")
+    try:
+        # The validator does not use its instance; one definition for all intakes.
+        SkillInstaller._validate_zip_entries(None, zf, target_dir)  # type: ignore[arg-type]
+    except InstallationError as exc:
+        raise StagingError(str(exc)) from exc
+
+
+def find_manifest_entry(names: list[str]) -> str | None:
+    """Archive name of THE package manifest, or None.
+
+    Exactly two layouts count: ``manifest.json`` at the archive root, or
+    ``<dir>/manifest.json`` when the archive has a single top-level directory.
+    A file that merely ends in ``manifest.json`` somewhere in the tree does not.
+    """
+    if "manifest.json" in names:
+        return "manifest.json"
+    tops = {n.split("/", 1)[0] for n in names if n.strip("/")}
+    if len(tops) == 1:
+        candidate = f"{next(iter(tops))}/manifest.json"
+        if candidate in names:
+            return candidate
+    return None
+
+
 class StagingManager:
     """Manages plugin ZIP staging, validation, and installation.
 
@@ -71,21 +141,20 @@ class StagingManager:
 
         try:
             with zipfile.ZipFile(zip_path, "r") as zf:
-                # Validate all entry names for path traversal (fail-closed)
-                for entry_name in zf.namelist():
-                    if ".." in entry_name or entry_name.startswith("/"):
-                        errors.append(f"Disallowed path in ZIP entry: {entry_name}")
-                        return (False, {}, errors)
+                # Entry count, unpacked size and every entry name (fail-closed).
+                try:
+                    check_zip_archive(zf, self.staging_root / "_unpack_check")
+                except StagingError as exc:
+                    errors.append(f"Disallowed archive: {exc}")
+                    return (False, {}, errors)
 
-                # Check for manifest.json
-                manifest_path = None
-                for name in zf.namelist():
-                    if name.endswith("manifest.json"):
-                        manifest_path = name
-                        break
-
+                # The manifest: root, or the single top-level folder. Nowhere else.
+                manifest_path = find_manifest_entry(zf.namelist())
                 if not manifest_path:
                     errors.append("manifest.json not found in ZIP")
+                    return (False, {}, errors)
+                if zf.getinfo(manifest_path).file_size > MAX_MANIFEST_BYTES:
+                    errors.append("manifest.json is too large")
                     return (False, {}, errors)
 
                 # Read manifest
@@ -94,6 +163,9 @@ class StagingManager:
                     manifest = json.loads(manifest_data)
                 except (json.JSONDecodeError, UnicodeDecodeError) as e:
                     errors.append(f"manifest.json invalid: {e}")
+                    return (False, {}, errors)
+                if not isinstance(manifest, dict):
+                    errors.append("manifest.json must be a JSON object")
                     return (False, {}, errors)
 
                 # Validate manifest schema

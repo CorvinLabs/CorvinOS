@@ -233,15 +233,62 @@ def _use_systemd_run() -> bool:
         return False
 
 
+_WATCHDOG_UNIT = Path(".config") / "systemd" / "user" / "corvin-watchdog.service"
+
+
+def lock_state_home() -> str | None:
+    """The ``XDG_STATE_HOME`` an updater started here must run with, or None for
+    "unset" (the lock is then under ``$HOME/.local/state``).
+
+    The setup lock has one reader that matters - the watchdog, which stands down
+    while the lock is held - and ``scripts/setup.sh`` pins the installing shell's
+    ``XDG_STATE_HOME`` into that unit. An update started from the console did not
+    carry the value: ``systemd-run`` hands over only what is named with
+    ``--setenv``, so update.sh locked under ``$HOME/.local/state`` while the
+    watchdog watched the pinned directory and restarted a console that was still
+    being updated. The unit is the truth when it exists; without one (macOS, no
+    systemd) the console's own environment is. A relative value is ignored, as
+    the scripts ignore it.
+    """
+    try:
+        unit = (Path.home() / _WATCHDOG_UNIT).read_text(encoding="utf-8")
+    except (OSError, RuntimeError, UnicodeDecodeError):
+        unit = None
+    if unit is not None:
+        for line in unit.splitlines():
+            m = re.fullmatch(r'Environment="XDG_STATE_HOME=(.*)"', line.strip())
+            if m:
+                value = m.group(1).replace("%%", "%")
+                return value if value.startswith("/") else None
+        return None
+    value = os.environ.get("XDG_STATE_HOME") or ""
+    return value if value.startswith("/") else None
+
+
+def updater_env(progress: Path) -> dict[str, str]:
+    """Environment for an updater started as a direct child (no systemd-run)."""
+    env = {**os.environ, "CORVIN_UPDATE_PROGRESS": str(progress)}
+    state_home = lock_state_home()
+    if state_home is None:
+        env.pop("XDG_STATE_HOME", None)
+    else:
+        env["XDG_STATE_HOME"] = state_home
+    return env
+
+
 def isolated_command(src: Path, state_path: Path, log: Path) -> list[str]:
     """systemd-run wrapper: runs update.sh, then records its exit code in the state file
     itself, so the outcome survives the console restarting mid-update."""
     pkg_root = str(Path(__file__).resolve().parents[1])
     script = ('sh "$1"; rc=$?; "$2" -m corvin_console.update_manager --record "$3" "$rc" "$4"; exit $rc')
+    # The transient unit gets the user manager's environment plus ONLY what is
+    # named here - the lock directory has to be named (see lock_state_home).
+    state_home = lock_state_home()
     return ["systemd-run", "--user", "--quiet", "--collect", "--wait",
             f"--unit=corvin-update-{int(time.time())}", f"--working-directory={src}",
             f"--setenv=PATH={os.environ.get('PATH', '')}", f"--setenv=PYTHONPATH={pkg_root}",
             f"--setenv=CORVIN_UPDATE_PROGRESS={progress_path_for(state_path)}",
+            *([f"--setenv=XDG_STATE_HOME={state_home}"] if state_home else []),
             f"--property=StandardOutput=append:{log}", f"--property=StandardError=append:{log}",
             "sh", "-c", script, "_", str(src / "update.sh"), sys.executable, str(state_path), str(src)]
 
@@ -518,7 +565,7 @@ class UpdateManager:
                                "head_before": facts["head"], "target_sha": target or None,
                                "steps": {"triggered": {"status": "ok", "at": now, "detail": trigger},
                                          "update_script": {"status": "running", "at": now, "detail": None}}})
-            kwargs["env"] = {**os.environ, "CORVIN_UPDATE_PROGRESS": str(progress)}
+            kwargs["env"] = updater_env(progress)
             self._audit(sid_fingerprint, ok=True, action="settings.update_install")
             isolated = _use_systemd_run()
             cmd = isolated_command(src, self.state_path(), log) if isolated else updater_command(src)

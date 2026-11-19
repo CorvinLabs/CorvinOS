@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { Command } from "@/lib/api";
+import { icon } from "@/lib/status-markers";
 
 interface CommandsHelpModalProps {
   commands: Record<string, Command[]>;
@@ -108,7 +109,7 @@ export function CommandsHelpModal({
 
       {/* Footer Tip */}
       <div className="px-6 py-3 border-t bg-muted/30 text-xs text-muted-foreground shrink-0">
-        ℹ️ {tip}
+        {icon("note")} {tip}
       </div>
     </DialogContent>
   );

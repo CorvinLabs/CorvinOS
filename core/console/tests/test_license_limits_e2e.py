@@ -65,8 +65,11 @@ class TestLicenseRouteAuditCalls(unittest.TestCase):
         """All audit calls must supply sid_fingerprint= (required by audit.py)."""
         import re
         src = self._load_license_route_source()
-        # Count action_performed/failed/denied calls
-        call_count = len(re.findall(r"console_audit\.action_(performed|failed|denied)\(", src))
+        # Count action_performed/failed/denied calls: called directly from a sync
+        # helper, or handed to ``asyncio.to_thread(console_audit.action_x, ...)``
+        # from an async handler (the chain write must not run on the event loop).
+        call_count = len(re.findall(r"console_audit\.action_(performed|failed|denied)[(,]", src))
+        self.assertGreater(call_count, 0, "the pattern matched no audit call at all")
         # Count calls that include sid_fingerprint
         fp_count = len(re.findall(r"sid_fingerprint=rec\.sid_fingerprint", src))
         self.assertEqual(call_count, fp_count,

@@ -27,18 +27,22 @@ class TestActivateCommand:
     """activate --request | activate <code>"""
 
     def test_activate_request_flag(self, capsys):
-        """activate --request returns success."""
+        """activate --request is not implemented: it says so, exits non-zero and prints no URL."""
         ret = main(["activate", "--request"])
-        assert ret == 0
+        assert ret == 1
         captured = capsys.readouterr()
-        assert "Activation code:" in captured.out
+        assert "not available in this build" in captured.out
+        assert "http" not in captured.out and "stub-placeholder" not in captured.out
+        assert "claim your license" not in captured.out
 
     def test_activate_with_code(self, capsys):
-        """activate <code> redeems the code."""
+        """activate <code> is not implemented: non-zero exit, and the code is never echoed."""
         ret = main(["activate", "test-code-123"])
-        assert ret == 0
+        assert ret == 1
         captured = capsys.readouterr()
-        assert "Redeeming code:" in captured.out
+        assert "not available in this build" in captured.out
+        assert "test-code-123" not in captured.out + captured.err
+        assert "Redeeming" not in captured.out
 
     def test_activate_no_args_fails(self, capsys):
         """activate with no args/flags returns error."""
@@ -111,7 +115,7 @@ class TestCRLCommand:
         assert "not found" in captured.out.lower()
 
     def test_crl_import_valid_file(self, capsys):
-        """crl import valid delta file returns success."""
+        """crl import merges nothing in this build: it must not report an import."""
         with tempfile.TemporaryDirectory() as tmpdir:
             crl_path = Path(tmpdir) / "crl.json"
             crl_data = {
@@ -122,9 +126,10 @@ class TestCRLCommand:
             crl_path.write_text(json.dumps(crl_data), encoding="utf-8")
 
             ret = main(["crl", "import", str(crl_path)])
-            assert ret == 0
+            assert ret == 1
             captured = capsys.readouterr()
-            assert "Imported" in captured.out
+            assert "not available in this build" in captured.out
+            assert "Imported" not in captured.out and "OK" not in captured.out
 
 
 class TestCredentialCommand:
@@ -194,10 +199,10 @@ class TestCLIIntegration:
     """End-to-end CLI flows"""
 
     def test_full_flow_activate_status_deactivate(self, capsys):
-        """Typical flow: request → status → deactivate."""
+        """Typical flow: request (not available) → status → deactivate."""
         # Request
         ret = main(["activate", "--request"])
-        assert ret == 0
+        assert ret == 1
 
         # Status
         ret = main(["status"])

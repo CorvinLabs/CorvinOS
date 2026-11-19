@@ -53,7 +53,7 @@ def home(tmp_path, monkeypatch) -> Path:
     # of test_acs_quota_fallback.py) so these tests judge L34 only and never make a model call.
     import house_rules  # noqa: PLC0415
     monkeypatch.setattr(house_rules, "_house_rules_classifier",
-                        lambda task, rules, auth, **kw: ("", 0.0, "test clear"))
+                        lambda task, rules, auth, **kw: ("", 0.99, "test clear"))
     return h
 
 

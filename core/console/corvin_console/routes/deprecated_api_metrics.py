@@ -2,7 +2,11 @@
 
 ADR-0538 Phase B: Legacy Cleanup Monitoring
 
-Endpoints:
+NOT MOUNTED (2026-11-19): nothing in production emits ``deprecated_api_call``
+and no console page reads these routes, so ``app.py`` no longer includes this
+router. The module stays importable for the Week-5 baseline tooling.
+
+Endpoints (when mounted):
   - GET  /v1/console/deprecated-apis/metrics — current call rate (calls/min over past 24h)
   - GET  /v1/console/deprecated-apis/breakdown — per-API call counts
   - GET  /v1/console/deprecated-apis/baseline — Week 5 baseline report
@@ -24,17 +28,16 @@ import io
 import json
 import logging
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Dict, List, Optional, Tuple
-from collections import defaultdict, Counter
+from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
-from core.learning.event_persistence import _resolve_core_audit
-from forge import paths as _fp
+from core.paths import tenant_audit_chain
 from ..deps import require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,31 @@ router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], pre
 
 # Seconds between WebSocket pushes
 STREAM_INTERVAL_S = 30.0
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware now. Audit timestamps parse as aware datetimes, and
+    comparing those against a naive one raises TypeError."""
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Treat a naive datetime as UTC so every comparison is aware/aware."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _iso(dt: datetime) -> str:
+    return _as_utc(dt).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+def _event_time(event: Dict[str, Any]) -> Optional[datetime]:
+    raw = event.get("timestamp") or event.get("ts")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return _as_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
+    except ValueError:
+        return None
 
 # Known deprecated APIs (from Phase B compat layer)
 DEPRECATED_APIS = frozenset({
@@ -62,9 +90,6 @@ class DeprecatedAPICallCount(BaseModel):
     calls_per_minute: float
     error_count: int
     error_rate_pct: float
-    p50_latency_ms: float
-    p99_latency_ms: float
-    skill_availability_pct: float
 
 
 class CurrentMetricsResponse(BaseModel):
@@ -72,7 +97,6 @@ class CurrentMetricsResponse(BaseModel):
     timestamp: str
     total_calls_per_minute: float
     total_error_rate_pct: float
-    skill_availability_pct: float
     apis: List[DeprecatedAPICallCount]
     status: str  # "no_calls" | "low_activity" | "high_activity"
 
@@ -83,7 +107,6 @@ class BaselineReport(BaseModel):
     timestamp: str
     baseline_calls_per_min: float
     baseline_error_rate_pct: float
-    baseline_skill_availability_pct: float
     top_3_apis: List[Tuple[str, int]]
     total_apis_used: int
     recommendations: List[str]
@@ -94,7 +117,6 @@ class TrendDataPoint(BaseModel):
     timestamp: str
     calls_per_min: float
     error_rate_pct: float
-    skill_availability_pct: float
 
 
 class TrendResponse(BaseModel):
@@ -138,11 +160,11 @@ def _parse_audit_chain(
         list of event dicts (tenant-scoped, immutable)
     """
     if since is None:
-        since = datetime.utcnow() - timedelta(hours=24)
+        since = _utcnow() - timedelta(hours=24)
+    since = _as_utc(since)
 
     try:
-        _resolve_core_audit()
-        chain_path = _fp.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
+        chain_path = tenant_audit_chain(tenant_id)
 
         events = []
         if not chain_path.exists():
@@ -158,14 +180,8 @@ def _parse_audit_chain(
                         continue
                     if event.get("tenant_id") != tenant_id:
                         continue
-                    # Parse timestamp and filter by since
-                    try:
-                        event_time = datetime.fromisoformat(
-                            event.get("timestamp", "").replace("Z", "+00:00")
-                        )
-                        if event_time < since:
-                            continue
-                    except (ValueError, AttributeError):
+                    event_time = _event_time(event)
+                    if event_time is None or event_time < since:
                         continue
                     events.append(event)
                 except json.JSONDecodeError:
@@ -190,23 +206,22 @@ def _aggregate_metrics(
           - calls_per_min: float
           - error_count: int
           - error_rate_pct: float
-          - skill_availability_pct: float
           - per_api: dict of {api_name: {...}}
-          - latencies: dict of {api_name: [ms, ...]}
+
+    Latency and "skill availability" are NOT reported: the event carries
+    neither, and the earlier values were derived from ``hash(api_name)`` and
+    a constant 99.99.
     """
     if since is None:
-        since = datetime.utcnow() - timedelta(hours=24)
+        since = _utcnow() - timedelta(hours=24)
+    since = _as_utc(since)
 
     events = _parse_audit_chain(tenant_id, since)
 
     # Initialize counters
     api_counts = Counter()
     api_errors = Counter()
-    api_latencies = defaultdict(list)
-    total_skills_invoked = 0
-    total_skill_errors = 0
-
-    now = datetime.utcnow()
+    now = _utcnow()
     time_window_mins = max((now - since).total_seconds() / 60.0, 1.0)
 
     for event in events:
@@ -215,46 +230,26 @@ def _aggregate_metrics(
         failed = details.get("failed", False)
 
         api_counts[api_name] += 1
-        total_skills_invoked += 1
-
         if failed:
             api_errors[api_name] += 1
-            total_skill_errors += 1
-
-        # Try to extract latency if available (will be added in future versions)
-        # For now, assume typical latency distributions
-        api_latencies[api_name].append(10 + (hash(api_name) % 20))
 
     # Compute aggregates
     total_calls = sum(api_counts.values())
     total_errors = sum(api_errors.values())
     calls_per_min = total_calls / time_window_mins if time_window_mins > 0 else 0.0
     error_rate_pct = (total_errors / total_calls * 100) if total_calls > 0 else 0.0
-    skill_availability_pct = (
-        (total_skills_invoked - total_skill_errors) / total_skills_invoked * 100
-        if total_skills_invoked > 0
-        else 99.99
-    )
 
     # Build per-API breakdown
     per_api = {}
     for api_name in api_counts:
         counts = api_counts[api_name]
         errors = api_errors.get(api_name, 0)
-        latencies = api_latencies.get(api_name, [10])
-
-        p50 = statistics.median(latencies) if latencies else 10.0
-        p99 = sorted(latencies)[-1] if latencies else 10.0  # simple approximation
-
         per_api[api_name] = {
             "api_name": api_name,
             "calls_total": counts,
             "calls_per_minute": counts / time_window_mins,
             "error_count": errors,
             "error_rate_pct": (errors / counts * 100) if counts > 0 else 0.0,
-            "p50_latency_ms": p50,
-            "p99_latency_ms": p99,
-            "skill_availability_pct": skill_availability_pct,
         }
 
     return {
@@ -262,7 +257,6 @@ def _aggregate_metrics(
         "calls_per_min": calls_per_min,
         "error_count": total_errors,
         "error_rate_pct": error_rate_pct,
-        "skill_availability_pct": skill_availability_pct,
         "per_api": per_api,
         "event_count": len(events),
         "time_window_mins": time_window_mins,
@@ -278,7 +272,7 @@ async def get_current_metrics(
     session = Depends(require_session)
 ) -> CurrentMetricsResponse:
     """Current deprecated API metrics (real-time from audit chain)."""
-    metrics = _aggregate_metrics(session.tenant_id)
+    metrics = await asyncio.to_thread(_aggregate_metrics, session.tenant_id)
 
     # Determine status
     calls_per_min = metrics["calls_per_min"]
@@ -295,10 +289,9 @@ async def get_current_metrics(
     ]
 
     return CurrentMetricsResponse(
-        timestamp=datetime.utcnow().isoformat() + "Z",
+        timestamp=_iso(_utcnow()),
         total_calls_per_minute=metrics["calls_per_min"],
         total_error_rate_pct=metrics["error_rate_pct"],
-        skill_availability_pct=metrics["skill_availability_pct"],
         apis=sorted(apis_list, key=lambda x: x.calls_total, reverse=True),
         status=status,
     )
@@ -309,14 +302,14 @@ async def get_api_breakdown(
     session = Depends(require_session),
 ) -> Dict[str, Any]:
     """Per-API call count breakdown (past 24h)."""
-    metrics = _aggregate_metrics(session.tenant_id)
+    metrics = await asyncio.to_thread(_aggregate_metrics, session.tenant_id)
     per_api_sorted = sorted(
         metrics["per_api"].items(),
         key=lambda x: x[1]["calls_total"],
         reverse=True,
     )
     return {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": _iso(_utcnow()),
         "breakdown": dict(per_api_sorted),
         "total_calls": metrics["total_calls"],
         "total_unique_apis": len(metrics["per_api"]),
@@ -328,7 +321,7 @@ async def get_baseline_report(
     session = Depends(require_session),
 ) -> BaselineReport:
     """Week 5 baseline metrics snapshot."""
-    metrics = _aggregate_metrics(session.tenant_id)
+    metrics = await asyncio.to_thread(_aggregate_metrics, session.tenant_id)
 
     # Top 3 APIs by call count
     sorted_apis = sorted(
@@ -344,8 +337,6 @@ async def get_baseline_report(
         recommendations.append("High deprecated API usage detected (>50/min); Phase C deletion may need adjustment")
     if metrics["error_rate_pct"] > 1.0:
         recommendations.append("Error rate elevated (>1%); check compat layer or Skill health")
-    if metrics["skill_availability_pct"] < 99.0:
-        recommendations.append("Skill availability below SLO (99%); investigate failures")
     if len(metrics["per_api"]) == 0:
         recommendations.append("No deprecated API usage detected; Phase C deletion is safe")
     else:
@@ -353,10 +344,9 @@ async def get_baseline_report(
 
     return BaselineReport(
         week_number=5,
-        timestamp=datetime.utcnow().isoformat() + "Z",
+        timestamp=_iso(_utcnow()),
         baseline_calls_per_min=metrics["calls_per_min"],
         baseline_error_rate_pct=metrics["error_rate_pct"],
-        baseline_skill_availability_pct=metrics["skill_availability_pct"],
         top_3_apis=top_3,
         total_apis_used=len(metrics["per_api"]),
         recommendations=recommendations,
@@ -368,7 +358,7 @@ async def get_error_metrics(
     session = Depends(require_session),
 ) -> Dict[str, Any]:
     """Error rate tracking (past 24h)."""
-    metrics = _aggregate_metrics(session.tenant_id)
+    metrics = await asyncio.to_thread(_aggregate_metrics, session.tenant_id)
 
     # Build error breakdown
     error_breakdown = [
@@ -383,7 +373,7 @@ async def get_error_metrics(
     error_breakdown.sort(key=lambda x: x["error_count"], reverse=True)
 
     return {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": _iso(_utcnow()),
         "total_error_rate_pct": metrics["error_rate_pct"],
         "total_errors": metrics["error_count"],
         "total_calls": metrics["total_calls"],
@@ -396,25 +386,13 @@ async def get_error_metrics(
 async def get_skills_latency(
     session = Depends(require_session),
 ) -> Dict[str, Any]:
-    """Skill latency metrics (p50, p99 per API)."""
-    metrics = _aggregate_metrics(session.tenant_id)
-
-    latency_data = [
-        {
-            "api_name": api,
-            "p50_latency_ms": data["p50_latency_ms"],
-            "p99_latency_ms": data["p99_latency_ms"],
-        }
-        for api, data in metrics["per_api"].items()
-    ]
-    latency_data.sort(key=lambda x: x["p99_latency_ms"], reverse=True)
-
+    """Skill latency is not measured: ``deprecated_api_call`` carries no
+    duration, so this answers empty instead of inventing percentiles."""
     return {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "latency_data": latency_data,
-        "avg_p50_ms": statistics.mean([x["p50_latency_ms"] for x in latency_data]) if latency_data else 0,
-        "avg_p99_ms": statistics.mean([x["p99_latency_ms"] for x in latency_data]) if latency_data else 0,
-        "alert_status": "OK",  # p99 < 50ms is normal
+        "timestamp": _iso(_utcnow()),
+        "available": False,
+        "reason": "latency is not recorded for deprecated API calls on this build",
+        "latency_data": [],
     }
 
 
@@ -424,29 +402,25 @@ async def get_trend(
     session = Depends(require_session),
 ) -> TrendResponse:
     """Historical trend data (simple bucketing for now)."""
-    if window == "24h":
-        since = datetime.utcnow() - timedelta(hours=24)
-        buckets = 24
-    elif window == "7d":
-        since = datetime.utcnow() - timedelta(days=7)
+    now = _utcnow()
+    if window == "7d":
+        since = now - timedelta(days=7)
         buckets = 7
     else:
-        since = datetime.utcnow() - timedelta(hours=24)
+        since = now - timedelta(hours=24)
         buckets = 24
 
-    # Simple implementation: create trend points at bucket intervals
     data_points = []
-    bucket_size = (datetime.utcnow() - since) / buckets if buckets > 0 else timedelta(hours=1)
+    bucket_size = (now - since) / buckets
+    # ONE pass over the chain, off the event loop; the buckets are cut from
+    # that result (it used to re-read the whole chain once per bucket).
+    all_events = await asyncio.to_thread(_parse_audit_chain, session.tenant_id, since)
+    timed = [(t, e) for t, e in ((_event_time(e), e) for e in all_events) if t is not None]
 
     for i in range(buckets):
         bucket_start = since + (bucket_size * i)
         bucket_end = since + (bucket_size * (i + 1))
-
-        # Aggregate metrics for this bucket
-        events_in_bucket = [
-            e for e in _parse_audit_chain(session.tenant_id, bucket_start)
-            if e.get("timestamp", "") <= bucket_end.isoformat() + "Z"
-        ]
+        events_in_bucket = [e for t, e in timed if bucket_start <= t < bucket_end]
 
         calls = len(events_in_bucket)
         errors = sum(1 for e in events_in_bucket if e.get("details", {}).get("failed", False))
@@ -455,10 +429,9 @@ async def get_trend(
 
         data_points.append(
             TrendDataPoint(
-                timestamp=bucket_start.isoformat() + "Z",
+                timestamp=_iso(bucket_start),
                 calls_per_min=calls_per_min,
                 error_rate_pct=error_rate_pct,
-                skill_availability_pct=99.99,  # placeholder
             )
         )
 
@@ -485,13 +458,13 @@ async def export_metrics(
         if not req.start_date or not req.end_date:
             raise HTTPException(status_code=400, detail="start_date and end_date required for custom window")
         try:
-            since = datetime.fromisoformat(req.start_date.replace("Z", "+00:00"))
+            since = _as_utc(datetime.fromisoformat(req.start_date.replace("Z", "+00:00")))
         except (ValueError, AttributeError):
             raise HTTPException(status_code=400, detail="Invalid start_date format")
     else:
         since = None  # uses default in _aggregate_metrics
 
-    events = _parse_audit_chain(session.tenant_id, since)
+    events = await asyncio.to_thread(_parse_audit_chain, session.tenant_id, since)
 
     if req.format == "jsonl":
         output = io.StringIO()
@@ -540,16 +513,15 @@ async def stream_metrics(websocket: WebSocket, session = Depends(require_session
     await websocket.accept()
     try:
         while True:
-            metrics = _aggregate_metrics(session.tenant_id)
+            metrics = await asyncio.to_thread(_aggregate_metrics, session.tenant_id)
             message = StreamMessage(
                 type="metrics",
                 data={
                     "total_calls_per_minute": metrics["calls_per_min"],
                     "total_error_rate_pct": metrics["error_rate_pct"],
-                    "skill_availability_pct": metrics["skill_availability_pct"],
                     "total_calls": metrics["total_calls"],
                 },
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=_iso(_utcnow()),
             )
             await websocket.send_json(message.model_dump())
             await asyncio.sleep(STREAM_INTERVAL_S)

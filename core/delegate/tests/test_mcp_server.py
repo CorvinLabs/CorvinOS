@@ -497,25 +497,64 @@ class HermeticAndEnvToolParamTests(unittest.TestCase):
         ])
         self.assertNotIn("MCP_TEST_LEAK", self._captured_env_keys)
 
-    def test_env_passthrough_keeps_leak_visible(self):
+    # Review 2026-11-19 (A2A-7): hermetic / env_passthrough are operator
+    # settings (server env), never tool arguments an LLM can set.
+
+    def _call(self, arguments):
         server = DelegateServer(stderr=io.StringIO())
-        _drive(server, [
+        return _drive(server, [
             {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-             "params": {"name": "delegate_codex",
-                        "arguments": {"prompt": "hi", "env_passthrough": True}}},
+             "params": {"name": "delegate_codex", "arguments": arguments}},
             {"jsonrpc": "2.0", "id": 2, "method": "shutdown"},
         ])
+
+    def test_env_passthrough_tool_arg_is_refused_and_nothing_spawns(self):
+        out = self._call({"prompt": "hi", "env_passthrough": True})
+        self.assertIn("env_passthrough is an operator setting", json.dumps(out))
+        self.assertEqual(self._captured_kwargs, {})          # no engine spawn
+        self.assertNotIn("MCP_TEST_LEAK", self._captured_env_keys)
+
+    def test_hermetic_false_tool_arg_is_refused_and_nothing_spawns(self):
+        out = self._call({"prompt": "hi", "hermetic": False})
+        self.assertIn("hermetic is an operator setting", json.dumps(out))
+        self.assertEqual(self._captured_kwargs, {})
+
+    def test_strict_values_as_tool_args_are_harmless(self):
+        self._call({"prompt": "hi", "hermetic": True, "env_passthrough": False})
+        self.assertIsNotNone(self._captured_kwargs.get("working_dir"))
+        self.assertNotIn("MCP_TEST_LEAK", self._captured_env_keys)
+
+    def test_the_tool_schema_no_longer_offers_either_argument(self):
+        from corvin_delegate.mcp_server import _tool_definitions
+        for tool in _tool_definitions():
+            props = tool["inputSchema"]["properties"]
+            self.assertNotIn("hermetic", props, tool["name"])
+            self.assertNotIn("env_passthrough", props, tool["name"])
+
+    def test_operator_env_enables_passthrough(self):
+        os.environ["CORVIN_DELEGATE_ENV_PASSTHROUGH"] = "1"
+        try:
+            self._call({"prompt": "hi"})
+        finally:
+            os.environ.pop("CORVIN_DELEGATE_ENV_PASSTHROUGH", None)
         self.assertIn("MCP_TEST_LEAK", self._captured_env_keys)
 
-    def test_hermetic_false_skips_tempdir(self):
-        server = DelegateServer(stderr=io.StringIO())
-        _drive(server, [
-            {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-             "params": {"name": "delegate_codex",
-                        "arguments": {"prompt": "hi", "hermetic": False}}},
-            {"jsonrpc": "2.0", "id": 2, "method": "shutdown"},
-        ])
+    def test_operator_env_disables_hermetic(self):
+        os.environ["CORVIN_DELEGATE_HERMETIC"] = "0"
+        try:
+            self._call({"prompt": "hi"})
+        finally:
+            os.environ.pop("CORVIN_DELEGATE_HERMETIC", None)
+        self.assertIn("working_dir", self._captured_kwargs)   # the spawn happened
         self.assertIsNone(self._captured_kwargs.get("working_dir"))
+
+    def test_an_unrecognised_operator_value_keeps_the_strict_default(self):
+        os.environ["CORVIN_DELEGATE_ENV_PASSTHROUGH"] = "maybe"
+        try:
+            self._call({"prompt": "hi"})
+        finally:
+            os.environ.pop("CORVIN_DELEGATE_ENV_PASSTHROUGH", None)
+        self.assertNotIn("MCP_TEST_LEAK", self._captured_env_keys)
 
 
 if __name__ == "__main__":

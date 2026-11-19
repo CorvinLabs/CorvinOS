@@ -26,8 +26,10 @@ trusted. Six concrete injection vectors are mitigated here:
      whitespace-tolerant).
 
   3. **Tool-scope widening** — the load-bearing tool gate is the per-origin
-     ``allow_*`` policy, which the receiver compiles into a ``--disallowedTools``
-     denylist AND (see spawn) ``--strict-mcp-config`` so no built-in or MCP
+     ``allow_*`` policy, which becomes the worker's whole tool set as a
+     ``--tools=`` ALLOW list (``a2a_tool_policy.exposed_tools``), with the
+     ``--disallowedTools`` denylist as second line AND (see spawn)
+     ``--strict-mcp-config`` so no built-in or MCP
      tool outside the grant is reachable. The persona's own allowed_tools
      list is NOT separately loaded here — persona-scope narrowing beyond the
      denylist is advisory (system-prompt text), so do not rely on it as a
@@ -83,6 +85,24 @@ except ImportError:
         WorkerEngine = None  # type: ignore[assignment,misc]
         collect = None  # type: ignore[assignment]
         attested_model = None  # type: ignore[assignment]
+
+
+def _exposed_tools(allowed_tools: "list[str] | None",
+                   disallowed_tools: "list[str] | None") -> "list[str]":
+    """``a2a_tool_policy.exposed_tools`` - the one allow-list derivation.
+
+    An unloadable policy module yields NO tools: the allow list fails closed."""
+    try:
+        try:
+            import a2a_tool_policy  # type: ignore[import-not-found]  # noqa: PLC0415
+        except ImportError:
+            _shared = str(Path(__file__).resolve().parent)
+            if _shared not in sys.path:
+                sys.path.insert(0, _shared)
+            import a2a_tool_policy  # type: ignore[import-not-found]  # noqa: PLC0415
+        return list(a2a_tool_policy.exposed_tools(allowed_tools, disallowed_tools))
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _acs_runtime_module():
@@ -146,6 +166,18 @@ _ENV_READING_TOOLS = frozenset({
 #: Skill/slash command — is not available to it at all; a denylist of known names could
 #: never promise that.
 _ENV_SAFE_TOOLS = ("WebFetch", "WebSearch", "TodoWrite")
+
+
+def _default_deny_tools() -> "list[str]":
+    """The deny list of an origin that grants nothing (``derive_tool_policy({})``)."""
+    try:
+        import a2a_tool_policy  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        _shared = str(Path(__file__).resolve().parent)
+        if _shared not in sys.path:
+            sys.path.insert(0, _shared)
+        import a2a_tool_policy  # type: ignore[import-not-found]  # noqa: PLC0415
+    return list(a2a_tool_policy.derive_tool_policy({}).disallowed_tools or [])
 
 
 def _worker_can_read_env(disallowed_tools: "list[str] | None") -> bool:
@@ -1054,6 +1086,22 @@ def spawn_a2a_worker(
     # RD-10: the decision is an ALLOW list — ``_credential_safe_tools`` is the exact tool
     # set a credential-holding worker gets (``--tools=``), ``None`` when the origin may
     # read the environment.
+    # R3-BR-8: a caller that passes NO deny list has stated no policy, and "no policy"
+    # used to mean every grantable tool (``exposed_tools(None, None)`` = Bash, WebFetch,
+    # Read, Write, Agent, ...). Deny by default is applied HERE, at the one spawn primitive,
+    # so a new call site cannot forget it: the policy of an origin that grants nothing.
+    # A caller that wants tools derives them (``a2a_tool_policy.derive_tool_policy``) and
+    # passes the resulting list - an explicit ``[]`` is such a statement and is honoured.
+    if disallowed_tools is None:
+        try:
+            disallowed_tools = list(_default_deny_tools())
+        except Exception as _polexc:  # noqa: BLE001 - cannot derive the policy -> refuse
+            return WorkerResult(
+                status="rejected", raw_output="", parsed_output={},
+                duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+                reason_code="gate_error",
+                error=f"tool-policy-unavailable (fail-closed): {type(_polexc).__name__}"[:300],
+            )
     _safe_tools = _credential_safe_tools(allowed_tools, disallowed_tools)
     _env_readable = _safe_tools is None
     try:
@@ -1182,7 +1230,11 @@ def spawn_a2a_worker(
                     # ADR-2268 R1a: a malformed sensitive_route refuses every turn (A2A cannot reroute).
                     raise RuntimeError("sensitive_route malformed")
                 _det = bool(getattr(_guard, "detector_on", False))
-                _classif = max(classify_task(_txt, persona=persona or None, detector=_det)
+                # honor_marker=False: the text is a remote peer's. A
+                # ``[class:...]`` label in it is content, not an instruction of
+                # this tenant's operator - the class comes from what the text IS.
+                _classif = max(classify_task(_txt, persona=persona or None, detector=_det,
+                                             honor_marker=False)
                                for _txt in _l34_texts)
                 _decision = _guard.validate(classification=_classif,
                                             engine_id="claude_code", persona=persona or None)
@@ -1352,10 +1404,12 @@ def spawn_a2a_worker(
     written_inputs: list[str] = []
     try:
         for att in (inbound_attachments or []):
-            try:
-                raw = att.decode()  # verifies digest + b64
-            except Exception:
-                continue
+            # An attachment that fails its digest / base64 check is a REJECT of
+            # the whole task (review 2026-11-19, A2A-14). It used to be skipped
+            # silently: the worker then ran on a different input set than the
+            # one the peer signed, and reported "ok". The raise is caught by
+            # the handler below (cleanup + status "rejected").
+            raw = att.decode()  # verifies digest + b64
             target = in_dir / att.name
             target.write_bytes(raw)
             written_inputs.append(att.name)
@@ -1508,10 +1562,20 @@ def spawn_a2a_worker(
     # claude-CLI-specific); other engines keep their own MCP posture.
     if engine_name == "claude_code":
         _spawn_kwargs["extra_args"] = ["--strict-mcp-config"]
+        # EVERY A2A worker gets its tool set as an ALLOW list (review 2026-11-19,
+        # R2-A2A-6). The engine runs with --dangerously-skip-permissions, where
+        # --disallowedTools only removes the names it lists: Skill, EnterWorktree,
+        # ExitWorktree, SendMessage, ToolSearch are in no allow_* class and stayed
+        # available to every peer-driven worker. ``--tools=`` used to be set only
+        # for a credential-holding worker (RD-10); that worker keeps its narrower
+        # set, every other one gets the grantable tools its origin was not denied.
+        # One derivation for the receiver and the conversation turn:
+        # a2a_tool_policy.exposed_tools. The deny list above stays as second line.
         if _restore_credential:
-            # RD-10: a worker holding a credential gets the ALLOW list as its whole tool
-            # set — no tool outside it exists for this worker, whatever its name.
-            _spawn_kwargs["extra_args"].append("--tools=" + ",".join(_safe_tools or []))
+            _tool_set = list(_safe_tools or [])
+        else:
+            _tool_set = _exposed_tools(allowed_tools, disallowed_tools)
+        _spawn_kwargs["extra_args"].append("--tools=" + ",".join(_tool_set))
         # ADR-2232: a federated agent's model, normalised like every pin
         # (a provider-qualified id would 404 at the CLI — ADR-0952).
         if model:
@@ -1546,15 +1610,21 @@ def spawn_a2a_worker(
         result = _collect_within_ttl(engine, framed_prompt, _spawn_kwargs, ttl_s)
         raw = result.final_text or ""
         err = result.error
-    except TimeoutError:
+    except TimeoutError as _texc:
         shutil.rmtree(workspace, ignore_errors=True)
+        # A2A-12: a timed-out run consumed tokens — the span closes on the
+        # model the engine reported and its usage, status "error".
+        _t_model, _t_usage, _t_tools = _span_facts(getattr(_texc, "result", None))
         _emit_a2a_engine_span("end", task_id=task_id, engine_id=engine_name,
-                              status="error", duration_ms=_ms(start))
+                              status="error", duration_ms=_ms(start),
+                              model_id=_t_model, usage=_t_usage,
+                              tool_call_count=_t_tools)
         return WorkerResult(
             status="timeout", raw_output="",
             parsed_output={}, duration_ms=_ms(start),
             persona=persona, engine_name=engine_name,
             error="wall_time_exceeded",
+            usage=_usage_block(_t_model, _t_usage),
         )
     except Exception as exc:
         shutil.rmtree(workspace, ignore_errors=True)
@@ -1587,15 +1657,21 @@ def spawn_a2a_worker(
             result = _collect_within_ttl(engine, framed_prompt, _spawn_kwargs, ttl_s)
             raw = result.final_text or ""
             err = result.error
-        except TimeoutError:
+        except TimeoutError as _texc:
             shutil.rmtree(workspace, ignore_errors=True)
+            # A2A-12: a timed-out run consumed tokens — the span closes on the
+            # model the engine reported and its usage, status "error".
+            _t_model, _t_usage, _t_tools = _span_facts(getattr(_texc, "result", None))
             _emit_a2a_engine_span("end", task_id=task_id, engine_id=engine_name,
-                                  status="error", duration_ms=_ms(start))
+                                  status="error", duration_ms=_ms(start),
+                                  model_id=_t_model, usage=_t_usage,
+                                  tool_call_count=_t_tools)
             return WorkerResult(
                 status="timeout", raw_output="",
                 parsed_output={}, duration_ms=_ms(start),
                 persona=persona, engine_name=engine_name,
                 error="wall_time_exceeded",
+                usage=_usage_block(_t_model, _t_usage),
             )
         except Exception as exc2:
             shutil.rmtree(workspace, ignore_errors=True)
@@ -1704,6 +1780,33 @@ def _engine_timeout_error() -> str:
         return "claude stream timeout"
 
 
+class _WorkerTimeout(TimeoutError):
+    """A worker that ran out of time, carrying what it consumed until then.
+
+    ``result`` is the drained ``SpawnResult`` (frames, usage) of the timed-out
+    run. A timeout is still billed by the engine, so the caller closes the
+    worker span on the model + usage found here instead of an empty one
+    (review 2026-11-19, A2A-12).
+    """
+
+    def __init__(self, message: str, result: Any = None) -> None:
+        super().__init__(message)
+        self.result = result
+
+
+def _span_facts(result: Any) -> "tuple[str, Any, int]":
+    """``(model_id, usage, tool_call_count)`` of a (possibly failed) run — the
+    engine-REPORTED model or ``""``, never a configured guess."""
+    if result is None:
+        return "", None, 0
+    try:
+        tools = sum(1 for ev in (getattr(result, "events", None) or [])
+                    if getattr(ev, "type", "") == "tool_call")
+    except Exception:  # noqa: BLE001
+        tools = 0
+    return _attested_model_of(result), getattr(result, "usage", None), tools
+
+
 def _collect_within_ttl(engine: Any, prompt: str, spawn_kwargs: dict, ttl_s: float):
     """Spawn + drain the engine; raise ``TimeoutError`` if it ran out of time.
 
@@ -1745,7 +1848,7 @@ def _collect_within_ttl(engine: Any, prompt: str, spawn_kwargs: dict, ttl_s: flo
         or backstop_fired.is_set()
         or (result.error or "").strip() == _engine_timeout_error()
     ):
-        raise TimeoutError("wall_time_exceeded")
+        raise _WorkerTimeout("wall_time_exceeded", result)
     return result
 
 

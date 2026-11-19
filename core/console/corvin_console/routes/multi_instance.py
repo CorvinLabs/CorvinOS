@@ -6,6 +6,7 @@ Cross-device learning dashboard, sync status, patterns, overrides.
 
 from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import Optional, List, Dict, Any
+import hashlib
 import json
 from pathlib import Path
 from datetime import datetime
@@ -56,11 +57,32 @@ def _sync_cache_dir(tenant_id: str) -> Path:
         return Path.home() / ".corvin" / "tenants" / tenant_id / "cross_device" / "cache"
 
 
-def _vault_item(name: str) -> "str | None":
-    """Read a secret from the Vault (PAT / GPG passphrase). None if absent."""
+def _vault_item_name(name: str, tenant_id: str) -> str:
+    """Vault item that holds ``name`` FOR ``tenant_id``.
+
+    The Vault is one store per host; it has no tenant axis. Reading the bare
+    item for every tenant handed tenant B the default tenant's git PAT and GPG
+    passphrase, to be used against a remote tenant B configures (review
+    2026-11-19 round 3, R3-NEW-25). The bare name therefore belongs to the
+    default tenant only; any other tenant reads ``<name>__<tenant_id>`` and
+    gets nothing when that item does not exist - never a fallback to the bare
+    one. Vault names are capped at 40 characters; a combination that does not
+    fit uses a 16-hex digest of the tenant id instead of the id itself."""
+    if tenant_id == "_default":
+        return name
+    readable = f"{name}__{tenant_id}"
+    if len(readable) <= 40:
+        return readable
+    digest = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16]
+    return f"{name[:22]}__{digest}"
+
+
+def _vault_item(name: str, tenant_id: str) -> "str | None":
+    """Read a tenant's secret from the Vault (PAT / GPG passphrase). None if
+    absent. See :func:`_vault_item_name` for the tenant binding."""
     try:
         from vault import get_item  # noqa: PLC0415
-        v = get_item(name, source="cross_device_sync")
+        v = get_item(_vault_item_name(name, tenant_id), source="cross_device_sync")
         return str(v) if v else None
     except Exception:  # noqa: BLE001
         return None
@@ -133,9 +155,14 @@ def load_instance_registry(tenant_id: str) -> Dict[str, Any]:
 
 
 # Routes
+#
+# Every handler below is a plain ``def``: each one reads files, and the sync
+# runs git and GPG subprocesses for seconds. FastAPI runs a ``def`` handler in
+# its threadpool; as ``async def`` they ran on the event loop and the whole
+# console stopped answering for the length of a sync (R3-NEW-25).
 
 @router.get("/status")
-async def get_multi_instance_status(
+def get_multi_instance_status(
     rec: "session_auth.SessionRecord" = Depends(require_session),
 ) -> Dict[str, Any]:
     """Get overall multi-instance sync status."""
@@ -169,7 +196,7 @@ async def get_multi_instance_status(
 
 
 @router.get("/patterns")
-async def get_learned_patterns(
+def get_learned_patterns(
     rec: "session_auth.SessionRecord" = Depends(require_session),
 ) -> Dict[str, Any]:
     """Get all learned patterns from merged-state."""
@@ -198,7 +225,7 @@ async def get_learned_patterns(
 
 
 @router.get("/instances")
-async def get_instance_status(
+def get_instance_status(
     rec: "session_auth.SessionRecord" = Depends(require_session),
 ) -> Dict[str, Any]:
     """Get status of all paired instances."""
@@ -227,7 +254,7 @@ async def get_instance_status(
 
 
 @router.get("/conflicts")
-async def get_merge_conflicts(
+def get_merge_conflicts(
     rec: "session_auth.SessionRecord" = Depends(require_session),
 ) -> Dict[str, Any]:
     """Get recent merge conflicts from merge-log."""
@@ -262,7 +289,7 @@ async def get_merge_conflicts(
 
 
 @router.post("/sync")
-async def trigger_manual_sync(
+def trigger_manual_sync(
     rec: "session_auth.SessionRecord" = Depends(require_csrf),
 ) -> Dict[str, Any]:
     """Run a cross-device tenant sync (G5, ADR-0369). Ship-dark: gated on the
@@ -283,14 +310,15 @@ async def trigger_manual_sync(
             detail=("No sync remote configured. Set spec.cross_device.sync_remote to a "
                     "git URL (https or file://)."),
         )
-    passphrase = _vault_item("cross_device_sync_passphrase")
+    passphrase = _vault_item("cross_device_sync_passphrase", rec.tenant_id)
     if not passphrase:
+        _item = _vault_item_name("cross_device_sync_passphrase", rec.tenant_id)
         raise HTTPException(
             status_code=400,
             detail=("GPG is mandatory for tenant sync. Store a "
-                    "'cross_device_sync_passphrase' secret in the Vault first."),
+                    f"'{_item}' secret in the Vault first."),
         )
-    pat = _vault_item("cross_device_sync_pat")  # optional (for https remotes)
+    pat = _vault_item("cross_device_sync_pat", rec.tenant_id)  # optional (for https remotes)
     try:
         from core.cross_device import tenant_sync as _ts  # noqa: PLC0415
         local_dir = tenant_learning_dir(rec.tenant_id)

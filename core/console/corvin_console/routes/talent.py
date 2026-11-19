@@ -14,46 +14,66 @@ not coding skill:
 """
 from __future__ import annotations
 
-import json
-from collections import Counter
+import asyncio
+import functools
+from collections import Counter, deque
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import auth as session_auth
-from ..deps import require_session
+from core.paths import tenant_audit_chain
 
-try:
-    from forge import paths as _forge_paths
-except Exception:  # noqa: BLE001
-    _forge_paths = None  # type: ignore[assignment]
+from .. import auth as session_auth
+from ..chain_tail import DEFAULT_MAX_SCAN_BYTES, iter_chain_tail, scan_window
+from ..deps import require_session
 
 router = APIRouter(prefix="/talent", tags=["console-talent"])
 
 _MEDALS = ["🥇", "🥈", "🥉", "⭐", "✨"]
 
 
-def _read_decisions(tenant_id: str, limit: int = 2000) -> list[dict]:
-    """All cel.decision detail dicts for the tenant (with ts), newest last."""
-    if _forge_paths is None:
-        return []
+def _scan_info(tenant_id: str) -> dict[str, Any]:
+    """What the tail scan behind the talent figures covered (BLOCKING)."""
     try:
-        p = Path(_forge_paths.tenant_global_dir(tenant_id)) / "forge" / "audit.jsonl"
+        return scan_window(tenant_audit_chain(tenant_id))
+    except Exception:  # noqa: BLE001 - invalid tenant id: nothing was read
+        return {"truncated": False, "scanned_bytes": 0, "total_bytes": 0, "covers_since": None}
+
+
+def _with_scan(handler):
+    """Add ``scan`` to a handler's dict response: the figures are computed
+    from the tail of the chain, and on a chain larger than that window they
+    describe "since ``scan.covers_since``", not all time."""
+    @functools.wraps(handler)
+    async def wrapper(*args, **kwargs):
+        out = await handler(*args, **kwargs)
+        rec = kwargs.get("rec")
+        if isinstance(out, dict) and rec is not None:
+            out["scan"] = await asyncio.to_thread(_scan_info, rec.tenant_id)
+        return out
+    return wrapper
+
+
+def _read_decisions(
+    tenant_id: str, limit: int = 2000, *,
+    max_scan_bytes: int = DEFAULT_MAX_SCAN_BYTES,
+) -> list[dict]:
+    """The newest ``limit`` cel.decision detail dicts (with ts), newest last.
+
+    BLOCKING: streams the last ``max_scan_bytes`` of the tenant's chain line
+    by line. Async handlers call it through ``asyncio.to_thread`` — it used
+    to ``read_text().splitlines()`` the whole chain on the event loop.
+    """
+    try:
+        p = tenant_audit_chain(tenant_id)
     except Exception:  # noqa: BLE001
         return []
-    if not p.exists():
-        return []
-    out: list[dict] = []
+    out: deque[dict] = deque(maxlen=max(0, limit))
     try:
-        for ln in p.read_text(encoding="utf-8").splitlines():
-            if '"cel.decision"' not in ln:
-                continue
-            try:
-                e = json.loads(ln)
-            except (json.JSONDecodeError, ValueError):
-                continue
+        for e in iter_chain_tail(
+            p, max_scan_bytes=max_scan_bytes, needles=('"cel.decision"',),
+        ):
             if e.get("event_type") != "cel.decision":
                 continue
             d = dict(e.get("details", {}) or {})
@@ -61,7 +81,7 @@ def _read_decisions(tenant_id: str, limit: int = 2000) -> list[dict]:
             out.append(d)
     except Exception:  # noqa: BLE001
         return []
-    return out[-limit:]
+    return list(out)
 
 
 def _stats(tenant_id: str) -> dict[str, Any]:
@@ -118,10 +138,11 @@ def _stats(tenant_id: str) -> dict[str, Any]:
 
 
 @router.get("/score")
+@_with_scan
 async def get_talent_score(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
-    st = _stats(rec.tenant_id)
+    st = await asyncio.to_thread(_stats, rec.tenant_id)
     if st["total_turns"] == 0:
         return {"talent_score": 0.0, "trend": 0.0, "empty": True,
                 "components": {"accuracy": 0, "learning_rate": 0, "variety": 0,
@@ -158,13 +179,14 @@ async def get_talent_score(
 
 
 @router.get("/history")
+@_with_scan
 async def get_talent_history(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     days: int = 7,
 ) -> dict[str, Any]:
     if not 1 <= days <= 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-    st = _stats(rec.tenant_id)
+    st = await asyncio.to_thread(_stats, rec.tenant_id)
     if st["total_turns"] == 0:
         return {"daily": [], "empty": True}
     daily = []
@@ -183,13 +205,14 @@ async def get_talent_history(
 
 
 @router.get("/task-types")
+@_with_scan
 async def get_talent_task_types(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     days: int = 7,
 ) -> dict[str, Any]:
     if not 1 <= days <= 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-    st = _stats(rec.tenant_id)
+    st = await asyncio.to_thread(_stats, rec.tenant_id)
     if st["total_turns"] == 0:
         return {"task_types": [], "empty": True}
     labels = {"memory": "Memory Lookup", "graph": "Graph Traversal",
@@ -207,13 +230,14 @@ async def get_talent_task_types(
 
 
 @router.get("/correlation")
+@_with_scan
 async def get_talent_correlation(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     days: int = 7,
 ) -> dict[str, Any]:
     if not 1 <= days <= 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-    recs = _read_decisions(rec.tenant_id)
+    recs = await asyncio.to_thread(_read_decisions, rec.tenant_id)
     points = []
     for r in recs:
         n_src = sum(len(s.get("sources", []) or []) for s in r.get("stages", []))
@@ -223,13 +247,14 @@ async def get_talent_correlation(
 
 
 @router.get("/insights")
+@_with_scan
 async def get_talent_insights(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     days: int = 7,
 ) -> dict[str, Any]:
     if not 1 <= days <= 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-    st = _stats(rec.tenant_id)
+    st = await asyncio.to_thread(_stats, rec.tenant_id)
     if st["total_turns"] == 0:
         return {"dimensions": [], "narratives": [], "badges": [], "empty": True}
     dims = [
@@ -252,13 +277,14 @@ async def get_talent_insights(
 
 
 @router.get("/story")
+@_with_scan
 async def get_talent_story(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     days: int = 7,
 ) -> dict[str, Any]:
     if not 1 <= days <= 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-    st = _stats(rec.tenant_id)
+    st = await asyncio.to_thread(_stats, rec.tenant_id)
     if st["total_turns"] == 0:
         return {"story": None, "empty": True}
     end = round(st["avg_top"] * 10, 1)

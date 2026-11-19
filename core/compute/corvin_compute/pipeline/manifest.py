@@ -4,6 +4,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import secrets
 import string
 import time
@@ -11,6 +12,62 @@ from pathlib import Path
 from typing import Any
 
 _PIPE_ALPHABET = string.ascii_letters + string.digits + "_-"
+
+# stage_id / manager_id become a path component under the pipeline (or HAC) root
+# and arrive from an LLM-authored submission, also at a steering gate
+# (``add_stage``). Anything but this shape is refused at parse time; the store
+# re-checks containment before it touches the filesystem.
+_COMPONENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+class InvalidComponentId(ValueError):
+    """A stage_id / manager_id that may not be used as a path component."""
+
+
+def validate_component_id(value: Any, *, kind: str = "stage_id") -> str:
+    """Return *value* when it is a safe single path component, else raise."""
+    if not isinstance(value, str) or not _COMPONENT_ID_RE.match(value):
+        raise InvalidComponentId(
+            f"invalid {kind} {str(value)[:80]!r}: must match [A-Za-z0-9_-]{{1,64}}")
+    return value
+
+
+def require_unique_ids(ids: "list[str]", *, kind: str = "stage_id") -> None:
+    """Refuse a list that names one id twice, compared case-INSENSITIVELY.
+
+    A stage's result, its artifact directory and every ``$<stage_id>.`` reference
+    are keyed by the id: two stages sharing one overwrite each other's result and
+    artifacts, and a reference resolves to whichever ran last (review R3-BR-5).
+    ``m`` and ``M`` are one directory on a case-insensitive filesystem (macOS,
+    Windows), so they count as the same id.
+    """
+    seen: set[str] = set()
+    dupes: list[str] = []
+    for raw in ids:
+        key = str(raw).casefold()
+        if key in seen and str(raw) not in dupes:
+            dupes.append(str(raw))
+        seen.add(key)
+    if dupes:
+        raise ValueError(f"duplicate {kind} (case-insensitive): {sorted(dupes)}")
+
+
+def require_unique_stage_ids(stages: "list[Any]") -> None:
+    """``require_unique_ids`` over ``StageSpec`` objects or raw stage dicts."""
+    require_unique_ids(
+        [s.get("stage_id", "") if isinstance(s, dict) else getattr(s, "stage_id", "")
+         for s in stages],
+        kind="stage_id")
+
+
+def contained_path(root: Path, *parts: str) -> Path:
+    """``root/parts...`` — refused unless it resolves inside *root*."""
+    candidate = Path(root).joinpath(*parts)
+    resolved_root = Path(root).resolve()
+    if not candidate.resolve().is_relative_to(resolved_root):
+        raise InvalidComponentId(
+            f"path {'/'.join(parts)[:120]!r} escapes its compute root")
+    return candidate
 
 
 def new_pipeline_id() -> str:
@@ -36,7 +93,7 @@ class StageSpec:
     @classmethod
     def from_dict(cls, d: dict) -> StageSpec:
         return cls(
-            stage_id=str(d["stage_id"]),
+            stage_id=validate_component_id(d["stage_id"], kind="stage_id"),
             tool_name=str(d["tool_name"]),
             strategy=str(d.get("strategy", "grid")),
             param_grid=dict(d.get("param_grid") or {}),
@@ -163,7 +220,8 @@ class PipelineStore:
 
     def stage_artifacts_dir(self, stage_id: str) -> Path:
         """Return the artifacts directory for *stage_id* (no FS side-effects)."""
-        return self.root_dir / "stages" / stage_id / "artifacts"
+        validate_component_id(stage_id, kind="stage_id")
+        return contained_path(self.root_dir, "stages", stage_id, "artifacts")
 
     def ensure_stage_dir(self, stage_id: str) -> Path:
         """Create and return the artifacts directory for *stage_id*."""

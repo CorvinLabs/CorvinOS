@@ -24,6 +24,7 @@ import os
 import queue
 import re
 import shutil
+import stat as _stat_mod
 import signal
 import subprocess
 import sys
@@ -1319,11 +1320,200 @@ def log_body(label: str, body: str, cap: int | None = None) -> None:
 
 # ── Per-session structured debug log ────────────────────────────────────────
 # Writes structured JSONL to <workdir>/chat_debug.jsonl.
+# The file sits in the worker's cwd (the console's ACO readers and the support
+# bundle look for it there), so it is CONTENT-FREE: no prompt text, and the chat
+# is named by a keyed fingerprint, never by its raw key. It is opened with O_NOFOLLOW
+# at mode 0600, so a symlink planted under that name is never written through.
+# The fingerprint is an HMAC under an install-local key kept OUTSIDE every worker
+# cwd (<tenant>/global/chat_debug_fp.key, 0600): a chat key is a phone number or
+# a user id on most bridges, and a bare truncated sha256 over that small a space
+# is reversed by enumeration. No key, no fingerprint.
+# Files written before these rules carried a prompt preview and the raw chat key;
+# the first write per workdir and process rewrites them without those fields.
 # Separate from audit.jsonl (compliance) — debug log can be truncated, wiped,
 # and read by operators/tools without breaking the hash chain.
 # Max file size: 2 MB (rotated: .1, .2 keep last 3 files).
 _CHAT_DEBUG_MAX_BYTES = 2 * 1024 * 1024
 _chat_debug_lock: threading.Lock = threading.Lock()
+
+
+_CHAT_DEBUG_FP_KEY_FILE = "chat_debug_fp.key"
+_chat_debug_fp_keys: dict[str, bytes] = {}
+_chat_debug_scrubbed: set[str] = set()
+#: Fields a pre-rule debug log carried that name the chat or quote the prompt.
+_CHAT_DEBUG_LEGACY_FIELDS = ("prompt_preview", "chat_key", "prompt_hash")
+
+
+def _chat_debug_fp_key() -> bytes | None:
+    """The install-local HMAC key of the debug-log fingerprint (None when it cannot be kept).
+
+    Read with O_NOFOLLOW and checked on the open descriptor: a regular file, owned by this
+    user, with one link; group/other permission bits are removed (``fchmod`` 0600) before
+    the key is used. Created once through a fresh mkstemp temp that is LINKED into place, so
+    a concurrent creator never replaces a key another process already uses and a symlink
+    planted under the name is never written through. A file shorter than a key (a crash
+    mid-write, a full disk, an edit) can be nobody's key: it is REPLACED through a fresh
+    temp + ``os.replace`` instead of leaving the install without a fingerprint for good.
+    Anything else that is not a usable key file (foreign owner, not regular) is left alone
+    and yields None."""
+    tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+    cached = _chat_debug_fp_keys.get(tid)
+    if cached is not None:
+        return cached
+    try:
+        try:
+            from . import paths as _p  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import paths as _p  # type: ignore  # noqa: PLC0415
+        import stat as _stat  # noqa: PLC0415
+        import tempfile as _tf  # noqa: PLC0415
+        target = Path(_p.tenant_global_dir(tid)) / _CHAT_DEBUG_FP_KEY_FILE
+
+        def _read() -> tuple[bytes | None, str]:
+            """(key, state): state is "ok", "absent", "short" or "unusable"."""
+            try:
+                fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            except FileNotFoundError:
+                return None, "absent"
+            except OSError:
+                return None, "unusable"          # a symlink, or not readable
+            try:
+                st = os.fstat(fd)
+                if not _stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                    return None, "unusable"
+                if hasattr(os, "getuid") and st.st_uid != os.getuid():
+                    return None, "unusable"
+                if hasattr(os, "fchmod") and _stat.S_IMODE(st.st_mode) & 0o077:
+                    os.fchmod(fd, 0o600)
+                data = os.read(fd, 64)
+            finally:
+                os.close(fd)
+            return (data, "ok") if len(data) >= 32 else (None, "short")
+
+        def _fresh_temp() -> str:
+            fd, tmp = _tf.mkstemp(prefix=".chat_debug_fp.", dir=str(target.parent))
+            try:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(fd, 0o600)
+                os.write(fd, secrets.token_bytes(32))
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            return tmp
+
+        key, state = _read()
+        if state == "short":
+            # Never a usable key, so no process fingerprints with it: replacing it cannot
+            # split one install's fingerprints. Two repairers are serialised by a lock
+            # file next to the key (the second one re-reads and finds the first one's key).
+            _lock_fd = os.open(target.parent / ".chat_debug_fp.lock",
+                               os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            try:
+                try:
+                    import fcntl as _fcntl  # noqa: PLC0415
+                    _fcntl.flock(_lock_fd, _fcntl.LOCK_EX)
+                except ImportError:       # Windows: one bridge process per install
+                    pass
+                key, state = _read()
+                if state == "short":
+                    tmp = _fresh_temp()
+                    try:
+                        os.replace(tmp, target)
+                    finally:
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
+                    key, state = _read()
+            finally:
+                os.close(_lock_fd)
+        elif state == "absent":
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _fresh_temp()
+            try:
+                try:
+                    os.link(tmp, target)          # never overwrites an existing key
+                except FileExistsError:
+                    pass
+                except (OSError, AttributeError, NotImplementedError):
+                    if not os.path.lexists(target):
+                        os.replace(tmp, target)   # filesystems without hard links
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            key, state = _read()
+        if key is None:
+            return None
+        _chat_debug_fp_keys[tid] = key
+        return key
+    except Exception:  # noqa: BLE001 — a missing fingerprint never breaks a turn
+        return None
+
+
+def _chat_debug_fp(chat_key: str) -> str:
+    """Keyed fingerprint of a chat key ("" when no key is available)."""
+    key = _chat_debug_fp_key()
+    if not key:
+        return ""
+    import hmac as _hmac  # noqa: PLC0415
+    return _hmac.new(key, str(chat_key).encode("utf-8", "surrogatepass"),
+                     _audit_hashlib.sha256).hexdigest()[:16]
+
+
+def _chat_debug_scrub_legacy(path: Path) -> None:
+    """Rewrite a pre-rule debug log (and its .1/.2 rotations) without content fields.
+
+    Decision: the files are cleaned in place rather than renamed or kept — a renamed copy
+    would still be a plaintext prompt preview in the worker's cwd, and deleting the whole
+    file would drop the content-free events an operator debugs with. Every line that names
+    the chat by its raw key or quotes the prompt loses those fields (the raw key becomes
+    the keyed fingerprint); a line that cannot be parsed is dropped. Runs once per workdir
+    and process, before the first append; a file that cannot be cleaned is removed."""
+    for cand in (path, path.with_suffix(".jsonl.1"), path.with_suffix(".jsonl.2")):
+        try:
+            st = os.lstat(cand)
+        except OSError:
+            continue
+        if not _stat_mod.S_ISREG(st.st_mode):
+            continue                       # a symlink is handled (unlinked) by the writer
+        try:
+            fd = os.open(cand, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "rb") as fh:
+                raw = fh.read()
+            if not any(('"' + f + '"').encode() in raw for f in _CHAT_DEBUG_LEGACY_FIELDS):
+                continue
+            out: list[str] = []
+            for ln in raw.decode("utf-8", "replace").splitlines():
+                try:
+                    rec = json.loads(ln)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                raw_key = rec.pop("chat_key", None)
+                for f in _CHAT_DEBUG_LEGACY_FIELDS:
+                    rec.pop(f, None)
+                if raw_key and "chat_fp" not in rec:
+                    fp = _chat_debug_fp(str(raw_key))
+                    if fp:
+                        rec["chat_fp"] = fp
+                out.append(json.dumps(rec, ensure_ascii=False))
+            import tempfile as _tf  # noqa: PLC0415
+            tfd, tmp = _tf.mkstemp(prefix=".chat_debug.", dir=str(cand.parent))
+            try:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(tfd, 0o600)
+                os.write(tfd, ("\n".join(out) + ("\n" if out else "")).encode("utf-8"))
+            finally:
+                os.close(tfd)
+            os.replace(tmp, cand)
+        except Exception:  # noqa: BLE001 — content that cannot be cleaned does not stay
+            try:
+                os.unlink(cand)
+            except OSError:
+                pass
 
 
 def _chat_debug_event(
@@ -1346,7 +1536,11 @@ def _chat_debug_event(
         "event": event,
     }
     if chat_key:
-        rec["chat_key"] = chat_key
+        # A chat key is a phone number / user id on most bridges: keyed fingerprint only
+        # (omitted when the install-local key is unavailable — never an unkeyed hash).
+        _fp = _chat_debug_fp(str(chat_key))
+        if _fp:
+            rec["chat_fp"] = _fp
     if channel:
         rec["channel"] = channel
     if msg_id:
@@ -1360,15 +1554,30 @@ def _chat_debug_event(
     line = json.dumps(rec, ensure_ascii=False) + "\n"
     try:
         with _chat_debug_lock:
+            if str(path) not in _chat_debug_scrubbed:
+                _chat_debug_scrubbed.add(str(path))
+                _chat_debug_scrub_legacy(path)
             # Rotate when file exceeds limit (keep .1 and .2 as backups)
-            if path.exists() and path.stat().st_size > _CHAT_DEBUG_MAX_BYTES:
+            # lstat: a symlink is never sized or rotated through its target.
+            try:
+                _st = os.lstat(path)
+            except OSError:
+                _st = None
+            if _st is not None and _stat_mod.S_ISLNK(_st.st_mode):
+                os.unlink(path)   # removes the link itself, never what it points to
+            elif _st is not None and _st.st_size > _CHAT_DEBUG_MAX_BYTES:
                 p2 = path.with_suffix(".jsonl.2")
                 p1 = path.with_suffix(".jsonl.1")
-                if p1.exists():
+                if p1.exists() or p1.is_symlink():
                     p1.replace(p2)
                 path.replace(p1)
-            with path.open("a", encoding="utf-8") as f:
-                f.write(line)
+            _fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            try:
+                if _st is not None and _stat_mod.S_IMODE(_st.st_mode) != 0o600 and hasattr(os, "fchmod"):
+                    os.fchmod(_fd, 0o600)   # a file created before this rule existed
+                os.write(_fd, line.encode("utf-8"))
+            finally:
+                os.close(_fd)
     except Exception as _de:  # noqa: BLE001
         log_debug(f"chat_debug_event write failed: {_de}")
 
@@ -2425,14 +2634,6 @@ from house_rules import (  # type: ignore  # noqa: E402
 )
 
 
-def _house_rules_audit_path() -> Path:
-    audit_p_str = os.environ.get("VOICE_AUDIT_PATH")
-    if audit_p_str:
-        return Path(audit_p_str)
-    _ch = Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
-    return _ch / "global" / "forge" / "audit.jsonl"
-
-
 # Set once the first time `_bg_flag` has to fall back to OFF because the
 # console feature-flags package could not be imported. Without this, an install
 # where the console package is genuinely absent silently resolves EVERY
@@ -2673,143 +2874,74 @@ def _maybe_self_delegate(
     return spawned
 
 
+_L44_CLASSIFIER_SEAM_LOCK = threading.Lock()
+
+
 def _check_house_rules_or_fail(
     *, prompt: str | None, persona: str | None, channel: str, chat_key: str,
     engine_id: str = "", tenant_id: str | None = None,
 ) -> str | None:
     """L44 (ADR-0143) — acceptable-use / house-rules pre-spawn gate.
 
-    Returns ``None`` when the task is permitted (allow / warn). Returns a
-    user-facing refusal string on ``deny`` or ``escalate`` (escalate blocks
-    pending operator approval — ADR-0143 M3 adds the approval flow).
+    DELEGATES to ``spawn_gates.check_l44`` — the single L44 implementation the console
+    (``corvin_console._spawn_gates``) and ``acs_runtime`` use too, so one prompt gets one
+    decision, one wording and one audit record on every surface. This function used to
+    carry its own copy of the evaluation: it wrote to ``<corvin_home>/global/forge/`` instead
+    of the tenant chain, did not know the reason codes the gate has since gained, and kept
+    a branch that turned a recorded ``house_rules.escalated`` into a turn that ran
+    (``house_rules.allowed_after_lowconf``).
 
-    Mandatory layer: fails CLOSED. A missing module, a tampered/unparseable
-    policy, or a gate error all deny — an acceptable-use guarantee must never
-    evaporate into fail-open. (The Tier-3 capability gate also asserts presence
-    independently.) The deny/escalate audit event lands on the L16 chain via
-    the injected forge audit writer before this returns.
+    Returns ``None`` when the gate's decision is allowed (``allow`` / ``warn``, including
+    an unsure clear with no Tier-0 keyword hit, which the gate records as
+    ``house_rules.allowed``). Returns a user-facing refusal on ``deny`` and on EVERY
+    ``escalate``; ``check_l44`` owns the wording. Mandatory and fail-closed: an
+    unimportable ``spawn_gates`` refuses here, everything else refuses there.
+
+    The bridge is a single-tenant process, so the tenant is the caller's or the process's
+    (``CORVIN_TENANT_ID``); ``check_l44`` itself takes no environment fallback.
     """
     task = prompt or ""
     if not task.strip():
         return None  # nothing to classify (status pings, empty resumes)
     tenant_id = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
     try:
-        import house_rules as _hr  # type: ignore
-        from egress_gate import make_forge_audit_writer as _mk_writer  # type: ignore
+        try:
+            from . import spawn_gates as _sg  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import spawn_gates as _sg  # type: ignore  # noqa: PLC0415
+        import house_rules as _hr  # type: ignore  # noqa: PLC0415
     except Exception as _imp_exc:  # noqa: BLE001 — mandatory layer absent → fail closed
         log(f"[house-rules] module import failed ({type(_imp_exc).__name__}) — fail-closed deny")
         return ("[house-rules] Acceptable-use gate unavailable — request blocked "
                 "(fail-closed). Contact the operator.")
+
+    def _run() -> str | None:
+        return _sg.check_l44(
+            task, tenant_id,
+            persona=persona or "assistant", channel=channel, chat_key=chat_key,
+            engine_id=engine_id or "claude_code",
+        )
+
     try:
-        overlay = _hr.load_tenant_overlay(tenant_id)
-        _audit_write = _mk_writer(_house_rules_audit_path())
-        # F-03: the production forge writer is 3-arg (event_type, severity, details),
-        # but the house_rules classifier/degradation helpers call audit_write with the
-        # 2-arg shape (event_type, details). Threading the raw 3-arg writer made every
-        # house_rules.provider_fallback / house_rules.classifier_degraded emit raise
-        # TypeError, which the helpers' best-effort except swallowed — so the events
-        # were NEVER written. Bridge the arity here: look up the canonical severity from
-        # EVENT_SEVERITY (provider_fallback=INFO, classifier_degraded=WARNING) and call
-        # the 3-arg writer. Fail-soft on any lookup/import problem (observability only).
-        def _hr_classifier_audit(event_type: str, details: dict) -> None:
+        # ``check_l44`` resolves the classifier as ``house_rules._house_rules_classifier``
+        # when it classifies. This module re-exports that function under the same name;
+        # where the two differ (a caller replaced the adapter's binding — the adapter
+        # suites do, to run without a model) the adapter's one is the classifier of this
+        # call. In production the names are one object and this is a plain call.
+        _mine = _house_rules_classifier
+        if _mine is getattr(_hr, "_house_rules_classifier", _mine):
+            return _run()
+        with _L44_CLASSIFIER_SEAM_LOCK:
+            _orig = _hr._house_rules_classifier
+            _hr._house_rules_classifier = _mine
             try:
-                _ev_sev = _forge_mod("security_events").EVENT_SEVERITY  # type: ignore
-                severity = _ev_sev.get(event_type, "INFO")
-            except Exception:  # noqa: BLE001 — severity lookup is best-effort
-                severity = "INFO"
-            _audit_write(event_type, severity, details)
-        # F-03: wrap the classifier so provider-fallback events reach the audit chain.
-        # The lambda threads the 2-arg classifier audit adapter without changing the
-        # gate's own (3-arg) audit_writer interface.
-        gate = _hr.HouseRulesGate.from_repo(
-            audit_writer=_audit_write,
-            classifier=lambda task, rules, auth: _house_rules_classifier(
-                task, rules, auth, audit_write=_hr_classifier_audit, tenant_id=tenant_id
-            ),
-            tenant_overlay=overlay,
-        )
-        decision = gate.classify(
-            task, persona=persona or "", channel=channel, chat_key=chat_key,
-            engine_id=engine_id,
-        )
+                return _run()
+            finally:
+                _hr._house_rules_classifier = _orig
     except Exception as _gate_exc:  # noqa: BLE001 — gate error → fail closed
         log(f"[house-rules] gate error ({type(_gate_exc).__name__}) — fail-closed deny")
         return ("[house-rules] Acceptable-use gate error — request blocked "
                 "(fail-closed). Restart the bridge if this persists.")
-
-    if decision.allowed:
-        return None
-    # Metadata-only log (review R-7): rule_id + action + confidence — NEVER the
-    # task text or any free-text reason (decision.reason is a controlled code).
-    log(f"[house-rules] {decision.action} rule={decision.rule_id or '-'} "
-        f"reason_code={decision.reason} conf={decision.confidence:.2f} "
-        f"channel={channel} chat={chat_key}")
-    rid = decision.rule_id or "acceptable-use"
-    if decision.action == "escalate":
-        # The escalation reasons split into two very different user situations and
-        # they must NOT share wording. A transient classifier failure or a
-        # low-confidence CLEAR is not a finding against the user's content — telling
-        # them their request "touches a restricted area" is alarming AND misleading
-        # (the classifier either glitched or judged the task clean). Give those a
-        # neutral try-again message. Reserve the operator-approval wording for a
-        # genuine borderline/violation verdict. EITHER WAY the request is still
-        # blocked (this returns a non-None string) — the gate stays fail-closed.
-        if decision.reason in ("classifier_error", "clear_low_confidence"):
-            # M4: track classifier_error in the degradation window (ADR-0157 M4/Pillar-F).
-            # clear_low_confidence is intentionally NOT tracked here — it is a verdict-quality
-            # signal (model was uncertain but healthy), not a classifier health failure.
-            # Tracking it would generate false "classifier degraded" alerts under normal
-            # operation with ambiguous-but-benign requests.
-            if decision.reason == "classifier_error":
-                try:
-                    # F-03: _house_rules_track_degradation calls audit_write with the
-                    # 2-arg shape (event_type, details) — thread the arity-bridging
-                    # adapter, NOT the raw 3-arg forge writer (which would raise and
-                    # silently drop house_rules.classifier_degraded).
-                    _house_rules_track_degradation(
-                        audit_write=_hr_classifier_audit
-                    )
-                except Exception:  # noqa: BLE001 — observability never blocks the gate
-                    pass
-                return (
-                    "[house-rules] This request couldn't be safety-checked just now — "
-                    "the automated acceptable-use check was inconclusive (it did not "
-                    "flag your request). Please send it again in a moment; if it keeps "
-                    "happening an operator will review it."
-                )
-            # clear_low_confidence: classifier ran successfully and did NOT flag the
-            # request — it was merely uncertain. Allow through so normal questions
-            # are never blocked by classifier confidence noise.
-            #
-            # F-B4 (adversarial hardening 2026-09-07): NOT silently. house_rules.py
-            # has already written `house_rules.escalated` for this decision, and
-            # the adapter then overrides it with an allow — without a matching
-            # record the audit chain says "escalated/blocked" for a request that
-            # actually ran. Emit the override so the chain tells the truth
-            # (GDPR Art. 30: the record must reflect what happened). Metadata
-            # only: rule id, reason code, confidence — never the task text.
-            try:
-                _audit_write("house_rules.allowed_after_lowconf", "WARNING", {
-                    "rule_id": rid,
-                    "reason_code": decision.reason,
-                    "confidence": round(float(decision.confidence), 3),
-                    "channel": channel,
-                    "chat_key": _pii_fp(chat_key),
-                    "overrides": "house_rules.escalated",
-                })
-            except Exception as _aw_exc:  # noqa: BLE001 — never block the turn
-                log(f"[house-rules] allowed_after_lowconf audit failed "
-                    f"({type(_aw_exc).__name__})")
-            return None
-        return (
-            f"[house-rules] This request needs operator approval before it can run "
-            f"(rule '{rid}'). It touches a restricted or uncertain area. "
-            f"An operator must approve it."
-        )
-    return (
-        f"[house-rules] This request is not permitted by the operator's "
-        f"acceptable-use policy (rule '{rid}')."
-    )
 
 
 def _check_clag_spawn_or_fail(*, channel: str, chat_key: str) -> str | None:
@@ -3826,6 +3958,11 @@ def _resolve_spawn_inputs(
                 sys_prompt = sys_prompt + _ledger_block
         except Exception as e:  # noqa: BLE001
             log(f"session ledger inject failed: {e}")
+        # The block as rendered for the native engine and the chat's own session travels with
+        # THIS turn's inputs (`_ledger_block` below). A turn that is then started on a provider
+        # (ADR-2268 reroute, or a provider assigned to claude_code) replaces exactly this text —
+        # see _ledger_regate_for_route. It was a process-wide dict once: an evicted or
+        # overwritten entry left the native block in place next to the provider's.
 
     # Layer 9 — capability-flag warning. The cowork resolver already
     # injects forge / skill-forge MCP server stanzas onto
@@ -3942,7 +4079,8 @@ def _resolve_spawn_inputs(
             # voice_session_dir's contract requires a PRE-sanitised key (its dir
             # name is illegal on Windows otherwise, e.g. "discord:123"). Every
             # other call site passes _safe_id(chat_key); this one must too.
-            session_dir = Path(_paths.voice_session_dir(channel, _safe_id(chat_key)))
+            session_dir = _chat_dir_resolver()(
+                Path(_paths.voice_session_dir(channel, _safe_id(chat_key))).parent, chat_key)
         except Exception:  # noqa: BLE001
             session_dir = None
 
@@ -4173,6 +4311,8 @@ def _resolve_spawn_inputs(
 
     return {
         "system": sys_prompt,
+        # Not an engine argument: popped by the caller before `**resolved`.
+        "_ledger_block": _ledger_block,
         "mode": mode,
         "permission_mode": profile.get("permission_mode"),
         "allowed_tools": (
@@ -4252,6 +4392,7 @@ def _build_claude_args(prompt: str, mode: str, profile: dict | None,
     )
     # ADR-0165: pop _ato_plan before splatting into _build_args (not an engine arg).
     resolved.pop("_ato_plan", None)
+    resolved.pop("_ledger_block", None)   # not an engine argument
     # ADR-0395: cache-stable CEL brief (empty unless the flag is on) rides in the USER prompt,
     # not the system file. Prepend it to the spawn prompt only; the raw `prompt` stays intact
     # for the caller's gates / budget accounting / logging.
@@ -4544,7 +4685,18 @@ SESSIONS_DIR = SESSIONS_ROOT
 
 
 def _safe_id(s: str) -> str:
+    """Alnum-only path segment (``session_state.legacy_chat_key``). LOSSY - two chat ids
+    can share it, so it is never used on its own to name a chat's directory: that is
+    ``_session_dir`` / ``session_state.resolve_chat_dir``."""
     return "".join(ch if ch.isalnum() else "_" for ch in s)[:64] or "anon"
+
+
+def _chat_dir_resolver():
+    try:
+        from . import session_state as _ss  # type: ignore  # noqa: PLC0415
+    except ImportError:
+        import session_state as _ss  # type: ignore  # noqa: PLC0415
+    return _ss.resolve_chat_dir
 
 
 def _build_spawn_env(*, bridge: str, chat_key: str,
@@ -4831,7 +4983,8 @@ def _ledger_consent_withhold(channel: str, chat_key: str):
     return _check
 
 
-def _ledger_data_flow_withhold(engine_name: str, *, channel: str, chat_key: str):
+def _ledger_data_flow_withhold(engine_name: str, *, channel: str, chat_key: str,
+                               provider: str | None = None, provider_unknown: bool = False):
     """Per-TURN L34 for the re-supplied history: ``withhold(record) -> reason``.
 
     The pre-spawn gate inspects only the new message, so a side turn recorded
@@ -4843,16 +4996,30 @@ def _ledger_data_flow_withhold(engine_name: str, *, channel: str, chat_key: str)
     (``check_l34(classification=…)``, audited). A refused class withholds that
     turn only: gating the whole view hid every turn — after ``/new`` too — for
     one secret-looking string in one answer (R9-1). Fail-closed: a classifier
-    or gate error withholds the turn."""
+    or gate error withholds the turn.
+
+    ``provider`` (ADR-2268): the turn is started on that provider's endpoint, so
+    each class is judged for the pair (engine, provider) — the operator's
+    ``provider_compliance`` declaration and the provider's current host — and not
+    for the engine's own locality. On a tenant with a data-classification policy
+    a provider WITHOUT a valid declaration is cleared for no class, so every
+    recorded turn is withheld from it. ``provider_unknown``: the spawn goes to an
+    endpoint whose provider could not be named — nothing is cleared for it."""
     tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
     verdict: dict = {}
 
     def _allowed(cls) -> bool:
+        if provider_unknown:
+            return False
         if cls not in verdict:
             try:
                 from spawn_gates import check_l34 as _sg_l34  # type: ignore  # noqa: PLC0415
-                verdict[cls] = _sg_l34(engine_name, tid, classification=cls,
-                                       channel=channel, chat_key=chat_key) is None
+                if provider:
+                    verdict[cls] = _sg_l34(engine_name, tid, classification=cls, channel=channel,
+                                           chat_key=chat_key, provider=provider) is None
+                else:
+                    verdict[cls] = _sg_l34(engine_name, tid, classification=cls,
+                                           channel=channel, chat_key=chat_key) is None
             except Exception:  # noqa: BLE001 — fail closed
                 verdict[cls] = False
         return verdict[cls]
@@ -4873,15 +5040,173 @@ def _ledger_data_flow_withhold(engine_name: str, *, channel: str, chat_key: str)
     return _check
 
 
-def _ledger_withhold(engine_name: str, channel: str, chat_key: str):
+def _ledger_withhold(engine_name: str, channel: str, chat_key: str, *,
+                     provider: str | None = None, provider_unknown: bool = False):
     """Both per-turn reasons a recorded turn is not re-supplied to this
-    engine: an observer's ended consent, and the tenant's data-flow policy."""
+    engine: an observer's ended consent, and the tenant's data-flow policy
+    (judged for ``provider`` when the turn is started on one — see
+    ``_ledger_data_flow_withhold``)."""
     consent = _ledger_consent_withhold(channel, chat_key)
-    data_flow = _ledger_data_flow_withhold(engine_name, channel=channel, chat_key=chat_key)
+    data_flow = _ledger_data_flow_withhold(engine_name, channel=channel, chat_key=chat_key,
+                                           provider=provider, provider_unknown=provider_unknown)
 
     def _check(rec: dict):
         return data_flow(rec) or consent(rec)
     return _check
+
+
+def _record_failed_turn_in_ledger(prompt, exc: BaseException, *, channel, chat_key, msg_id, sender,
+                                  profile, observers, interim_texts) -> None:
+    """Append the ledger record of a turn that raised. Never raises.
+
+    The answer is the interim messages that were already delivered plus one line naming the
+    exception TYPE — never its message, which can quote a path, a prompt or a credential.
+
+    A turn that raised AFTER the CLI was started is recorded as it ran (``spawned`` as
+    measured, its text kept: the CLI transcript holds it). A turn that raised BEFORE any CLI
+    start (a delegated worker path, a pre-spawn step) is recorded with ``spawned=False`` and
+    the reason ``failed_before_spawn``: nothing proves which pre-spawn gates it passed, so the record
+    keeps its hash and length, never its text — the same rule the console's turn log applies
+    to an undelivered message."""
+    if not (chat_key and prompt):
+        return
+    try:
+        try:
+            from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+        _obs_block, _owner_text = _split_observer_block(prompt)
+        _spawned = bool(getattr(_TURN_OUTCOME, "cli_spawned", False))
+        _refused = str(getattr(_TURN_OUTCOME, "refused", None) or "")
+        if _spawned:
+            _note = f"[This turn failed after the engine was started ({type(exc).__name__}); no answer was delivered.]"
+        else:
+            _note = f"[This turn failed before any engine was started ({type(exc).__name__}); no answer was delivered.]"
+            _refused = _refused or "failed_before_spawn"
+        _ledger.append_turn(
+            _session_dir(channel, str(chat_key)), channel=str(channel or ""), chat_key=str(chat_key),
+            user_text=_owner_text, observer_text=_obs_block,
+            assistant_text="\n\n".join([*(interim_texts or []), _note]),
+            msg_id=str(msg_id or ""), sender=str(sender or ""),
+            persona=str((profile or {}).get("name") or (profile or {}).get("persona") or ""),
+            refused=_refused,
+            spawned=_spawned,
+            route=str(getattr(_TURN_OUTCOME, "route", "") or ""),
+            observers=observers,
+            tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
+        )
+    except Exception as e:  # noqa: BLE001
+        log(f"session ledger append for a failed turn failed (non-fatal): {type(e).__name__}")
+
+
+def _drop_route_history_view() -> None:
+    """Remove the history view of the rerouted spawn that just ended (never raises).
+
+    The view of a rerouted turn carries the PROVIDER's withholding and sits in
+    ``<chat>/.route-<provider>-<hash>/`` — below the cwd of the chat's native worker, which
+    L34 may not clear for the same turns. It exists only while the provider's CLI runs."""
+    view = getattr(_TURN_OUTCOME, "route_view", "") or ""
+    _TURN_OUTCOME.route_view = ""
+    if view:
+        try:
+            os.unlink(view)
+        except OSError:
+            pass
+
+
+def _ledger_regate_for_route(resolved: dict, *, workdir: Path, session_dir: Path | None,
+                             session_id: str | None, channel: str, chat_key,
+                             provider: str | None, native_block: str = "") -> str | None:
+    """Render the session-ledger block again for a turn that is started on a provider.
+
+    ``_resolve_spawn_inputs`` renders the block before the route is known: coverage against the
+    chat's own CLI session, each turn's class judged for the native engine. Both are wrong once
+    the turn goes to a provider (ADR-2268):
+
+    * a REROUTED turn runs in its own session (``session_dir``), whose transcript holds none of
+      the turns the native session holds — a block computed against the native transcript left
+      them out and the provider's session never saw them;
+    * a turn's class is cleared for (engine, provider), not for the engine's locality.
+
+    The record stays the chat's; the block is rendered against ``session_dir`` (or the chat's own
+    session for an assigned provider) with the provider's withholding, replaces the native block
+    in ``resolved["system"]`` (and in a system-prompt file), and the worker-readable view is
+    rendered into the session directory the same way.
+
+    ``native_block`` is the block this turn's ``_resolve_spawn_inputs`` rendered (carried in its
+    result, never looked up in shared state). Fail-closed, in two steps:
+
+    * the re-render fails -> the native block is removed and the turn starts without
+      re-supplied history;
+    * the native block cannot be removed (it is not where this turn put it, or the system-prompt
+      file cannot be rewritten) -> a refusal string is returned and the caller does not spawn:
+      text judged for the native engine must not reach the provider next to its own block.
+
+    Returns None when the turn may start."""
+    key = (str(channel or ""), str(chat_key or ""))
+    old = native_block or ""
+    new = ""
+    failed = False
+    if chat_key:
+        try:
+            try:
+                from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            new = _ledger.render_context(
+                workdir, channel=key[0], chat_key=key[1],
+                session_id=(session_id or "") if session_dir is not None else None,
+                tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
+                withhold=_ledger_withhold("claude_code", key[0], key[1], provider=provider,
+                                          provider_unknown=not provider),
+                session_dir=session_dir,
+            )
+        except Exception as e:  # noqa: BLE001
+            failed = True
+            new = ""
+            log(f"session ledger re-render for the provider route failed: {type(e).__name__}")
+            # The view in the worker's cwd is still the one _resolve_spawn_inputs published
+            # with the NATIVE engine's withholding (or an earlier route's): it must not be
+            # readable by the provider's worker when its own render never happened.
+            try:
+                os.unlink(Path(session_dir if session_dir is not None else workdir)
+                          / ".corvin-history.md")
+            except OSError:
+                pass
+    if new == old and not failed:
+        return None
+
+    _refusal = ("[security] The chat history could not be re-checked for the provider this turn "
+                "is routed to — request blocked.")
+
+    def _swap(text: str) -> str | None:
+        if old:
+            if text.count(old) != 1:
+                return None            # the native block is not where this turn put it
+            return text.replace(old, new, 1)
+        return text + new
+    spf = resolved.get("system_prompt_file")
+    _sys = resolved.get("system")
+    if isinstance(_sys, str):
+        _swapped = _swap(_sys)
+        if _swapped is None:
+            if old and spf and old not in _sys:
+                _swapped = _sys        # the block lives in the file only
+            else:
+                log("session ledger regate: native block not found in the system prompt — turn refused")
+                return _refusal
+        resolved["system"] = _swapped
+    if spf:
+        try:
+            _txt = Path(spf).read_text(encoding="utf-8")
+            _new_txt = _swap(_txt)
+            if _new_txt is None:
+                raise ValueError("native block not found in the system-prompt file")
+            Path(spf).write_text(_new_txt, encoding="utf-8")
+        except (OSError, ValueError) as e:
+            log(f"session ledger regate: system-prompt file not rewritten ({type(e).__name__}) — turn refused")
+            return _refusal
+    return None
 
 
 # Personal knowledge base (ADR-2325/2326/2327). The facade lives in core/personal_kb/bridge.py;
@@ -5064,12 +5389,18 @@ def _session_dir(channel: str, chat_key: str, tenant_id: str | None = None) -> P
             _vsd = None  # noqa: F841
     if _vsd is not None:
         try:
-            d = Path(_vsd(channel, _safe_id(chat_key), tenant_id=tenant_id))
+            # The chat's name below the channel directory is NOT just the sanitised id:
+            # that is lossy, and two chat ids ("a.b@x.com" / "a_b@x.com" on the e-mail
+            # bridge) shared one workdir, CLI session, history view and ledger. A name
+            # held by another chat id resolves to the hashed one (resolve_chat_dir).
+            _resolve = _chat_dir_resolver()
+            d = _resolve(Path(_vsd(channel, _safe_id(chat_key), tenant_id=tenant_id)).parent,
+                         chat_key, claim=True)
             if d.exists():
                 # New tenant-aware path exists — use it
                 return d
             # Migration path: check legacy location for backward compat
-            legacy = SESSIONS_ROOT / _safe_id(channel) / _safe_id(chat_key)
+            legacy = _resolve(SESSIONS_ROOT / _safe_id(channel), chat_key)
             if legacy.exists():
                 log_debug(
                     f"session_dir: found legacy path {legacy}, "
@@ -5082,7 +5413,10 @@ def _session_dir(channel: str, chat_key: str, tenant_id: str | None = None) -> P
         except Exception:  # noqa: BLE001
             pass
     # Fallback: use legacy SESSIONS_ROOT path when paths module unavailable
-    d = SESSIONS_ROOT / _safe_id(channel) / _safe_id(chat_key)
+    try:
+        d = _chat_dir_resolver()(SESSIONS_ROOT / _safe_id(channel), chat_key, claim=True)
+    except Exception:  # noqa: BLE001
+        d = SESSIONS_ROOT / _safe_id(channel) / _safe_id(chat_key)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -5935,6 +6269,20 @@ def _format_tool_use_status(
     return f"{icon} {short_name}"
 
 
+def _route_view_scoped(fn):
+    """Remove a rerouted spawn's history view when the spawn ends, however it ends."""
+    import functools as _ft  # noqa: PLC0415
+
+    @_ft.wraps(fn)
+    def _scoped(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _drop_route_history_view()
+    return _scoped
+
+
+@_route_view_scoped
 def _call_claude_streaming_via_engine(
     prompt: str, channel: str, chat_key: str,
     mode: str, add_dir: str | None,
@@ -5976,6 +6324,9 @@ def _call_claude_streaming_via_engine(
     # The plan was consumed (audit events emitted) in _resolve_spawn_inputs.
     # Not assigned — no dead variable that implies M5 dispatch is already wired.
     resolved.pop("_ato_plan", None)
+    # The session-ledger block as rendered for the native engine (not an engine argument):
+    # the text _ledger_regate_for_route replaces when this turn is started on a provider.
+    _native_ledger_block = resolved.pop("_ledger_block", "") or ""
     # ADR-0395: cache-stable CEL brief (empty unless the flag is on) must NOT ride in the
     # byte-stable system-prompt file. Pop it here so `**resolved` stays a clean engine-arg
     # splat, and prepend it to a SPAWN-ONLY prompt below. The raw `prompt` is left untouched
@@ -6054,16 +6405,15 @@ def _call_claude_streaming_via_engine(
     # not cleared to read). A rerouted turn runs in `<chat>/.route-<provider>/`; the chat workdir
     # keeps the native session untouched. `workdir` stays the chat dir (tasks, ledger, retries).
     sess_wd = workdir
+    _TURN_OUTCOME.route = ""
     if l34_route.rerouted:
         sess_wd = _route_session_dir(workdir, str(l34_route.provider or "route"))
         try:
             sess_wd.mkdir(parents=True, exist_ok=True)
-            # The re-supplied history view is generated in the chat dir (already withheld
-            # against the default engine, which is the stricter of the two); the worker
-            # reads it from its cwd.
-            _view = workdir / ".corvin-history.md"
-            if _view.is_file():
-                shutil.copyfile(_view, sess_wd / ".corvin-history.md")
+            if sess_wd.is_symlink():
+                # The route directory is inside the worker's cwd: a link planted under its
+                # name would move the provider's session and its history view elsewhere.
+                raise NotADirectoryError(str(sess_wd.name))
         except OSError as _re:
             _turn_refused("l34_route_unavailable")
             return ("[security] The sensitive-data route could not be built "
@@ -6077,6 +6427,32 @@ def _call_claude_streaming_via_engine(
             resume_session_id = None
         if resume_session_id:
             has_session = True
+        # The ledger records which session the turn ran in: only that session's transcript
+        # can hold it (session_ledger.uncovered_turns).
+        _TURN_OUTCOME.route = sess_wd.name
+        # The history block and the worker-readable view, rendered for THIS session and THIS
+        # provider from the chat's record (never copied from the chat dir: that copy followed
+        # a symlink at the target and carried the native engine's withholding). The view is
+        # removed again when this spawn ends (_route_view_scoped): the route directory is
+        # below the native worker's cwd.
+        _TURN_OUTCOME.route_view = str(sess_wd / ".corvin-history.md")
+        _regate_problem = _ledger_regate_for_route(
+            resolved, workdir=workdir, session_dir=sess_wd, session_id=resume_session_id,
+            channel=channel, chat_key=chat_key, provider=str(l34_route.provider or "") or None,
+            native_block=_native_ledger_block)
+        if _regate_problem is not None:
+            _turn_refused("l34_route_unavailable")
+            return _regate_problem
+    elif env.get("ANTHROPIC_BASE_URL") or env.get("CORVIN_CC_PROVIDER"):
+        # A provider assigned to claude_code: the history was cleared for the native engine
+        # only, so it is judged again for that provider (not declared / not nameable -> withheld).
+        _regate_problem = _ledger_regate_for_route(
+            resolved, workdir=workdir, session_dir=None, session_id=None,
+            channel=channel, chat_key=chat_key, provider=env.get("CORVIN_CC_PROVIDER") or None,
+            native_block=_native_ledger_block)
+        if _regate_problem is not None:
+            _turn_refused("l34_route_unavailable")
+            return _regate_problem
 
     # ADR-0133 CLAG M3 — chain integrity gate before OS-turn engine spawn (L22).
     clag_msg = _check_clag_spawn_or_fail(channel=channel, chat_key=chat_key)
@@ -8605,8 +8981,10 @@ def _call_claude_streaming_impl(
     _chat_debug_event(
         workdir, "turn.start" if _retry_count == 0 else "turn.retry",
         chat_key=str(chat_key), channel=channel, msg_id=str(msg_id or ""),
+        # Length only: this file is in the worker's cwd and outside erasure's content
+        # scan, so neither the prompt text nor a hash of it (a short prompt is
+        # guessable from one) goes into it.
         prompt_len=len(prompt),
-        prompt_preview=prompt[:120],
         has_session=has_session,
         resume_id=_resume_id,
         mode=mode,
@@ -13465,6 +13843,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         _TURN_OUTCOME.refused = None
         _TURN_OUTCOME.failed = None
         _TURN_OUTCOME.cli_spawned = False
+        _TURN_OUTCOME.route = ""
+        _TURN_OUTCOME.route_view = ""
         _TURN_OUTCOME.exit_code = None
         _TURN_OUTCOME.timed_out = False
         # The turn's author, for the CEL session (anchor goal attribution).
@@ -13559,6 +13939,19 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                               f"{format_delegation_badge(_badge_engine, _badge_mode, model=_LAST_OS_MODEL.get(chat_key))}")
             except Exception as e:  # noqa: BLE001 — a badge must never break a turn
                 log(f"delegation badge skipped ({e!r})")
+    except Exception as _turn_exc:
+        # A turn that raised AFTER the CLI was started is in the CLI transcript. Without a
+        # ledger record the next spawn's coverage check meets a transcript entry no recorded
+        # turn explains, and the message itself is in no record at all. Record it as it ran
+        # (spawned as measured, the failure as the answer), then let the exception continue
+        # unchanged: what happens to the envelope is the runner's decision, not this one's.
+        # A turn that raised BEFORE any CLI start (delegated path) is recorded too — as a
+        # fact (spawned=False, reason failed_before_spawn, exception type), see the helper.
+        _record_failed_turn_in_ledger(
+            prompt, _turn_exc, channel=channel, chat_key=chat_key, msg_id=msg_id,
+            sender=sender, profile=profile, observers=_ledger_observers,
+            interim_texts=interim_texts)
+        raise
     finally:
         hb_stop.set()
         # ADR-2236: a milestone voice note is synthesised off the engine loop; let it land
@@ -13612,8 +14005,20 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             except OSError as _e2:
                 log(f"outputs dir recreate failed: {_e2}")
             _out_entries = []
+    try:
+        _out_real = os.path.realpath(outputs_dir)
+    except OSError:
+        _out_real = ""
     for p in _out_entries:
         try:
+            # The daemon uploads whatever path the envelope names. outputs/ is in the
+            # worker's cwd, so an entry there is attached only when it IS a file of that
+            # directory: a symlink (or an entry resolving outside outputs/) would send
+            # the link's TARGET - any file this user can read - into the chat (R3-NEW-41).
+            if p.is_symlink() or not _out_real or \
+                    os.path.dirname(os.path.realpath(p)) != _out_real:
+                log(f"outputs entry skipped (a link, or resolves outside outputs/): {p.name!r}")
+                continue
             if not p.is_file():
                 continue
             if p.name not in pre_files or p.stat().st_mtime > pre_files[p.name]:
@@ -13695,6 +14100,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 # copilot/compute-blueprint and gate-answered turns never start it;
                 # a cancelled-after-start turn did.
                 spawned=bool(getattr(_TURN_OUTCOME, "cli_spawned", False)),
+                route=str(getattr(_TURN_OUTCOME, "route", "") or ""),
                 observers=_ledger_observers,
                 tenant_id=_ledger_tid,
             )

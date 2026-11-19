@@ -124,7 +124,7 @@ class ACSQuotaFallbackTest(unittest.TestCase):
         """Force house-rules classifier to ALLOW so we reach the delegation gate."""
         import house_rules as _hr  # type: ignore
         _hr._house_rules_classifier = (  # type: ignore[assignment]
-            lambda task, rules, auth, **kw: ("", 0.0, "test clear")
+            lambda task, rules, auth, **kw: ("", 0.99, "test clear")
         )
 
     def _inject_license(self, raise_on_check: bool):

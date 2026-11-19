@@ -1110,6 +1110,26 @@ working_dir="/some/path"            →   bypasses tempdir (caller is explicit)
 hermetic=False                      →   skip the tempdir; engine sees None
 ```
 
+**An explicit `working_dir` must be a workspace (2026-11-19).** It is the
+worker's writable root (the sandbox binds it read-write), so
+`_validate_working_dir` applies a positive rule and returns the RESOLVED
+path, which is what the engine is spawned in — a symlink is judged by its
+target and cannot be re-pointed between check and spawn:
+
+| Accepted | Refused |
+|---|---|
+| a session directory `<corvin_home>/tenants/<tid>/sessions/<…>` or an ACS run directory `…/global/acs/runs/<run>/…` | the runtime root itself, the audit-chain directory, any other path inside `<corvin_home>` |
+| `CORVIN_SESSION_DIR` and anything below it | `~/.ssh`, `~/.claude`, `~/.config`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.codex`, `$XDG_CONFIG_HOME`, `$CLAUDE_CONFIG_DIR`, `$CODEX_HOME` |
+| a directory strictly below the temp directory | the temp directory itself; system directories (`/etc`, `/usr`, `/var`, `/opt`, …; `%SystemRoot%`, `%ProgramFiles%`, `%APPDATA%` on Windows) |
+| a directory strictly below the user's home | the home itself, `/home`, and any directory that CONTAINS a protected one (a checkout that holds its repo-local `.corvin`) |
+| anything below a root listed in `CORVIN_DELEGATE_WORKSPACE_ROOTS` (operator env, `os.pathsep`-separated absolute paths) | every other location (`/srv/x`, `/mnt/data`, …) |
+
+`CORVIN_DELEGATE_WORKSPACE_ROOTS` is how an operator admits a tree the
+defaults refuse (a data mount, a checkout with a repo-local runtime root).
+It lifts the "contains a protected directory" rule for that tree; it never
+admits a path INSIDE a protected directory. It is an operator environment
+variable, not a tool argument.
+
 Implementation: `_hermetic_tempdir()` context manager creates a
 `tempfile.mkdtemp(prefix="corvin-delegate-")`, chmods to 0o700,
 yields the Path, and `shutil.rmtree(..., ignore_errors=True)` on
@@ -1165,13 +1185,87 @@ mutation is therefore safe in the delegation library's intended
 context. A multi-threaded caller would need a different mechanism
 (env-replace flag on each engine module) — out of scope today.
 
-### Tool schema (MCP) — two new optional parameters
+### `hermetic` / `env_passthrough` are operator settings, not tool arguments
 
-* `hermetic: bool` (default `true`)
-* `env_passthrough: bool` (default `false`)
+Until 2026-11-19 both were optional parameters of the `delegate_*` MCP
+tools, i.e. the calling model could switch off the tempdir or hand the
+worker the bridge's whole environment with one argument. They are no longer
+in the tool schema; a call that passes `hermetic: false` or a truthy
+`env_passthrough` is refused with a message naming the setting. The values
+come from the operator's environment:
 
-Both surfaced in `structuredContent` echo so an operator auditing a
-delegation call can see the caller's intent.
+| Env var | Default | Effect |
+|---|---|---|
+| `CORVIN_DELEGATE_HERMETIC` | on | off → no per-delegation tempdir when no `working_dir` is given |
+| `CORVIN_DELEGATE_ENV_PASSTHROUGH` | off | on → the worker inherits the full environment (legacy v0.1) |
+
+`run_delegate(hermetic=..., env_passthrough=...)` keeps both keyword
+arguments for in-process callers; the MCP surface reads the env vars.
+
+### Delegate sandbox (bubblewrap) — `enforcing` / `advisory` / `off`
+
+`sandbox_mode` (tool argument) and the operator floor
+`CORVIN_DELEGATE_SANDBOX_FLOOR` resolve to the stricter of the two.
+
+| Mode | bwrap present, engine supports a launcher prefix | bwrap missing | engine without launcher-prefix support |
+|---|---|---|---|
+| `off` | native | native | native |
+| `advisory` | sandboxed | native + `delegate.sandbox_unavailable` | native + `delegate.sandbox_unavailable` (`engine-no-argv-prefix-fallback-native`) |
+| `enforcing` | sandboxed | refused (`sandbox-denied`) | refused (`sandbox-denied`) |
+
+An engine supports the launcher prefix when it declares the capability
+`argv_prefix: True` — `claude_code` and `codex_cli` do. `opencode` and
+`copilot` do not: under `enforcing` a delegation to them is refused, under
+`advisory` it runs native and the chain says so. A sandbox needs a
+directory to bind, so `enforcing` with `CORVIN_DELEGATE_HERMETIC` off and
+no `working_dir` is refused too (`no-working-dir-to-bind`).
+
+`delegate.sandboxed` (decision `bwrap`) is written only AFTER the spawn
+that carried the bwrap prefix returned. A spawn that raises leaves
+`delegate.sandbox_unavailable` (`engine-spawn-failed`) instead — the chain
+never names a sandbox that did not start.
+
+A planted MCP config target in the working directory (a hard-linked or
+non-regular `opencode.json` / `mcp_config.json`, a symlinked `.codex_home`)
+refuses the delegation before any spawn: `delegate.failed`, reason
+`unsafe-config-target`.
+
+### One priceable record per worker run (2026-11-19)
+
+An ACS or delegate worker run writes `acs.engine_completed` AND a worker
+`engine.span.end`. Since 2026-11-19 the four-way token split is carried by
+the span only; `acs.engine_completed` keeps `run_id`, `worker_id`,
+`engine_id`, `model_id`, `locality`, `duration_ms`, the display total
+`tokens_used`, `exit_code` and `span_id` (`spn-<run_id>-<worker_id>`, the
+span that holds the tokens). The cost reader
+(`model_selection_learner._drop_span_duplicates`) reconciles the two
+records per run by that id: the completion is dropped when its span was
+read, kept when no span exists (older history) or when the span carries no
+tokens and the completion does. Old records that carry the split on both
+are therefore priced once as well — the chain is not rewritten.
+An ACS worker killed at its deadline closes its error span on the model
+and usage the engine printed before the kill, when it printed any.
+
+### A2A worker tool set and invite lifetime (2026-11-19)
+
+A worker that reads a peer's words (inbound A2A task, conversation turn,
+`/ask @mine`) runs with `--dangerously-skip-permissions`, where
+`--disallowedTools` removes only the names it lists. Its tool set is
+therefore an ALLOW list: `--tools=<a2a_tool_policy.exposed_tools(...)>` —
+the tools of the five `allow_*` classes that the origin was not denied
+(intersected with the origin's `allowed_tools` when set). `Skill`,
+`EnterWorktree`, `ExitWorktree`, `SendMessage`, `ToolSearch` and any tool
+a later CLI adds are in no class and never exist for such a worker. An
+origin without grants gets `--tools=` (no tools). The deny list is still
+passed as second line. A worker that is handed the host's engine
+credential keeps its narrower set (`WebFetch`, `WebSearch`, `TodoWrite`
+minus denials).
+
+An A2A invite token carries a mandatory `exp`: `generate_invite` defaults
+to 7 days (`DEFAULT_INVITE_TTL_S`), refuses a lifetime above
+`MAX_INVITE_TTL_S`, and `parse_invite` refuses a token without `exp`, with
+`exp <= iat`, or with a lifetime above the cap. A payload that is valid
+JSON but not an object is an `InviteError` (a 4xx at the pairing route).
 
 ### Test surface (extended)
 
@@ -1181,14 +1275,17 @@ delegation call can see the caller's intent.
   `EnvAllowlistTests` (9 — allowlist composition, scrub +
   restore, exception-safety, observed env during spawn,
   env_passthrough=True path, engine-specific key passthrough).
-* `test_mcp_server.py` — 21 cases (up from 17). New class:
-  `HermeticAndEnvToolParamTests` (4 — default hermetic+scrub,
-  env_passthrough=True opt-out, hermetic=False opt-out).
+* `test_mcp_server.py` — `HermeticAndEnvToolParamTests`: default
+  hermetic+scrub, the two operator env vars, and the refusal of
+  `hermetic` / `env_passthrough` passed as tool arguments.
 
 Resolver test unchanged.
 
 ### What you, as Claude Code, must NOT do (Layer 29.2)
 
+- **Don't put `hermetic` or `env_passthrough` back into the MCP tool
+  schema**, and don't accept an arbitrary `working_dir` — the rule above
+  is positive on purpose.
 - **Don't flip `hermetic` to `false` by default in any persona's
   resolver-injected MCP config.** A persona that lets workers see
   the full filesystem by default re-introduces the very gap 29.2a
@@ -3508,6 +3605,17 @@ is written, so the value read back in the console is the value that runs. A
 platform provider (Bedrock/Vertex/Foundry) is left alone — it declares its own
 id spelling.
 
+**The environment tiers are operator input too.** `CORVIN_OS_MODEL_LOW` / `CORVIN_OS_MODEL_HIGH`
+were returned verbatim by `low_model()` / `high_model()` and from there by Tier 3 (autoselect),
+Tier 2.8 (ATO), `escalate_for_error` and the savings cap — so a provider-qualified value
+(`anthropic/claude-sonnet-5`) or a family id the registry only holds as a dated snapshot reached
+`--model` unresolved while every pin tier was already normalised. `model_selector._env_tier()`
+passes both through `normalise_pin(raw, "claude_code")` (same rule: never fail-closed, an id this
+process cannot verify stays, minus a `provider/` prefix). A Console tier choice still outranks
+the variable. The lineage step of Tier 2.9 likewise returns the RESOLVED registry id of
+`tier_model(family)`, not the family name. Guard:
+`shared/test_model_selector_env_tier_normalised.py` (through `resolve_os_model_with_source`).
+
 Guards: `tests/e2e/test_os_model_three_tier_adr0952_e2e.py::TestAPinNeverReachesTheCLIProviderQualified`
 and `core/console/tests/test_engine_setting_pins.py::test_put_stores_a_provider_qualified_pin_bare`.
 Both were confirmed red with the normalisation disabled before being kept.
@@ -3707,6 +3815,47 @@ nothing), and `node_failed` carries the tokens and the reported model on both pa
 own executor included, also for a `fan_out` that failed part-way and for every `delegation_loop`
 (manager and workers summed). A CLI that exits non-zero but still prints its envelope keeps its
 tokens on the span, the profile and the event.
+
+**A run that finished is not thereby a run with a result (`partial`, FAIL).** A
+`delegation_loop` whose manager says `FAIL`, answers outside the protocol (no decision object,
+an unknown `decision`) or says `DELEGATE` without a usable `workers` list (empty, not a list,
+an entry without an `agent`) raises `DelegationLoopFailed`: the node is `failed`, never a
+successful output with `terminal.state == "failed"`, and it is **final** (`final_failure` — a
+retry would re-run the loop and its workers for a verdict already given); `abort` /
+`fail_branch` then apply as for any failed node. A loop that only ran out of budget
+(`max_loops` / `max_total_workers`) stays a `success` node with `_terminal.state == "partial"`
+and the run stays `complete` — so every surface that reports an outcome reads
+`RunResult.partial_nodes` as well:
+
+| Surface | Complete run with a budget-exhausted loop |
+|---|---|
+| MCP `workflow_run` / `workflow_resume` | `status: "partial"` (`"complete" \| "partial" \| "failed" \| "paused" \| "cancelled"`), `partial_nodes: [ids]`, a text line naming the nodes |
+| `corvin-workflows run` / `resume`, text | first line `[PARTIAL] **<name>** → \`partial\`` plus the node ids; exit code `3` (`cli.EXIT_PARTIAL`) — `0` only for `complete`/`paused`, `1` for `failed` |
+| same, `--format json` | `state` unchanged (`complete`), `status: "partial"`, `partial_nodes: [ids]`, exit code `3` |
+| readiness (`_reachability`) | `fail`: "delegation loop ended on its budget without COMPLETE" |
+
+The CLI's result line carries a plain-text label (`[OK]` / `[PARTIAL]` / `[PAUSED]` /
+`[FAILED]`), not a status icon. Guards: `core/workflows/tests/test_delegation_loop_failure_pls1.py`,
+`core/orchestration/tests/test_review_2026_11_19_pls.py`.
+
+**A candidate fork is gated per spawn, not per fork.** `skill_creator.autonomous.fork` runs the
+console pre-spawn gates (`forge_runs.check_spawn_gates`: L44, capability, L34, L35) on the
+request and the live body before anything is charged, and then — through a
+`llm_client.LatchedSpawnGate` handed to the orchestrator (`SkillCreatorOrchestrator(spawn_gate=)`
+→ `gated_client`) — before EVERY engine call of the build (plan, repair, each LDD iteration,
+each reviewer; about a dozen), on that call's own text, before the worker env is built, the
+span opens or the child exists. The first refusal latches: no further call is spawned or even
+asked about, nothing is staged, no quota is charged, and `fork` raises `ForkRefused` even where
+a phase wrapped or dropped the error. A client of another type is wrapped (`GatedClient`), never
+trusted; a factory whose engine client cannot be put behind the gate is a refusal. The SDK
+fallback (`ANTHROPIC_API_KEY`) is no longer a bare `anthropic.Anthropic`: `ApiSpanClient`
+resolves the model like the CLI client (pin, else the lineage's top tier — the phase code's
+literal means "top tier"), writes the `engine.span` pair (`engine_id: "api"`, closed on the
+model the API reported, four-way split from `engine_span.usage_split`) and takes the same gate.
+Not gated per spawn: a manual generation over `skill_creator_api` (one gate pass on the
+request, as before). Guards:
+`core/console/tests/test_autonomous_forge_spawn_gate_pls2_e2e.py`,
+`corvin_operator/skill_creator/tests/test_llm_client_spawn_pls2.py`.
 
 **Every span is attributable.** A span carries its run id on every spawn (also of types the
 resolver never describes), the role `manager` for a `delegation_loop` manager (`worker` otherwise),

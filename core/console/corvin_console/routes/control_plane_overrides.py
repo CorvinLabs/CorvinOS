@@ -24,10 +24,25 @@ keyed on ``rec.sid_fingerprint`` too. (An interim version keyed approvers on
 every session of every operator mapped to the one identity ``"token:"``.)
 An empty fingerprint is refused (403), never mapped to a shared identity, and
 a session may not approve or deny its own request (four-eyes).
+
+Review 2026-11-19 round 3 (R3-NEW-26):
+
+* No production code registers an approver (``add_approver`` has no caller
+  outside tests), so approve/deny answered 403 "Only admins can approve" to
+  everyone, forever. While the approver set is empty they now answer 501 with
+  ``{"error": "approvals_not_available", "available": false}``, and the list
+  response carries ``approvals_available`` - the request can be filed, it
+  cannot be decided yet, and the API says so.
+* ``GET /audit`` reads a bounded tail of the chain on a worker thread and
+  reports ``corrupt_lines`` / ``complete`` / ``window`` instead of returning
+  whatever preceded the first unparseable line as the whole trail.
+* Every audit-chain write of a handler (``console_audit.*``) is an awaited
+  ``asyncio.to_thread`` - a chain write takes a file lock and fsyncs.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -78,6 +93,23 @@ def _approver_id(rec: session_auth.SessionRecord) -> str:
             detail="Session has no identity; cannot act as approver",
         )
     return f"sid:{fp}"
+
+
+def _require_approvals_available(authority: OverrideAuthority) -> None:
+    """501 while no approver exists: the decision endpoints are not usable on
+    this install, which is different from "you are not allowed" (403)."""
+    if not authority.has_approvers():
+        raise HTTPException(
+            http_status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "error": "approvals_not_available",
+                "available": False,
+                "message": (
+                    "No approver is configured on this install, so override "
+                    "requests cannot be approved or denied yet."
+                ),
+            },
+        )
 
 
 def _refuse_self_decision(
@@ -162,7 +194,8 @@ async def create_override(
         safe_msg = safe_error_response(exc, "Failed to create override request")
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=safe_msg)
 
-    console_audit.action_performed(
+    await asyncio.to_thread(
+        console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="override.request",
@@ -190,7 +223,8 @@ async def list_overrides(
 
     pending = authority.list_pending_approvals(tenant_id=rec.tenant_id)
 
-    console_audit.action_performed(
+    await asyncio.to_thread(
+        console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="override.list",
@@ -198,7 +232,12 @@ async def list_overrides(
         target_id="overrides",
     )
 
-    return {"overrides": pending, "count": len(pending)}
+    return {
+        "overrides": pending,
+        "count": len(pending),
+        # False: requests can be filed but nobody can decide them yet.
+        "approvals_available": authority.has_approvers(),
+    }
 
 
 # Declared before the parameterised routes: FastAPI matches in declaration
@@ -218,9 +257,12 @@ async def get_audit_log(
     """
     authority = get_authority()
 
-    events = await authority.get_audit_log(rec.tenant_id)
+    # Bounded tail scan of the chain, off the event loop.
+    log = await asyncio.to_thread(authority.read_audit_log, rec.tenant_id)
+    events = log["events"]
 
-    console_audit.action_performed(
+    await asyncio.to_thread(
+        console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="override.audit_view",
@@ -232,6 +274,11 @@ async def get_audit_log(
         "tenant_id": rec.tenant_id,
         "events": events,
         "count": len(events),
+        # Unparseable lines inside the scanned window; > 0 means the list
+        # above may be missing override events.
+        "corrupt_lines": log["corrupt_lines"],
+        "complete": log["complete"],
+        "window": log["window"],
     }
 
 
@@ -258,7 +305,8 @@ async def get_override_detail(
         safe_msg = safe_error_response(exc, "Override request not found or access denied")
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, detail=safe_msg)
 
-    console_audit.action_performed(
+    await asyncio.to_thread(
+        console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="override.view",
@@ -288,11 +336,14 @@ async def approve_override(
     """
     authority = get_authority()
 
+    _require_approvals_available(authority)
+
     # ✅ CRITICAL FIX: Check approver authority BEFORE attempting approval
     # Never unconditionally add_approver — that's privilege escalation!
     approver = _approver_id(rec)
     if not authority.is_approver(approver):
-        console_audit.action_performed(
+        await asyncio.to_thread(
+            console_audit.action_performed,
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="override.approve_unauthorized",
@@ -309,7 +360,8 @@ async def approve_override(
     try:
         result = await authority.approve_override(override_id, approver, rec.tenant_id)
     except PermissionError as exc:
-        console_audit.action_performed(
+        await asyncio.to_thread(
+            console_audit.action_performed,
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="override.approve_denied",
@@ -322,7 +374,8 @@ async def approve_override(
         safe_msg = safe_error_response(exc, "Failed to approve override")
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=safe_msg)
 
-    console_audit.action_performed(
+    await asyncio.to_thread(
+        console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="override.approved",
@@ -352,11 +405,14 @@ async def deny_override(
     """
     authority = get_authority()
 
+    _require_approvals_available(authority)
+
     # ✅ CRITICAL FIX: Check approver authority BEFORE attempting denial
     # Never unconditionally add_approver — that's privilege escalation!
     approver = _approver_id(rec)
     if not authority.is_approver(approver):
-        console_audit.action_performed(
+        await asyncio.to_thread(
+            console_audit.action_performed,
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="override.deny_unauthorized",
@@ -375,7 +431,8 @@ async def deny_override(
             override_id, approver, body.reason, rec.tenant_id
         )
     except PermissionError as exc:
-        console_audit.action_performed(
+        await asyncio.to_thread(
+            console_audit.action_performed,
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="override.deny_denied",
@@ -388,7 +445,8 @@ async def deny_override(
         safe_msg = safe_error_response(exc, "Failed to deny override")
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=safe_msg)
 
-    console_audit.action_performed(
+    await asyncio.to_thread(
+        console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="override.denied",
@@ -422,7 +480,8 @@ async def interrupt_override(
         safe_msg = safe_error_response(exc, "Failed to interrupt override")
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, detail=safe_msg)
 
-    console_audit.action_performed(
+    await asyncio.to_thread(
+        console_audit.action_performed,
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="override.interrupted",

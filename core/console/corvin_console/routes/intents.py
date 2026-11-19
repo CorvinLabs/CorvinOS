@@ -21,7 +21,6 @@ from corvin_console.intent_router import (
     IntentClassification
 )
 from core.compliance.consent import consent_required
-from core.paths import tenant_audit_chain
 
 from .. import audit as console_audit
 from .. import auth as session_auth
@@ -100,7 +99,8 @@ async def classify_user_intent(
 
         # Audit (hash-chained, session tenant). Content-free: the classification
         # and its measurements only — never the user's text (PII floor).
-        console_audit.system_event(
+        await asyncio.to_thread(
+            console_audit.system_event,
             tenant_id=tenant_id,
             event=result.audit_event_type,
             details={
@@ -126,7 +126,8 @@ async def classify_user_intent(
         # the user's text) and answer 500 without echoing internals.
         logger.exception("Intent classification failed")
         try:
-            console_audit.system_event(
+            await asyncio.to_thread(
+                console_audit.system_event,
                 tenant_id=tenant_id,
                 event="intent_classification_error",
                 details={"error_type": type(e).__name__},
@@ -138,46 +139,33 @@ async def classify_user_intent(
         raise HTTPException(status_code=500, detail=logger_msg)
 
 
+#: Why ``/intents/recent`` has nothing to list (rendered as-is by a caller).
+RECENT_UNAVAILABLE_REASON = (
+    "Recent intent classifications are not available on this build: "
+    "no reader for the audited classification events is implemented."
+)
+
+
 @router.get("/recent")
 async def get_recent_intents(
     limit: int = Query(10, ge=1, le=100),
     rec: session_auth.SessionRecord = Depends(require_session),
-) -> list[IntentAuditEvent]:
+) -> Dict[str, Any]:
+    """Recent intent classifications — NOT IMPLEMENTED on this build.
+
+    Answers ``{"available": false, "reason": ..., "events": []}``. It used to
+    return a bare ``[]`` from a placeholder, which a caller cannot tell apart
+    from "this tenant has classified nothing yet".
+
+    The tenant is the authenticated session's; nothing is read from the chain.
     """
-    Get recent intent classifications (read-only audit trail).
-
-    SECURITY FIX (2026-09-22):
-    - Added require_session authentication
-    - Tenant is determined from authenticated session (not user input)
-    - Users can only read their own tenant's audit trail
-
-    Args:
-        limit: Max results (1-100)
-        rec: Authenticated session record
-
-    Returns:
-        List of recent intent audit events for authenticated user's tenant
-    """
-    # CRITICAL FIX: tenant_id comes from authenticated session, NOT user input
-    tenant_id = rec.tenant_id
-
-    try:
-        # Read audit chain (tenant-scoped, authenticated)
-        audit_chain_path = tenant_audit_chain(tenant_id)
-        events = []
-
-        # Placeholder: in production, read from audit.jsonl
-        # For now, return empty list (E2E tests will mock this)
-
-        logger = __import__('logging').getLogger(__name__)
-        logger.info(f"Recent intents query: sid_fp={rec.sid_fingerprint} tenant={tenant_id} limit={limit}")
-
-        return events[:limit]
-
-    except Exception as e:
-        logger = __import__('logging').getLogger(__name__)
-        logger.error(f"Failed to read audit trail for tenant={tenant_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to read audit trail: {str(e)}")
+    return {
+        "available": False,
+        "reason": RECENT_UNAVAILABLE_REASON,
+        "events": [],
+        "limit": limit,
+        "tenant_id": rec.tenant_id,
+    }
 
 
 # Optional: Health check

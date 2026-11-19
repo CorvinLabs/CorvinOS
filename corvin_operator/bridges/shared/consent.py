@@ -78,6 +78,7 @@ from _compat_fcntl import fcntl  # portable: real fcntl on POSIX, no-op flock on
 from _bounded_lock import LockBusy as ConsentLockBusy, acquire_exclusive as _acquire_exclusive
 import hashlib as _hashlib
 import json
+import math
 import os
 import re
 import time
@@ -200,15 +201,23 @@ def _store_tenant(tenant_id: str | None) -> str:
 
 
 def _audit_path(*, tenant_id: str | None = None) -> Path:
-    home = _corvin_home()
-    if tenant_id is None:
-        # ONE chain per tenant (CLAUDE.md / ADR-0650): without an explicit
-        # tenant this is the PROCESS tenant's canonical chain, never the
-        # legacy <home>/global/forge/audit.jsonl — writing there on a fresh
-        # install is what made the boot tripwire report audit_chain_split.
-        import os as _os
-        tenant_id = (_os.environ.get("CORVIN_TENANT_ID") or "").strip() or "_default"
-    return home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
+    """THE audit chain of the tenant a consent call is about.
+
+    ``tenant_id=None`` means the PROCESS tenant (``_store_tenant``), never the
+    legacy ``<home>/global/forge`` chain - writing there on a fresh install is
+    what made the boot tripwire report ``audit_chain_split``. Resolved through
+    the shared ``paths.tenant_audit_chain`` (one chain per tenant, ADR-0650);
+    the composed fallback is the same layout and only used when the resolver
+    cannot be imported.
+    """
+    tid = _store_tenant(tenant_id)
+    try:
+        import paths as _paths  # type: ignore  # noqa: PLC0415
+        if Path(_paths.corvin_home()) == _corvin_home():
+            return Path(_paths.tenant_audit_chain(tid))
+    except Exception:  # noqa: BLE001
+        pass
+    return _corvin_home() / "tenants" / tid / "global" / "forge" / "audit.jsonl"
 
 
 class ChainIntegrityFailureGateUnavailable(RuntimeError):
@@ -331,8 +340,15 @@ def _clag_gate(layer_id: str) -> None:
 
 def _audit(event_type: str, *, channel: str, chat_key: str, uid: str,
            details: dict[str, Any] | None = None,
-           severity: str | None = None) -> None:
+           severity: str | None = None,
+           tenant_id: str | None = None) -> None:
     """Best-effort audit write — silent on failure.
+
+    ``tenant_id`` is the tenant the consent decision belongs to. Review
+    2026-11-19 (SEC-15): every public function took a ``tenant_id`` for the
+    STORE and then recorded the grant / revoke / drop in the PROCESS tenant's
+    chain, so tenant B's consent history sat in tenant A's GDPR Art. 30 trail
+    and B's own chain showed none of it.
 
     The bridge adapter is the same process that calls us, so the forge
     package is already on sys.path in the production case. For
@@ -361,11 +377,12 @@ def _audit(event_type: str, *, channel: str, chat_key: str, uid: str,
     if details:
         body.update(details)
     try:
+        _chain = _audit_path(tenant_id=tenant_id)
         if severity:
-            write_event(_audit_path(), event_type,
+            write_event(_chain, event_type,
                         details=body, severity=severity)
         else:
-            write_event(_audit_path(), event_type, details=body)
+            write_event(_chain, event_type, details=body)
     except Exception as _exc:
         import logging as _logging
         _logging.getLogger("corvin.consent").warning(
@@ -581,6 +598,7 @@ def is_granted(channel: str, chat_key: str, uid: str, *,
             pass
         _audit(
             "consent.store_corrupted",
+            tenant_id=tenant_id,
             channel=channel, chat_key=str(chat_key), uid="",
             details={"reason": "json-parse-error", "action": "deny-all"},
             severity="CRITICAL",
@@ -594,6 +612,7 @@ def is_granted(channel: str, chat_key: str, uid: str, *,
         for ex_uid in expired_uids:
             _audit(
                 "consent.expired",
+                tenant_id=tenant_id,
                 channel=channel, chat_key=str(chat_key), uid=ex_uid,
                 details={"reason": "ttl-expired"},
             )
@@ -642,16 +661,29 @@ def is_granted_with_epoch(
     Returns the same ``(granted, reason)`` shape as :func:`is_granted`.
     """
     now = time.time()
-    if consent_epoch is not None and (now - consent_epoch) < toctou_max_s:
+    # Review 2026-11-19 (SEC-16): only ``age < max`` was checked, so an epoch
+    # in the FUTURE (age negative) was "fresh" for as long as it stayed ahead
+    # of the clock - an envelope stamped year 2100 skipped the consent store
+    # for good. An epoch is trusted only for ``0 <= age < max``; a future,
+    # non-numeric, NaN or infinite value is stale and re-validated from disk.
+    try:
+        epoch = float(consent_epoch) if consent_epoch is not None and not isinstance(
+            consent_epoch, bool) else None
+    except (TypeError, ValueError):
+        epoch = None
+    if epoch is not None and not math.isfinite(epoch):
+        epoch = None
+    if epoch is not None and 0 <= (now - epoch) < toctou_max_s:
         # Epoch is fresh — the daemon recently verified consent; skip disk re-read.
         return True, "epoch_ok"
 
     # Stale or absent epoch — re-validate from disk.
     granted, reason = is_granted(channel, chat_key, uid, tenant_id=tenant_id)
     if not granted and consent_epoch is not None:
-        age_s = int(now - consent_epoch)
+        age_s = int(now - epoch) if epoch is not None else -1
         _audit(
             "consent.toctou_drop",
+            tenant_id=tenant_id,
             channel=channel,
             chat_key=str(chat_key),
             uid="",  # never log uid — PII
@@ -702,6 +734,7 @@ def grant(channel: str, chat_key: str, uid: str, *,
     _locked_update(path, lambda data: data.update({uid: entry}))
     _audit(
         "consent.granted",
+        tenant_id=tenant_id,
         channel=channel, chat_key=str(chat_key), uid=uid,
         details={
             "mode": entry["mode"],
@@ -731,6 +764,7 @@ def revoke(channel: str, chat_key: str, uid: str, *,
     if existed:
         _audit(
             "consent.revoked",
+            tenant_id=tenant_id,
             channel=channel, chat_key=str(chat_key), uid=uid,
             details={"granted_via": via},
         )
@@ -773,11 +807,13 @@ def list_consents(channel: str, chat_key: str, *,
 
 
 def admit_observer_drop(channel: str, chat_key: str, uid: str,
-                        *, msg_id: str = "", text_len: int = 0) -> None:
+                        *, msg_id: str = "", text_len: int = 0,
+                        tenant_id: str | None = None) -> None:
     """Audit-only helper: record that an observer's message was dropped
     for lack of consent. Records text length only (GDPR Art. 5 minimisation)."""
     _audit(
         "consent.observer_dropped",
+        tenant_id=tenant_id,
         channel=channel, chat_key=str(chat_key), uid=uid,
         details={
             "msg_id": msg_id,
@@ -788,12 +824,14 @@ def admit_observer_drop(channel: str, chat_key: str, uid: str,
 
 
 def admit_share_one_shot(channel: str, chat_key: str, uid: str,
-                         *, msg_id: str = "", text_len: int = 0) -> None:
+                         *, msg_id: str = "", text_len: int = 0,
+                         tenant_id: str | None = None) -> None:
     """Audit-only helper: record that a ``/share`` per-message admit
     let an otherwise-non-consenting observer through. Records text
     length only (GDPR Art. 5 minimisation)."""
     _audit(
         "consent.share_admitted",
+        tenant_id=tenant_id,
         channel=channel, chat_key=str(chat_key), uid=uid,
         details={
             "msg_id": msg_id,
@@ -804,12 +842,14 @@ def admit_share_one_shot(channel: str, chat_key: str, uid: str,
 
 
 def consume_buffer_drift(channel: str, chat_key: str, uid: str,
-                         *, text_len: int = 0) -> None:
+                         *, text_len: int = 0,
+                         tenant_id: str | None = None) -> None:
     """Audit-only helper: record that a buffered observer line was
     dropped at *consume* time because consent was revoked or expired.
     Records text length only (GDPR Art. 5 minimisation)."""
     _audit(
         "consent.consume_drift",
+        tenant_id=tenant_id,
         channel=channel, chat_key=str(chat_key), uid=uid,
         details={
             "text_len": text_len,

@@ -32,6 +32,10 @@ class AuditFieldNotAllowed(ValueError):
 _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "compute.run_started": frozenset({
         "run_id", "tenant_id", "tool_name", "strategy", "budget",
+        # ADR-0127: datasource connection NAMES bound to the run (operator
+        # handles, never credentials). The driver always sent this key and the
+        # allow-list refused it, so compute.run_started never reached the chain.
+        "datasources",
     }),
     "compute.iteration_completed": frozenset({
         "run_id", "tenant_id", "iter", "loss", "wall_ms", "strategy",
@@ -81,6 +85,46 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     }),
     "compute.batch_fallback": frozenset({
         "run_id", "tenant_id", "reason", "candidate_count",
+    }),
+    # ADR-0027 — pipeline coordinator. Identifiers, counts and losses only;
+    # ``budget`` / ``budget_remaining`` are the numeric budget dicts.
+    "compute.pipeline_started": frozenset({
+        "pipeline_id", "tenant_id", "stage_count", "steering_gate", "budget",
+    }),
+    "compute.stage_completed": frozenset({
+        "pipeline_id", "tenant_id", "stage_id", "best_loss",
+        "total_iterations", "tool_name",
+    }),
+    "compute.pipeline_gate_opened": frozenset({
+        "pipeline_id", "tenant_id", "gate_index", "next_stage_id",
+        "budget_remaining",
+    }),
+    "compute.pipeline_terminal": frozenset({
+        "pipeline_id", "tenant_id", "state", "stages_completed",
+        "failed_stage_id", "error_class", "gate_index", "total_wall_s", "reason",
+    }),
+    "compute.pipeline_tool_forged": frozenset({
+        "pipeline_id", "tenant_id", "gate_index", "tool_name", "forge_run_id",
+    }),
+    # ADR-0028 — HAC coordinator.
+    "compute.hac_started": frozenset({
+        "hac_id", "tenant_id", "manager_count", "backprop_gate", "budget",
+    }),
+    "compute.hac_round_started": frozenset({
+        "hac_id", "tenant_id", "round", "managers_to_run",
+    }),
+    "compute.hac_root_loss_computed": frozenset({
+        "hac_id", "tenant_id", "round", "root_loss", "sub_losses",
+    }),
+    "compute.backprop_gate_opened": frozenset({
+        "hac_id", "tenant_id", "round", "attributions", "budget_remaining",
+    }),
+    "compute.hac_budget_reallocated": frozenset({
+        "hac_id", "tenant_id", "from_manager", "to_manager", "fraction", "trigger",
+    }),
+    "compute.hac_terminal": frozenset({
+        "hac_id", "tenant_id", "state", "rounds_completed", "final_root_loss",
+        "convergence_reason",
     }),
 }
 

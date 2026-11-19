@@ -85,12 +85,13 @@ _FORBIDDEN_CALL_NAMES = {"exec", "eval", "__import__"}
 
 
 def _audit_path(tenant_id: str) -> Path:
+    # SEC-4 (2026-11-19): THE tenant chain, from the shared resolver. No
+    # hand-composed fallback: a resolver that cannot be imported raises into
+    # ``_emit``'s best-effort handler instead of writing a sibling chain under
+    # ``~/.corvin`` that nothing verifies or reads.
     _bootstrap_forge()
-    try:
-        from forge import paths as _forge_paths  # type: ignore
-        return _forge_paths.tenant_home(tenant_id) / "global" / "audit.jsonl"
-    except Exception:
-        return Path.home() / ".corvin" / "tenants" / tenant_id / "global" / "audit.jsonl"
+    from forge import paths as _forge_paths  # type: ignore
+    return _forge_paths.tenant_audit_chain(tenant_id)
 
 
 def _emit(tenant_id: str, event_type: str, details: dict[str, Any]) -> None:

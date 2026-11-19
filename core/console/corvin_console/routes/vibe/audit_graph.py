@@ -8,6 +8,8 @@ Shows real audit events: boot, compliance, layer_integrity, etc.
 
 from __future__ import annotations
 
+import asyncio
+from collections import deque
 from typing import Any, Dict, List, Optional, Set, Tuple
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +21,7 @@ from pydantic import BaseModel
 
 from ... import _bootstrap
 from ... import auth as session_auth
+from ...chain_tail import DEFAULT_MAX_SCAN_BYTES, iter_chain_tail, scan_window
 from ...deps import require_session
 
 _forge_paths = _bootstrap.forge_paths
@@ -52,12 +55,78 @@ class AuditGraphResponse(BaseModel):
     total_events: int
     critical_path: List[str] = []
     anomalies: List[Dict[str, Any]] = []
+    # What the tail scan covered. ``truncated``: the chain is larger than the
+    # scanned window and fewer than ``limit`` events were found in it.
+    scan: Dict[str, Any] = {}
 
 
 def _find_audit_chain(tenant_id: str) -> Optional[Path]:
     """The tenant's core audit chain under ``CORVIN_HOME`` (or None if absent)."""
-    path = _forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
+    # The ONE resolver of the tenant chain - never composed by hand.
+    path = Path(_forge_paths.tenant_audit_chain(tenant_id))
     return path if path.exists() else None
+
+
+def _load_graph(
+    tenant_id: str,
+    limit: int,
+    since: Optional[float],
+    until: Optional[float],
+    *,
+    max_scan_bytes: int = DEFAULT_MAX_SCAN_BYTES,
+) -> Optional[Tuple[int, List[GraphNode], List[GraphEdge], List[str], List[Dict[str, Any]]]]:
+    """Read the newest ``limit`` chain records and build the DAG from them.
+
+    BLOCKING (file read + graph build) — the handler awaits it through
+    ``asyncio.to_thread``. Streams the last ``max_scan_bytes`` of the chain;
+    returns None when the tenant has no chain file. It used to run on the
+    event loop and return the OLDEST ``limit`` records of the file.
+    """
+    chain_path = _find_audit_chain(tenant_id)
+    if not chain_path:
+        return None
+    # The time window is applied BEFORE the limit. It used to be applied after:
+    # the newest ``limit`` records were taken first, so a window lying before
+    # them came back empty - and was reported as a complete answer.
+    events: deque[Dict[str, Any]] = deque(maxlen=limit)
+    events.extend(
+        event for event in iter_chain_tail(chain_path, max_scan_bytes=max_scan_bytes)
+        if _in_window(event, since, until)
+    )
+    nodes, edges, critical_path, anomalies = _build_dag(list(events), since, until)
+    return len(events), nodes, edges, critical_path, anomalies
+
+
+def _in_window(event: Dict[str, Any], since: Optional[float], until: Optional[float]) -> bool:
+    """The same test ``_build_dag`` applies (a record without ``ts`` counts as 0)."""
+    ts = event.get("ts", 0)
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        ts = 0
+    if since and ts < since:
+        return False
+    if until and ts > until:
+        return False
+    return True
+
+
+def _graph_scan(tenant_id: str, found: int, limit: int) -> Dict[str, Any]:
+    """Scan coverage for the graph (BLOCKING).
+
+    ``found`` is the number of records INSIDE the requested time window.
+    ``limit_reached``: the limit was filled, so the answer is the newest
+    ``limit`` of them and older ones in the window may exist. ``truncated``:
+    the chain is larger than the scanned tail and the limit was not filled,
+    so records of the window may lie in the unscanned part.
+    """
+    chain_path = _find_audit_chain(tenant_id)
+    if not chain_path:
+        return {"truncated": False, "limit_reached": False, "scanned_bytes": 0,
+                "total_bytes": 0, "covers_since": None}
+    scan = scan_window(chain_path)
+    scan["limit_reached"] = found >= limit
+    if found >= limit:
+        scan["truncated"] = False
+    return scan
 
 
 def _build_dag(
@@ -261,9 +330,9 @@ async def get_audit_graph(
     tenant_id = rec.tenant_id
 
     try:
-        chain_path = _find_audit_chain(tenant_id)
+        loaded = await asyncio.to_thread(_load_graph, tenant_id, limit, since, until)
 
-        if not chain_path:
+        if loaded is None:
             return AuditGraphResponse(
                 nodes=[],
                 edges=[],
@@ -276,31 +345,17 @@ async def get_audit_graph(
                 }]
             )
 
-        # Read audit chain
-        events = []
-        with chain_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    event = json.loads(line)
-                    events.append(event)
-                    if len(events) >= limit:
-                        break
-                except json.JSONDecodeError:
-                    pass
-
-        logger.info(f"Loaded {len(events)} events for DAG")
-
-        # Build DAG
-        nodes, edges, critical_path, anomalies = _build_dag(events, since, until)
+        total, nodes, edges, critical_path, anomalies = loaded
+        logger.info("Loaded %d events for DAG", total)
+        scan = await asyncio.to_thread(_graph_scan, tenant_id, total, limit)
 
         return AuditGraphResponse(
             nodes=nodes,
             edges=edges,
-            total_events=len(events),
+            total_events=total,
             critical_path=critical_path,
-            anomalies=anomalies
+            anomalies=anomalies,
+            scan=scan,
         )
 
     except OSError as e:

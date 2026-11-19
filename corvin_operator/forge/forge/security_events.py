@@ -2216,6 +2216,39 @@ def _chain_tail_anchor_path(chain_path: Path, *, genesis: str | None = None) -> 
     return _mac_sentinel_path().parent / "chain_tails" / _marker_name(g)
 
 
+def _chain_tail_path_sha(chain_path: Path) -> str:
+    """sha256 of the chain file's resolved path, as stored in a tail record."""
+    try:
+        resolved = os.path.realpath(str(chain_path))
+    except OSError:
+        resolved = os.path.abspath(str(chain_path))
+    return hashlib.sha256(resolved.encode("utf-8")).hexdigest()
+
+
+def chain_tail_records_for_path(chain_path: Path) -> int:
+    """Number of out-of-tree tail records that name *chain_path* (R3-SEC-5).
+
+    Records written before ``path_sha`` existed carry no path and are not
+    counted: they cannot be attributed to one chain of the host.
+    """
+    want = _chain_tail_path_sha(chain_path)
+    found = 0
+    try:
+        entries = list((_mac_sentinel_path().parent / "chain_tails").iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        if entry.name.endswith(".tmp"):
+            continue
+        try:
+            doc = json.loads(entry.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict) and doc.get("path_sha") == want:
+            found += 1
+    return found
+
+
 def _record_chain_tail(chain_path: Path, tail_hash: str, *, genesis: str | None = None) -> None:
     """Persist the tail hash atomically (tmp + os.replace). Best-effort: a
     failure must never break an audit write. Called under the chain lock."""
@@ -2229,7 +2262,11 @@ def _record_chain_tail(chain_path: Path, tail_hash: str, *, genesis: str | None 
         tmp = tp.with_name(tp.name + f".{os.getpid()}.tmp")
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps({"tail": tail_hash, "ts": time.time()}))
+            # R3-SEC-5: the record is genesis-keyed, so on its own it cannot be
+            # tied to a path. ``path_sha`` names the chain file it belongs to;
+            # the boot tripwire reads it as proof that a chain lived there.
+            fh.write(json.dumps({"tail": tail_hash, "ts": time.time(),
+                                 "path_sha": _chain_tail_path_sha(chain_path)}))
         os.replace(tmp, tp)
     except Exception:  # noqa: BLE001
         pass
@@ -3536,10 +3573,62 @@ _AUDIT_MAX_DETAIL_VALUE_LEN = 2048
 # a benign key is a low-frequency residual risk we accept to keep the floor
 # from corrupting the forensic trail. Credential tokens stay — they are
 # unambiguous and high-value.
+# Round 3 (R3-SEC-4 / R3-SEC-11). Building blocks of the key rules below.
+#  * ``_KEY_BODY_GUARD``: a key body is NOT slug-shaped. A slug is at most 25
+#    lower-case words (each up to 16 letters plus an optional short number, or
+#    a short number alone) joined by ``-`` / ``_`` -
+#    ``learn-model-cache-directory-v2``. (A digit alone does not tell a key
+#    from a slug: that one ends in ``v2``.) That body rule is what
+#    keeps ``/tmp/sk-learn-model-cache-directory-v2/x`` out, so the lookbehind
+#    can go back to ``(?<![A-Za-z0-9])``: round 2 widened it to ``/ _ . -`` and
+#    thereby let through every key behind a path, an env-style name or a dotted
+#    config key (``/v1/keys/sk-...``, ``OPENAI_API_KEY_sk-...``,
+#    ``cfg.key.sk-...``).
+#  * Every unbounded scan is anchored or bounded: each alternative is linear
+#    on a 100k-character adversarial value (pinned by
+#    ``tests/security/test_r3_secret_regex.py``).
+_SLUG_SEG = r"(?:[a-z]{1,16}\d{0,4}|\d{1,4})"
+_KEY_BODY_GUARD = (
+    r"(?!" + _SLUG_SEG + r"(?:[-_]" + _SLUG_SEG + r"){0,24}(?![A-Za-z0-9_-]))"
+)
 _AUDIT_SECRET_VALUE_RE = re.compile(
-    r"sk-[A-Za-z0-9]{20,}"                              # OpenAI-style key
+    # OpenAI / Anthropic / OpenRouter key. Not preceded by a letter or digit
+    # (``task-...``, ``risk-...`` are words, not keys) - except directly after
+    # an ESCAPED line break (``\nsk-...`` inside a JSON-encoded string).
+    r"(?:(?<![A-Za-z0-9])|(?<=\\[nrt]))sk-" + _KEY_BODY_GUARD + r"[A-Za-z0-9_-]{20,}"
+    # ``sk-ant-`` is unambiguous: matched behind any prefix
+    # (``x-api-key-sk-ant-api03-...``).
+    r"|sk-ant-" + _KEY_BODY_GUARD + r"[A-Za-z0-9_-]{20,}"
+    # A letter-glued legacy key (``tokensk-...``): only a pure alphanumeric
+    # body mixing upper case, lower case and digits, so ``task-<hex id>`` and
+    # ``task-<uuid>`` stay readable.
+    r"|sk-(?=[A-Za-z0-9]{0,64}[A-Z])(?=[A-Za-z0-9]{0,64}[a-z])(?=[A-Za-z0-9]{0,64}\d)[A-Za-z0-9]{20,}"
+    r"|(?<![A-Za-z0-9])xai-" + _KEY_BODY_GUARD + r"[A-Za-z0-9_-]{20,}"   # xAI key
+    r"|AIza[0-9A-Za-z_-]{30,}"                          # Google API key
+    r"|(?<![A-Za-z0-9])hf_[A-Za-z0-9]{20,}"             # Hugging Face token
+    r"|(?<![A-Za-z0-9])npm_[A-Za-z0-9]{36}"             # npm access token
+    r"|glpat-[A-Za-z0-9_-]{20,}"                        # GitLab personal access token
+    r"|github_pat_[A-Za-z0-9_]{20,}"                    # GitHub fine-grained PAT
+    r"|(?<![A-Za-z0-9])[sr]k_(?:live|test)_[A-Za-z0-9]{16,}"   # Stripe secret / restricted key
+    # Telegram bot token: <bot id>:<35 url-safe chars>.
+    r"|(?<![A-Za-z0-9:])\d{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])"
+    # Discord bot token: base64(user id) . timestamp . hmac.
+    r"|(?<![A-Za-z0-9_.-])[MNO][A-Za-z0-9_-]{23,27}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}"
+    # URL userinfo WITH a password. Scheme, user and password are length-bounded
+    # (R3-SEC-11): the unbounded scheme made this alternative quadratic - 5.5 s
+    # on 100k letters.
+    r"|[A-Za-z][A-Za-z0-9+.-]{0,31}://[^\s/:@]{0,256}:[^\s/@]{1,512}@"
+    # Authorization header value, any case: a token68-shaped value with at
+    # least one digit. ``\S{20,}`` matched prose ("the bearer
+    # authentication_is_not_configured...").
+    r"|(?i:bearer)\s{1,8}(?=[A-Za-z0-9._~+/=-]{0,200}\d)[A-Za-z0-9._~+/=-]{20,}"
     r"|AKIA[0-9A-Z]{16}"                                # AWS access key id
-    r"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"  # JWT
+    # AWS secret access key: 40 base64 characters after its name (a bare
+    # 40-character string is indistinguishable from a SHA-1).
+    r"|(?i:aws_secret_access_key)[\"'\s:=]{1,8}[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])"
+    # JWT. Anchored at the start of its run so a long ``eyJeyJ...`` value is
+    # scanned once, not once per ``eyJ``.
+    r"|(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"             # PEM private key
     r"|gh[pousr]_[A-Za-z0-9]{20,}"                      # GitHub token
     r"|xox[baprs]-[A-Za-z0-9-]{10,}"                    # Slack token
@@ -3712,6 +3801,39 @@ def _audit_value_pii(v: str) -> bool:
         if 8 <= digits <= 15 and (tok.startswith("+") or any(c in " ./()-" for c in tok)):
             return True
     return False
+
+
+#: Round 2 (R2-SEC-7): a messenger JID - ``4915112345678@s.whatsapp.net``,
+#: ``4915112345678:12@s.whatsapp.net``, ``4915112345678@c.us``. The e-mail shape
+#: above excludes these on purpose (under a free-text key a JID is a channel
+#: address, and dropping it corrupted the forensic trail). Under an IDENTIFIER
+#: key it is a different matter: the local part IS the person's phone number,
+#: and ``erasure.requested`` wrote it verbatim into the append-only record of
+#: that person's erasure.
+_AUDIT_JID_VALUE_RE = re.compile(
+    r"(?<![\w.+-])\+?\d{7,15}(?::\d{1,4})?@(?:s\.whatsapp\.net|c\.us|lid)(?![\w.-])"
+)
+_AUDIT_BARE_PHONE_RE = re.compile(r"\+\d{8,15}")
+
+
+def audit_identifier_is_pii(v: str) -> bool:
+    """True when an IDENTIFIER value (``subject_id``, ``requester`` ...) carries a
+    personal shape: an e-mail, a phone number, a messenger JID whose local part is
+    a phone number, or a bare ``+<digits>`` number. Wider than
+    :func:`_audit_value_pii`, which stays as it is for free-text keys."""
+    if not isinstance(v, str) or not v:
+        return False
+    return bool(_audit_value_pii(v) or _AUDIT_JID_VALUE_RE.search(v)
+                or _AUDIT_BARE_PHONE_RE.fullmatch(v))
+
+
+def pseudonymise_identifier(v: str) -> str:
+    """``sha256(value)[:8]`` for a personal-shaped identifier, the value itself
+    otherwise - the one transform the chain floor, ``adapter._pii_fp`` and the
+    erasure trail share, so a pseudonym correlates across all three."""
+    if audit_identifier_is_pii(v):
+        return hashlib.sha256(v.encode("utf-8", "surrogatepass")).hexdigest()[:8]
+    return v
 
 
 # ADR-2247 R2b: every terminal video-job record (completed / failed / cancelled) carries these.
@@ -4098,6 +4220,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         # a turn. Four integers, no text — the L34/PII posture is unchanged.
         "input_tokens", "output_tokens",
         "cache_creation_input_tokens", "cache_read_input_tokens",
+        # Review 2026-11-19 round 2 (R2-A2A-2): acs_runtime stamps the worker
+        # span (``spn-<run_id>-<worker_id>``, an opaque identifier) on this
+        # record so the cost reader can join it to its ``engine.span.end`` and
+        # price the run ONCE. Unlisted, the floor dropped it on every write and
+        # the join the emitter was changed for could not happen.
+        "span_id",
     }),
     "acs.engine_error": frozenset({
         "run_id", "worker_id", "engine_id", "model_id", "duration_ms",
@@ -5975,6 +6103,170 @@ for _et, _fields in _EVENT_ALLOWLIST_EXTENSIONS.items():
     _EVENT_ALLOWLIST[_et] = _EVENT_ALLOWLIST.get(_et, frozenset()) | _fields
 del _et, _fields
 
+#: Review 2026-11-19 (GOV-1): event names that were emitted with NO severity
+#: entry (written at the default INFO with their details cut to the vocabulary
+#: floor). One table per name: severity + the exact field set its emitter
+#: passes - read from the emitter, never invented. Merged by UNION into
+#: ``_EVENT_ALLOWLIST`` and by ``setdefault`` into ``EVENT_SEVERITY`` so an
+#: older literal entry above is never narrowed or re-graded.
+_LICENSE_COMMON: frozenset[str] = frozenset({"tenant_id", "cred_ref", "member_id", "license_tier"})
+_REVIEW_20261119_EVENTS: dict[str, tuple[str, frozenset[str]]] = {
+    # core/licensing/audit.py (EVENTS) - the A2A licensing gate. ``cred_ref`` is
+    # the credential's ID (an identifier, never key material); the revocation
+    # reason travels as a length only.
+    "a2a.license_task_verified": ("INFO", _LICENSE_COMMON | {"task_id", "operation", "latency_ms"}),
+    "a2a.license_task_denied": (
+        "WARNING", _LICENSE_COMMON | {"task_id", "operation", "latency_ms", "reason_code"}),
+    "a2a.license_credential_issued": (
+        "INFO", _LICENSE_COMMON | {"issue_id", "status", "key_origin", "validity_days"}),
+    "a2a.license_credential_renewed": ("INFO", _LICENSE_COMMON | {"previous_cred_ref"}),
+    "a2a.license_credential_downgraded": ("WARNING", _LICENSE_COMMON | {"old_tier", "new_tier"}),
+    "a2a.license_credential_revoked": ("WARNING", _LICENSE_COMMON | {"reason_len", "source"}),
+    "a2a.license_delegation_recorded": (
+        "INFO", _LICENSE_COMMON | {"task_id", "operation", "status"}),
+    # core/compute/corvin_compute/audit.py (_ALLOWED_FIELDS) - pipeline and HAC
+    # coordinators. Identifiers, counts, losses and numeric budget dicts only.
+    "compute.run_started": ("INFO", frozenset({
+        # ADR-0127: datasource connection NAMES bound to the run (operator
+        # handles, never credentials).
+        "run_id", "tenant_id", "tool_name", "strategy", "budget", "datasources"})),
+    "compute.pipeline_started": ("INFO", frozenset({
+        "pipeline_id", "tenant_id", "stage_count", "steering_gate", "budget"})),
+    "compute.stage_completed": ("INFO", frozenset({
+        "pipeline_id", "tenant_id", "stage_id", "best_loss", "total_iterations", "tool_name"})),
+    "compute.pipeline_gate_opened": ("INFO", frozenset({
+        "pipeline_id", "tenant_id", "gate_index", "next_stage_id", "budget_remaining"})),
+    "compute.pipeline_terminal": ("INFO", frozenset({
+        "pipeline_id", "tenant_id", "state", "stages_completed", "failed_stage_id",
+        "error_class", "gate_index", "total_wall_s", "reason"})),
+    "compute.pipeline_tool_forged": ("INFO", frozenset({
+        "pipeline_id", "tenant_id", "gate_index", "tool_name", "forge_run_id"})),
+    "compute.hac_started": ("INFO", frozenset({
+        "hac_id", "tenant_id", "manager_count", "backprop_gate", "budget"})),
+    "compute.hac_round_started": ("INFO", frozenset({
+        "hac_id", "tenant_id", "round", "managers_to_run"})),
+    "compute.hac_root_loss_computed": ("INFO", frozenset({
+        "hac_id", "tenant_id", "round", "root_loss", "sub_losses"})),
+    "compute.backprop_gate_opened": ("INFO", frozenset({
+        "hac_id", "tenant_id", "round", "attributions", "budget_remaining"})),
+    "compute.hac_budget_reallocated": ("INFO", frozenset({
+        "hac_id", "tenant_id", "from_manager", "to_manager", "fraction", "trigger"})),
+    "compute.hac_terminal": ("INFO", frozenset({
+        "hac_id", "tenant_id", "state", "rounds_completed", "final_root_loss",
+        "convergence_reason"})),
+    # corvin_operator/bridges/shared/flow_runner.py - written to the flow
+    # manifest after a step; ``budget_after`` is the numeric budget snapshot,
+    # the step output travels as a sha256 prefix only.
+    "mesh_flow.step_completed": ("INFO", frozenset({
+        "tenant_id", "run_id", "step_id", "tokens_used", "output_sha256_prefix", "budget_after"})),
+    "mesh_flow.budget_checkpoint": ("INFO", frozenset({
+        "tenant_id", "run_id", "compute_used", "compute_remaining", "tokens_used",
+        "tokens_remaining", "steps_done", "wall_time_elapsed_s"})),
+    # adapter.py boot integrity check - the code handed to the notification
+    # backend when ``audit_health_check`` finds problems (count only).
+    "audit.chain_integrity_failure": ("CRITICAL", frozenset({"tenant_id", "problem_count"})),
+    # tripwire._record_finding - a reporting-only boot finding (L10 hook missing).
+    # ``detail`` is generated by the tripwire (counts, fixed remedy text).
+    "compliance.tripwire_finding": ("WARNING", frozenset({"tenant_id", "tripwire", "detail"})),
+    # core/vibe_engineering/task_orchestrator.py - a persisted task DAG resumed.
+    "task.resumed": ("INFO", frozenset({"tenant_id", "task_id", "rearmed"})),
+    # Bus names (core/brain/workflow_bridge.py, core/session_manager/lifecycle.py).
+    # Today these are SUBSCRIPTIONS only - no chain writer emits them; they are
+    # registered with the identifier fields their handlers read so a future
+    # chain mirror lands on a contract instead of on the default floor. Never
+    # the node ``output`` or free-text ``error`` the bus payload also carries.
+    "workflow.node_started": ("INFO", frozenset({"tenant_id", "run_id", "node_id", "node_type"})),
+    "workflow.node_completed": ("INFO", frozenset({"tenant_id", "run_id", "node_id"})),
+    "workflow.node_failed": ("WARNING", frozenset({"tenant_id", "run_id", "node_id", "retry_count"})),
+    "workflow.workflow_started": ("INFO", frozenset({"tenant_id", "run_id"})),
+    "workflow.workflow_completed": ("INFO", frozenset({"tenant_id", "run_id"})),
+    "health.stall_detected": ("WARNING", frozenset({"tenant_id", "session_id"})),
+    # Round 2 (R2-SEC-1): both were hidden from the completeness scan by its
+    # filters and written at the default severity with floored details.
+    # corvin_operator/license/tamper_response.py - fail-closed degradation after a
+    # licence integrity failure; ``reason`` is a controlled reason code (<= 64 chars).
+    "license.tamper_response": ("CRITICAL", frozenset({"tenant_id", "reason"})),
+    # corvin_operator/bridges/shared/operator_declaration.py (audit_dict) - the
+    # operator's deployment declaration was read at boot. Version, a boolean, an
+    # ISO date and the profile enum; never ``declared_by``.
+    "operator.declaration_verified": ("INFO", frozenset({
+        "tenant_id", "declaration_version", "dpia_completed", "dpia_date",
+        "deployment_profile"})),
+    # Round 3 (R3-SEC-3): emissions the completeness scan could not see - the
+    # event name reaches the writer through a module constant, a conditional, a
+    # local variable or as a third positional argument. Fields read from the
+    # emitters named on each entry.
+    #
+    # tripwire.py (SEAM_EVENT): the seam record ``audit_chain_intact`` appends
+    # after a broken tail, and the same name for a reporting-only chain finding
+    # (``_record_finding``: tripwire + generated detail). The tripwire reads
+    # ``seam`` and ``last_break_line`` back to decide whether the break is
+    # already sealed - on the vocabulary floor both were dropped.
+    "compliance.chain_discontinuity": ("CRITICAL", frozenset({
+        "tenant_id", "tripwire", "seam", "broken_records", "first_break_line",
+        "last_break_line", "total_records", "detail"})),
+    # erasure_handlers._record_chain_seam: an Art. 17 erasure removed records
+    # from a snapshot chain. Counts and sequence numbers; ``reason`` is the
+    # fixed code ``gdpr_art17_erasure``. Never the subject id.
+    "erasure.chain_seam": ("WARNING", frozenset({
+        "tenant_id", "request_id", "task_id", "removed_count", "first_seq", "last_seq",
+        "reason"})),
+    # memory_bridge (_EVENT_WORKER_HARVEST, _HARVEST_ALLOWED_FIELDS).
+    "memory.worker_harvest": ("INFO", frozenset({
+        "tenant_id", "channel", "chat_key", "scope", "entry_count", "engine_id"})),
+    # decision_registry.record_decision (EU AI Act Art. 14 register).
+    "ai.decision_recorded": ("INFO", frozenset({
+        "tenant_id", "decision_id", "channel", "chat_key", "risk_tier", "engine_id",
+        "persona", "decision_class", "review_status"})),
+    "ai.decision_pending": ("WARNING", frozenset({
+        "tenant_id", "decision_id", "channel", "chat_key", "risk_tier", "engine_id",
+        "persona", "decision_class", "review_status"})),
+    # adapter.py Codex streaming path: engine id and an error CLASS name.
+    "codex.stream_timeout": ("WARNING", frozenset({"tenant_id", "engine_id", "error_class"})),
+    "codex.turn_error": ("WARNING", frozenset({"tenant_id", "engine_id", "error_class"})),
+    # adapter.py: the audio file is removed right after STT (metadata only).
+    "voice.audio_deleted": ("INFO", frozenset({
+        "tenant_id", "msg_id", "file_size_bytes", "sha256_prefix", "deleted"})),
+    "voice.audio_delete_failed": ("WARNING", frozenset({
+        "tenant_id", "msg_id", "file_size_bytes", "sha256_prefix", "deleted"})),
+    # proactive._audit_outcome / _audit_voice: content-free outcome records.
+    # ``dedup_key_hash`` is a sha256, ``reason`` a reason code, ``chars`` a count.
+    "proactive.emitted": ("INFO", frozenset({
+        "tenant_id", "channel", "kind", "dedup_key_hash", "voice", "solicited", "decision",
+        "reason", "lom"})),
+    "proactive.denied": ("WARNING", frozenset({
+        "tenant_id", "channel", "kind", "dedup_key_hash", "voice", "solicited", "decision",
+        "reason", "lom"})),
+    "proactive.rate_limited": ("WARNING", frozenset({
+        "tenant_id", "channel", "kind", "dedup_key_hash", "voice", "solicited", "decision",
+        "reason", "lom"})),
+    "proactive.voice_synthesized": ("INFO", frozenset({
+        "tenant_id", "channel", "kind", "mode", "chars", "backend", "decision", "reason",
+        "lom"})),
+    "proactive.voice_skipped": ("INFO", frozenset({
+        "tenant_id", "channel", "kind", "mode", "chars", "backend", "decision", "reason",
+        "lom"})),
+    # chat_runtime.py (os_audit): the delegated run's result was synced into the
+    # OS transcript (ADR-0213). ``turn_id`` is added by the writer closure.
+    "os_turn.context_sync": ("INFO", frozenset({
+        "tenant_id", "turn_id", "delegated_run_id", "synced"})),
+    # console browser attach (attach_consent.py, confirm_mode.py) through
+    # routes/browser._audit_fn -> console_audit._emit.
+    "browser.attach.consent_granted": ("INFO", frozenset({"tenant_id", "ttl_s"})),
+    "browser.attach.consent_revoked": ("INFO", frozenset({"tenant_id"})),
+    "browser.attach.confirm_mode_each": ("INFO", frozenset({"tenant_id"})),
+    "browser.attach.confirm_mode_watch": ("WARNING", frozenset({"tenant_id", "ttl_s"})),
+    # aco/htrace_uploader._write_upload_audit_event: one per upload cycle
+    # outcome (``sent`` / ``skipped`` / ``error``), a record count only.
+    "htrace.upload.sent": ("INFO", frozenset({"tenant_id", "record_count"})),
+    "htrace.upload.skipped": ("INFO", frozenset({"tenant_id", "record_count"})),
+    "htrace.upload.error": ("WARNING", frozenset({"tenant_id", "record_count"})),
+}
+for _et, (_sev, _fields) in _REVIEW_20261119_EVENTS.items():
+    EVENT_SEVERITY.setdefault(_et, _sev)
+    _EVENT_ALLOWLIST[_et] = _EVENT_ALLOWLIST.get(_et, frozenset()) | _fields
+del _et, _sev, _fields
+
 #: R4-A: keys whose value is an IDENTIFIER that may legitimately carry a PII
 #: SHAPE (an e-mail, a phone) on a bridge install. They are neither dropped
 #: (a record of an erasure with no subject is useless) nor written verbatim
@@ -6280,8 +6572,12 @@ def filter_audit_details(details: dict | None, *, event_type: str = "",
         if drop:
             dropped.append(str(k))
             continue
-        if ((reserved or ks in _AUDIT_PSEUDONYM_KEYS)
-                and isinstance(sv, str) and sv and _audit_value_pii(sv)):
+        if isinstance(sv, str) and sv and (
+                (reserved and _audit_value_pii(sv))
+                # R2-SEC-7: an identifier key also pseudonymises a JID / bare
+                # ``+number``. The reserved spine keeps the narrower test: its
+                # ``chat_key`` JIDs are what readers join on.
+                or (ks in _AUDIT_PSEUDONYM_KEYS and audit_identifier_is_pii(sv))):
             sv = hashlib.sha256(sv.encode("utf-8", "surrogatepass")).hexdigest()[:8]
             fingerprinted.append(str(k))
         cleaned[k if isinstance(k, str) else str(k)] = sv

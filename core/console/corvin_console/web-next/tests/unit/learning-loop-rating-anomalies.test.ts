@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api/client";
-import { ratingStatus } from "@/components/learning-loop-rating";
+import { BASE } from "@/lib/api/client";
+import {
+  ratingStatus,
+  recentDecisionsPath,
+  SKILL_FEEDBACK_PATH,
+} from "@/components/learning-loop-rating";
 import { describeAnomaly } from "@/components/learning-anomalies";
 
 describe("ratingStatus", () => {
@@ -14,6 +19,22 @@ describe("ratingStatus", () => {
   it("says whether the learned config moved", () => {
     expect(ratingStatus({ config_applied: true, trust_weight: 1 }, null)).toBe("Recorded — learned config updated");
     expect(ratingStatus({ config_applied: false, trust_weight: 1 }, null)).toBe("Recorded");
+  });
+});
+
+describe("feedback paths", () => {
+  // api() prepends BASE; a path that repeats it resolves to
+  // /v1/console/v1/console/feedback/skill and every rating 404s.
+  it("are relative to the client's BASE and resolve to the served routes", () => {
+    expect(SKILL_FEEDBACK_PATH.startsWith(BASE)).toBe(false);
+    expect(recentDecisionsPath("os.flow_guard").startsWith(BASE)).toBe(false);
+    expect(`${BASE}${SKILL_FEEDBACK_PATH}`).toBe("/v1/console/feedback/skill");
+    expect(`${BASE}${recentDecisionsPath("os.flow_guard")}`).toBe(
+      "/v1/console/feedback/skill/recent?skill_id=os.flow_guard&limit=5",
+    );
+  });
+  it("encode the skill id", () => {
+    expect(recentDecisionsPath("a b&c")).toBe("/feedback/skill/recent?skill_id=a%20b%26c&limit=5");
   });
 });
 

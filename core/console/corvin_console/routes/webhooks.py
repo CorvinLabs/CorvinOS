@@ -1,9 +1,13 @@
 """Generic Webhook Bridge (ADR-0124 M7).
 
 Operators register inbound webhook channels. External systems POST
-to /webhook/{channel_id}; the bridge verifies HMAC-SHA256 and logs
-the event to the audit chain. Integration with the chat/inbox system
-is a Phase 2 concern.
+to /webhook/{tenant_id}/{channel_id}; the bridge verifies HMAC-SHA256 and
+records the receipt in the audit chain.
+
+What it does NOT do: the payload is not forwarded anywhere - there is no
+chat/inbox delivery on this build. The inbound route therefore answers
+``202 Accepted`` with ``"delivered": false`` (verified and recorded, not
+delivered), never a bare ``200 {"ok": true}`` that reads as "message delivered".
 
 Routes (admin — require_csrf):
   GET    /bridges/custom                     list registered webhook channels
@@ -15,6 +19,7 @@ Route (inbound — HMAC-authenticated, no session required):
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -61,19 +66,66 @@ _RATE_WINDOW_S = 3600.0
 _rate_hits: dict[tuple[str, str], list[float]] = {}
 
 
-def _rate_limit_exceeded(tid: str, channel_id: str, limit: int) -> bool:
-    """Sliding-window counter for one channel. Returns True when this request
-    must be refused (the hit is recorded only when it is allowed, so a
-    throttled caller cannot push the window forward)."""
+def _channel_limit_reached(tid: str, channel_id: str, limit: int) -> bool:
+    """True when the channel's ACCEPTED deliveries already fill its hourly
+    limit. Records nothing - see :func:`_record_delivery`."""
     now = time.time()
     key = (tid, channel_id)
     hits = [t for t in _rate_hits.get(key, ()) if now - t < _RATE_WINDOW_S]
-    if len(hits) >= max(1, int(limit)):
+    if hits:
         _rate_hits[key] = hits
-        return True
-    hits.append(now)
-    _rate_hits[key] = hits
-    return False
+    else:
+        _rate_hits.pop(key, None)
+    return len(hits) >= max(1, int(limit))
+
+
+def _record_delivery(tid: str, channel_id: str) -> None:
+    """Count one SIGNED, accepted delivery against the channel's limit."""
+    _rate_hits.setdefault((tid, channel_id), []).append(time.time())
+
+
+# ── Review 2026-11-19 round 3 (R3-NEW-21): unauthenticated attempts ──────────
+# The channel limit used to be booked BEFORE the signature check, so anyone who
+# knew a channel URL could send ``limit`` unsigned POSTs per hour and lock the
+# legitimate sender out (every signed delivery then got 429). The channel
+# budget is now spent only by requests whose signature verified. Attempts that
+# fail authentication are counted in a separate bucket per
+# (tenant, channel, client address) with the same hourly size: a caller who
+# keeps failing is refused before the body is read, and nobody else is.
+# Behind a reverse proxy every caller shares the proxy's address, so there the
+# bucket throttles unauthenticated traffic as a whole - it still never touches
+# the channel's own delivery budget.
+_UNAUTH_MAX_KEYS = 50_000
+_unauth_hits: dict[tuple[str, str, str], list[float]] = {}
+
+
+def _client_addr(request: Request) -> str:
+    client = getattr(request, "client", None)
+    return str(getattr(client, "host", "") or "unknown")
+
+
+def _unauth_limit_reached(tid: str, channel_id: str, addr: str, limit: int) -> bool:
+    now = time.time()
+    key = (tid, channel_id, addr)
+    hits = [t for t in _unauth_hits.get(key, ()) if now - t < _RATE_WINDOW_S]
+    if hits:
+        _unauth_hits[key] = hits
+    else:
+        _unauth_hits.pop(key, None)
+    return len(hits) >= max(1, int(limit))
+
+
+def _record_unauth(tid: str, channel_id: str, addr: str) -> None:
+    if len(_unauth_hits) >= _UNAUTH_MAX_KEYS:
+        # Bounded memory under address churn: drop buckets whose window passed,
+        # and if that frees nothing, the oldest half.
+        now = time.time()
+        for k in [k for k, v in _unauth_hits.items() if not v or now - v[-1] >= _RATE_WINDOW_S]:
+            _unauth_hits.pop(k, None)
+        if len(_unauth_hits) >= _UNAUTH_MAX_KEYS:
+            for k in sorted(_unauth_hits, key=lambda k: _unauth_hits[k][-1])[: _UNAUTH_MAX_KEYS // 2]:
+                _unauth_hits.pop(k, None)
+    _unauth_hits.setdefault((tid, channel_id, addr), []).append(time.time())
 
 
 # ── R3 follow-up (2026-09-07): replay protection ─────────────────────────────
@@ -115,7 +167,7 @@ def _replay_seen(tid: str, channel_id: str, signature: str) -> bool:
     """True when this exact signature was already accepted inside the window.
 
     Records the signature only when it is NEW, so a refused replay cannot keep
-    its own entry alive (same discipline as `_rate_limit_exceeded`).
+    its own entry alive.
     """
     now = time.time()
     key = (tid, channel_id)
@@ -350,7 +402,7 @@ def remove_webhook_channel(
 
 # ── Inbound route ─────────────────────────────────────────────────────────────
 
-@router.post("/webhook/{tenant_id}/{channel_id}")
+@router.post("/webhook/{tenant_id}/{channel_id}", status_code=http_status.HTTP_202_ACCEPTED)
 async def receive_webhook(
     tenant_id: str,
     channel_id: str,
@@ -359,6 +411,11 @@ async def receive_webhook(
     x_corvin_timestamp: str | None = Header(None),
 ) -> dict[str, Any]:
     """Receive an inbound webhook. No session required; HMAC-authenticated.
+
+    Answers ``202 Accepted``: the signature was verified and the receipt is in
+    the audit chain. The payload is NOT forwarded to a chat or inbox - that
+    delivery does not exist on this build, and the body says so
+    (``"delivered": false``).
 
     The tenant_id in the URL scopes the channel lookup, eliminating cross-tenant
     channel_id collision. External systems must POST to /webhook/<tenant_id>/<channel_id>.
@@ -382,17 +439,26 @@ async def receive_webhook(
 
     tid = tenant_id
 
-    # R2-C3: enforce the channel's own rate limit BEFORE reading any body, so a
-    # throttled caller costs neither memory nor an audit-chain write.
+    # Two cheap refusals BEFORE any body is read (no memory, no chain write):
+    #   * the channel's accepted deliveries already fill its hourly limit, or
+    #   * THIS caller's failed attempts fill its own bucket.
+    # Neither books anything here: the channel budget is spent after the
+    # signature verified, the caller bucket when authentication fails.
     try:
         limit = int(channel.get("rate_limit_per_hour") or 60)
     except (TypeError, ValueError):
         limit = 60
-    if _rate_limit_exceeded(tid, channel_id, limit):
+    addr = _client_addr(request)
+    if (_channel_limit_reached(tid, channel_id, limit)
+            or _unauth_limit_reached(tid, channel_id, addr, limit)):
         raise HTTPException(
             http_status.HTTP_429_TOO_MANY_REQUESTS,
             f"rate limit of {limit}/hour exceeded for channel {channel_id!r}",
         )
+
+    def _unauthenticated(status_code: int, detail: str) -> HTTPException:
+        _record_unauth(tid, channel_id, addr)
+        return HTTPException(status_code, detail)
 
     # R2-C3: capped read (413 past the cap) instead of an unbounded buffer.
     body_bytes = await _read_capped_body(request)
@@ -402,18 +468,18 @@ async def receive_webhook(
     # silently accepted unauthenticated.
     hmac_env = channel.get("hmac_secret_env")
     if not hmac_env:
-        raise HTTPException(
+        raise _unauthenticated(
             http_status.HTTP_503_SERVICE_UNAVAILABLE,
             "channel has no hmac_secret_env — re-register it with one",
         )
     secret = os.environ.get(hmac_env, "")
     if not secret:
-        raise HTTPException(
+        raise _unauthenticated(
             http_status.HTTP_503_SERVICE_UNAVAILABLE,
             "HMAC secret not configured in vault",
         )
     if not x_hub_signature_256:
-        raise HTTPException(
+        raise _unauthenticated(
             http_status.HTTP_401_UNAUTHORIZED,
             "X-Hub-Signature-256 header required",
         )
@@ -423,19 +489,19 @@ async def receive_webhook(
     signed_material = body_bytes
     if channel.get("require_signed_timestamp"):
         if not x_corvin_timestamp:
-            raise HTTPException(
+            raise _unauthenticated(
                 http_status.HTTP_401_UNAUTHORIZED,
                 "X-Corvin-Timestamp header required for this channel",
             )
         try:
             sent_at = float(x_corvin_timestamp)
         except (TypeError, ValueError):
-            raise HTTPException(
+            raise _unauthenticated(
                 http_status.HTTP_401_UNAUTHORIZED,
                 "X-Corvin-Timestamp must be a unix timestamp",
             ) from None
         if abs(time.time() - sent_at) > _TIMESTAMP_SKEW_S:
-            raise HTTPException(
+            raise _unauthenticated(
                 http_status.HTTP_401_UNAUTHORIZED,
                 f"X-Corvin-Timestamp outside the {int(_TIMESTAMP_SKEW_S)}s window",
             )
@@ -445,16 +511,21 @@ async def receive_webhook(
         secret.encode(), signed_material, hashlib.sha256
     ).hexdigest()
     if not hmac.compare_digest(expected_sig, x_hub_signature_256):
-        raise HTTPException(
+        raise _unauthenticated(
             http_status.HTTP_401_UNAUTHORIZED,
             "HMAC signature mismatch",
         )
+
+    # Authenticated: this delivery spends the channel's hourly budget (replays
+    # included - they carry a valid signature and must not be free).
+    _record_delivery(tid, channel_id)
 
     # Replay guard — AFTER the signature check, so an unauthenticated caller
     # can neither probe nor populate the nonce cache.
     if _replay_seen(tid, channel_id, expected_sig):
         try:
-            _security_events.write_event(
+            await asyncio.to_thread(
+                _security_events.write_event,
                 _audit_chain_path(tid),
                 "webhook.replay_rejected",
                 details={"channel_id": channel_id, "tenant_id": tid,
@@ -468,16 +539,14 @@ async def receive_webhook(
             "duplicate signed request (replay window)",
         )
 
-    # Parse body (best-effort JSON)
-    try:
-        payload = json.loads(body_bytes)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        payload = {"raw": body_bytes.decode(errors="replace")[:1024]}
-
+    # The body is not parsed: nothing consumes it. Only its size is recorded.
     # Audit the inbound message (metadata only — never log payload content)
     chain = _audit_chain_path(tid)
+    recorded = True
     try:
-        _security_events.write_event(
+        # A chain write locks and fsyncs: worker thread, not the event loop.
+        await asyncio.to_thread(
+            _security_events.write_event,
             chain,
             "webhook.message_received",
             details={
@@ -488,11 +557,23 @@ async def receive_webhook(
             },
             severity="INFO",
         )
-    except Exception:
-        pass  # audit is best-effort for inbound
+    except Exception:  # noqa: BLE001 - reported to the sender as recorded: false
+        recorded = False
 
     return {
         "ok": True,
+        "accepted": True,
+        # Verified and recorded - not delivered anywhere (no inbox forwarding
+        # on this build). A sender must not read this as "message delivered".
+        "delivered": False,
+        "delivery": "not_available",
+        # Whether the receipt committed to the audit chain.
+        "recorded": recorded,
+        "detail": (
+            ("Signature verified and receipt recorded in the audit log. "
+             if recorded else
+             "Signature verified; the receipt could not be recorded in the audit log. ")
+            + "Forwarding into a chat is not available on this build."),
         "channel_id": channel_id,
         "received_at": time.time(),
         "payload_size": len(body_bytes),

@@ -67,6 +67,113 @@ describe("PanelHost dispatch (host side)", () => {
   });
 });
 
+import { PANEL_SANDBOX, sandboxKeepsOrigin, panelTargetOrigin, contextForTarget } from "@/panels/PanelHost";
+describe("PanelHost sandbox (generated / manifest panels)", () => {
+  it("PANEL_SANDBOX never keeps the console origin", () => {
+    expect(PANEL_SANDBOX).toBe("allow-scripts");
+    expect(sandboxKeepsOrigin(PANEL_SANDBOX)).toBe(false);
+    expect(sandboxKeepsOrigin("allow-scripts allow-same-origin")).toBe(true);
+  });
+
+  it("answers an opaque-origin panel with targetOrigin '*' (a concrete origin never reaches it)", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <PanelHost src="/v1/console/panels/demo/index.html" sandbox={PANEL_SANDBOX} theme="dark" />
+      </MemoryRouter>,
+    );
+    const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
+    const win = stubFrameWindow(iframe);
+    const post = vi.spyOn(win, "postMessage");
+    window.dispatchEvent(new MessageEvent("message", {
+      source: win,
+      origin: "null",
+      data: { type: "corvin:panel:ready", protocolVersion: "1" },
+    }));
+    expect(post).toHaveBeenCalled();
+    const [msg, target] = post.mock.calls[0];
+    expect(msg).toMatchObject({ type: "corvin:host:hello" });
+    expect(target).toBe("*");
+    // A "*" message reaches whatever document the frame holds: no tenant id in it.
+    const ctx = (msg as { ctx: Record<string, unknown> }).ctx;
+    // dataPaths: what this panel may request - nothing until its manifest says so.
+    expect(ctx).toEqual({ baseUrl: "/v1/console", theme: "dark", contractVersion: "1", dataPaths: [] });
+    expect("tenantId" in ctx).toBe(false);
+  });
+
+  it("an external https panel gets its OWN origin as targetOrigin, never '*'", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <PanelHost
+          src="https://panels.example.com/widget/index.html"
+          sandbox="allow-scripts allow-same-origin"
+          tenantId="acme"
+        />
+      </MemoryRouter>,
+    );
+    const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+    const win = stubFrameWindow(iframe);
+    const post = vi.spyOn(win, "postMessage");
+    window.dispatchEvent(new MessageEvent("message", {
+      source: win,
+      origin: "https://panels.example.com",
+      data: { type: "corvin:panel:ready", protocolVersion: "1" },
+    }));
+    const [msg, target] = post.mock.calls[0];
+    expect(target).toBe("https://panels.example.com");
+    expect((msg as { ctx: { tenantId?: string } }).ctx.tenantId).toBe("acme");
+  });
+
+  it("an external https panel WITHOUT allow-same-origin is opaque: '*' and no tenant id", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <PanelHost src="https://panels.example.com/widget/index.html" sandbox="allow-scripts" tenantId="acme" />
+      </MemoryRouter>,
+    );
+    const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+    const win = stubFrameWindow(iframe);
+    const post = vi.spyOn(win, "postMessage");
+    window.dispatchEvent(new MessageEvent("message", {
+      source: win,
+      origin: "null",
+      data: { type: "corvin:panel:ready", protocolVersion: "1" },
+    }));
+    const [msg, target] = post.mock.calls[0];
+    expect(target).toBe("*");
+    expect(JSON.stringify(msg)).not.toContain("acme");
+  });
+
+  it("panelTargetOrigin / contextForTarget", () => {
+    expect(panelTargetOrigin({ srcDoc: "<p>x</p>", sandbox: "allow-scripts allow-same-origin" })).toBe("*");
+    expect(panelTargetOrigin({ src: "/a/b.html", sandbox: "allow-scripts" })).toBe("*");
+    expect(panelTargetOrigin({ src: "/a/b.html", sandbox: "allow-scripts allow-same-origin" }))
+      .toBe(window.location.origin);
+    expect(panelTargetOrigin({ src: "https://x.example:8443/p", sandbox: "allow-same-origin" }))
+      .toBe("https://x.example:8443");
+    // an unparsable src never degrades to "*"
+    expect(panelTargetOrigin({ src: "http://[bad", sandbox: "allow-same-origin" })).toBe(window.location.origin);
+    const full = { baseUrl: "/v1/console", tenantId: "acme", theme: "light" as const, contractVersion: "1" };
+    expect(contextForTarget(full, "https://x.example")).toBe(full);
+    expect(contextForTarget(full, "*")).toEqual({ baseUrl: "/v1/console", theme: "light", contractVersion: "1" });
+  });
+
+  it("keeps a concrete targetOrigin for a frame that keeps its origin", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <PanelHost src="/external-panels/x/index.html" sandbox="allow-scripts allow-same-origin" />
+      </MemoryRouter>,
+    );
+    const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+    const win = stubFrameWindow(iframe);
+    const post = vi.spyOn(win, "postMessage");
+    window.dispatchEvent(new MessageEvent("message", {
+      source: win,
+      data: { type: "corvin:panel:ready", protocolVersion: "1" },
+    }));
+    expect(post.mock.calls[0][1]).toBe(window.location.origin);
+  });
+});
+
 import { isSafeInternalNavTarget } from "@/panels/PanelHost";
 describe("isSafeInternalNavTarget (P4/review hardening)", () => {
   it("accepts SPA-internal paths", () => {

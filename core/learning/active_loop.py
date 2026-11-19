@@ -77,7 +77,7 @@ class ActiveLearningLoop:
             if node.anti_when:
                 for anti_context in node.anti_when:
                     if any(anti_context in str(v) for v in context.values()):
-                        warnings.append(f"⚠️ Antipattern detected: '{anti_context}' context")
+                        warnings.append(f"WARN: Antipattern detected: '{anti_context}' context")
             
             return {
                 "result": result,

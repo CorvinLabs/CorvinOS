@@ -147,7 +147,8 @@ interface DbTypeConfig {
   name: string;
   category: string;
   description: string;
-  icon: string;
+  /** Decorative type mark: an emoji, or a lucide icon where no emoji fits. */
+  icon: React.ReactNode;
   defaultLocality: "local" | "any";
   configFields: WizardField[];
   credentials: CredentialField[];
@@ -286,7 +287,8 @@ const DB_CATALOG: DbTypeConfig[] = [
     name: "Amazon Redshift",
     category: "Cloud Storage",
     description: "Redshift analytics database — PostgreSQL-compatible",
-    icon: "🔴",
+    // Not a red status dot: a neutral database mark for the Redshift entry.
+    icon: <Database className="inline-block h-5 w-5 text-red-600 dark:text-red-400" aria-hidden="true" />,
     defaultLocality: "any",
     configFields: [
       { key: "host",     label: "Cluster endpoint",

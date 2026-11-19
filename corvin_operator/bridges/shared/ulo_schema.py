@@ -88,7 +88,7 @@ class UserObjective:
 
     def summary_line(self) -> str:
         """One-line human-readable summary for list displays."""
-        status = "✅" if self.active else "⏸"
+        status = "[active]" if self.active else "[paused]"
         prio   = _PRIORITY_LABEL.get(self.priority, self.priority)
         cr_str = (
             f"  compliance: {self.compliance_rate:.0%}"

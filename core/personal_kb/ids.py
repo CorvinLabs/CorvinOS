@@ -21,7 +21,7 @@ def new_ulid(now_ms: int | None = None) -> str:
 
 
 def is_ulid(value: object) -> bool:
-    return isinstance(value, str) and bool(ULID_RE.match(value))
+    return isinstance(value, str) and bool(ULID_RE.fullmatch(value))
 
 
 def new_oid() -> str:

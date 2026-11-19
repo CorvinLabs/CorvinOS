@@ -294,12 +294,27 @@ class RunDelegateSafetyFlowTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("prompt-safety-refused", result.error)
 
-    def test_blocking_classifier_error_fail_safe_proceeds(self):
-        # classifier_error → fail-safe (proceed with WARNING audit)
+    def test_blocking_classifier_error_is_a_denial(self):
+        # Review 2026-11-19 (A2A-12): blocking releases a prompt only on SAFE;
+        # a classifier that produced no verdict denies (fail-closed).
+        eng = _FakeEngine()
         result = run_delegate(
             engine="codex_cli",
             prompt="anything",
             prompt_safety_mode="blocking",
+            safety_runner=_runner_failing("classifier unreachable"),
+            engine_factory=_factory(eng),
+            audit=False,
+        )
+        self.assertFalse(result.ok)
+        self.assertIn("prompt-safety-refused", result.error or "")
+        self.assertIn("no verdict", result.error or "")
+
+    def test_advisory_classifier_error_still_proceeds(self):
+        result = run_delegate(
+            engine="codex_cli",
+            prompt="anything",
+            prompt_safety_mode="advisory",
             safety_runner=_runner_failing("classifier unreachable"),
             engine_factory=_factory(_FakeEngine()),
             audit=False,

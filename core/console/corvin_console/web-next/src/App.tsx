@@ -1,6 +1,6 @@
 import * as React from "react";
 import { mergePanelRoutes } from "@/panels/registry";
-import PanelHost from "@/panels/PanelHost";
+import PanelHost, { PANEL_SANDBOX } from "@/panels/PanelHost";
 import { useAiPanels, aiPanelSrc } from "@/adapters/ai-panels";
 import { useConsoleManifest } from "@/adapters/capabilities";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
@@ -93,7 +93,8 @@ function useManifestPanelRoutes(): React.ReactNode[] {
 // removed so a fresh install lands directly on the chat console — the
 // installer now marks onboarding complete itself (corvinOS/installer/core.py
 // step_18_finalise) instead of waiting for a "Finish" click in a modal.
-// ConsoleAssistant is now embedded in AppLayout (header button + panel).
+// components/assistant/ConsoleAssistant.tsx is not mounted anywhere: neither here
+// nor in AppLayout. The shell is the layout alone.
 function AuthenticatedShell() {
   return <AppLayout />;
 }
@@ -115,8 +116,9 @@ function RootRedirect() {
 
 export default function App() {
   // AI-generated panels (ADR-0366): mounted dynamically as sandboxed iframes, so a
-  // panel the KI just created is reachable without a rebuild. Trusted (first-party,
-  // same-origin API) → allow-same-origin for its credentialed fetches.
+  // panel the assistant just created is reachable without a rebuild. Sandboxed with
+  // PANEL_SANDBOX (scripts only, opaque origin): generated code never gets the
+  // console origin, so it cannot call the API with the operator's session.
   const { data: aiPanels } = useAiPanels();
   const manifestPanelRouteElements = useManifestPanelRoutes();
   // Routes are rendered UNGATED: every panel route is mounted, always. Access is
@@ -176,7 +178,7 @@ export default function App() {
               <Route
                 key={p.id}
                 path={p.id}
-                element={<PanelHost src={aiPanelSrc(p.id)} sandbox="allow-scripts allow-same-origin" />}
+                element={<PanelHost src={aiPanelSrc(p.id)} sandbox={PANEL_SANDBOX} />}
               />
             ))}
             <Route path="workflows" element={<WorkflowsListPage />} />

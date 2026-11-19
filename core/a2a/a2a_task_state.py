@@ -52,7 +52,12 @@ REASONS = frozenset({
 })
 
 _FILE = "task_state.jsonl"
-_MAX_LIVE = 4000            # in-memory entries; oldest evicted
+_MAX_LIVE = 4000            # in-memory entries over ALL origins (backstop)
+#: Entries ONE origin may hold. The store is shared by every paired peer of a
+#: tenant; with only the global cap, one origin sending task after task evicted
+#: every other origin's stages (their senders then read "unknown" for tasks that
+#: were still running). An origin over its share evicts its OWN oldest entries.
+_MAX_LIVE_PER_ORIGIN = 500
 _MAX_FILE_BYTES = 4 * 1024 * 1024
 _ID_MAX = 128
 
@@ -108,6 +113,41 @@ def _load(root: Path) -> None:
             _persist(root, k, e)
 
 
+def _evict_order(keys: "list[tuple[str, str]]") -> "list[tuple[str, str]]":
+    """Eviction order: finished tasks first, then the oldest."""
+    return sorted(keys, key=lambda x: (_mem[x]["stage"] not in TERMINAL,
+                                       _mem[x]["updated_at"]))
+
+
+def _evict(origin_id: str, keep: "tuple[str, str] | None" = None) -> None:
+    """Hold the caps (caller holds ``_lock``). Per origin first: an origin over
+    its share loses its OWN entries. The global cap is the backstop and takes
+    from whichever origin holds the most, never from the quiet ones.
+
+    ``keep`` is the entry that was just recorded and is never a victim: a task
+    whose FIRST recorded stage is terminal (rejected, failed) sorts to the front
+    of the "finished first" order, so in a store full of running tasks it was
+    evicted by its own insert and its sender read "unknown" for it.
+    """
+    mine = [x for x in _mem if x[0] == origin_id and x != keep]
+    excess = len(mine) + (1 if keep in _mem else 0) - _MAX_LIVE_PER_ORIGIN
+    if excess > 0:
+        for old in _evict_order(mine)[:excess]:
+            _mem.pop(old, None)
+    while len(_mem) > _MAX_LIVE:
+        counts: dict[str, int] = {}
+        for x in _mem:
+            if x != keep:
+                counts[x[0]] = counts.get(x[0], 0) + 1
+        if not counts:
+            break
+        biggest = max(counts, key=lambda o: counts[o])
+        victims = _evict_order([x for x in _mem if x[0] == biggest and x != keep])
+        take = max(1, min(len(victims), len(_mem) - _MAX_LIVE))
+        for old in victims[:take]:
+            _mem.pop(old, None)
+
+
 def _retention_days() -> int:
     try:
         import a2a_feed  # noqa: PLC0415
@@ -144,14 +184,23 @@ def _persist(root: Path, k: tuple[str, str], e: dict[str, Any]) -> None:
 
 def _compact(path: Path) -> None:
     """Rewrite with only the live entries (atomic replace)."""
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        for (o, t), e in _mem.items():
-            fh.write(json.dumps({"origin_id": o, "task_id": t, "stage": e["stage"],
-                                 "stage_seq": e["stage_seq"], "updated_at": e["updated_at"],
-                                 "reason": e.get("reason", "")}) + "\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    import tempfile  # noqa: PLC0415
+    # mkstemp: 0600 from creation, random name, O_EXCL — never a predictable
+    # ``.tmp`` a symlink could have been planted at.
+    fd, tmp = tempfile.mkstemp(prefix=".task_state.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            for (o, t), e in _mem.items():
+                fh.write(json.dumps({"origin_id": o, "task_id": t, "stage": e["stage"],
+                                     "stage_seq": e["stage_seq"], "updated_at": e["updated_at"],
+                                     "reason": e.get("reason", "")}) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def record_stage(origin_id: str, task_id: str, stage: str, reason: str = "",
@@ -178,9 +227,7 @@ def record_stage(origin_id: str, task_id: str, stage: str, reason: str = "",
             e = {"stage": stage, "stage_seq": (cur["stage_seq"] + 1) if cur else 1,
                  "updated_at": time.time(), "reason": reason, "boot": True}
             _mem[k] = e
-            if len(_mem) > _MAX_LIVE:
-                for old in sorted(_mem, key=lambda x: _mem[x]["updated_at"])[: len(_mem) - _MAX_LIVE]:
-                    _mem.pop(old, None)
+            _evict(k[0], keep=k)
             _persist(root, k, e)
             return {"prev": prev, "stage": stage, "stage_seq": e["stage_seq"]}
     except Exception:  # noqa: BLE001

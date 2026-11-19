@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { safeHttpUrl, safeNavTarget } from '@/lib/safe-url';
+import { safeHttpUrl, safeNavTarget, safePanelSrc } from '@/lib/safe-url';
 
 /**
  * R2-C1 (adversarial review round 2, 2026-09-07).
@@ -117,5 +117,33 @@ describe('safeNavTarget (R4-C7, 2026-09-07)', () => {
                       '/console/app/infinite-session']) {
       expect(safeNavTarget(ok), ok).toBe(true);
     }
+  });
+});
+
+describe('safePanelSrc (manifest iframe src allowlist)', () => {
+  it('accepts a generated-panel path and an https URL', () => {
+    expect(safePanelSrc('/v1/console/panels/my-panel/index.html')).toBe('/v1/console/panels/my-panel/index.html');
+    expect(safePanelSrc('https://example.com/panel.html')).toBe('https://example.com/panel.html');
+  });
+  it('rejects every other same-origin path — it would frame the console or its API', () => {
+    expect(safePanelSrc('/console/app/settings')).toBeNull();
+    expect(safePanelSrc('/v1/console/auth/whoami')).toBeNull();
+    expect(safePanelSrc('/v1/console/panelsX/a/index.html')).toBeNull();
+    expect(safePanelSrc('/external-panels/x/index.html')).toBeNull();
+  });
+  it('rejects path traversal out of the panels prefix', () => {
+    expect(safePanelSrc('/v1/console/panels/../auth/whoami')).toBeNull();
+    expect(safePanelSrc('/v1/console/panels/%2e%2e/auth/whoami')).toBeNull();
+    expect(safePanelSrc('/v1/console/panels/a/./index.html')).toBeNull();
+  });
+  it('rejects http, script and data schemes, protocol-relative and non-strings', () => {
+    expect(safePanelSrc('http://example.com/panel.html')).toBeNull();
+    expect(safePanelSrc('javascript:alert(1)')).toBeNull();
+    expect(safePanelSrc('data:text/html,<script>1</script>')).toBeNull();
+    expect(safePanelSrc('blob:https://example.com/x')).toBeNull();
+    expect(safePanelSrc('//evil.com/v1/console/panels/x')).toBeNull();
+    expect(safePanelSrc('/\\evil.com')).toBeNull();
+    expect(safePanelSrc('panel.html')).toBeNull();
+    expect(safePanelSrc(undefined)).toBeNull();
   });
 });

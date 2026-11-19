@@ -175,7 +175,10 @@ def _corvin_home() -> Path:
 
 
 def _audit_path(tenant_id: str) -> Path:
-    return _corvin_home() / "tenants" / tenant_id / "global" / "audit.jsonl"
+    # SEC-4 (2026-11-19): THE tenant chain. The hand-composed
+    # ``<tenant>/global/<chain>`` this returned is a sibling file the boot
+    # tripwire does not verify and no compliance report reads.
+    return _forge_paths.tenant_audit_chain(tenant_id)
 
 
 def _load_json(path: Path) -> dict:

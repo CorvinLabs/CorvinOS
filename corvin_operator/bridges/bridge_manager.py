@@ -468,7 +468,7 @@ def _materialise_channel(channel: str, npm_bin: str) -> Optional[Path]:
     runtime.mkdir(parents=True, exist_ok=True)
 
     if not src.is_dir():
-        _info(f"  ⚠ source dir not found for {channel}: {src}")
+        _info(f"  WARN: source dir not found for {channel}: {src}")
         return None
 
     # Copy JS source files (skip node_modules, user settings, dirs)
@@ -740,7 +740,7 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
         if rt is not None:
             runtime_dirs[ch] = rt
         else:
-            _info(f"  ⚠ {ch}: materialisation failed — skipping")
+            _info(f"  WARN: {ch}: materialisation failed — skipping")
 
     # Daemons require('../shared/js/...') relative to their runtime dir, so the
     # sibling shared/js/ tree must be present there too.
@@ -800,13 +800,13 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
         _spawn("adapter", [sys.executable, str(adapter_py)], _BRIDGE_DIR / "shared",
                mutate_env=_adapter_queue_env)
     else:
-        _info(f"  ⚠ adapter.py not found at {adapter_py}")
+        _info(f"  WARN: adapter.py not found at {adapter_py}")
 
     # Bridge daemons (Node.js) — run from RUNTIME dirs (where node_modules lives)
     for ch, rt in runtime_dirs.items():
         daemon = rt / "daemon.js"
         if not daemon.exists():
-            _info(f"  ⚠ {ch}/daemon.js not found in runtime dir {rt} — skipping")
+            _info(f"  WARN: {ch}/daemon.js not found in runtime dir {rt} — skipping")
             continue
         _spawn(ch, [node, str(daemon)], rt)
 
@@ -822,7 +822,7 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
                 for p in processes:
                     rc = p.poll()
                     if rc is not None:
-                        _info(f"  ⚠ process (pid={p.pid}) exited unexpectedly (rc={rc})")
+                        _info(f"  WARN: process (pid={p.pid}) exited unexpectedly (rc={rc})")
                         _teardown("unexpected process exit")
                         return 1
                 time.sleep(1.0)
@@ -1347,11 +1347,11 @@ def ensure_windows_autostart(channel: str) -> dict:
             env=env,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        _info(f"  ⚠ windows autostart registration for {channel} failed: {exc}")
+        _info(f"  WARN: windows autostart registration for {channel} failed: {exc}")
         return {"ok": False, "error": str(exc)}
     if proc.returncode != 0:
         _info(
-            f"  ⚠ windows autostart registration for {channel} exited "
+            f"  WARN: windows autostart registration for {channel} exited "
             f"{proc.returncode}: {(proc.stderr or proc.stdout or '').strip()[:300]}"
         )
         return {"ok": False, "error": f"install-autostart exited {proc.returncode}"}
@@ -1514,7 +1514,7 @@ def start_channel_detached(
         _p("Starting the message adapter…")
         adapter_status = ensure_adapter_detached()
         if not adapter_status.get("ok"):
-            _info(f"  ⚠ adapter start failed: {adapter_status.get('error')}")
+            _info(f"  WARN: adapter start failed: {adapter_status.get('error')}")
 
         # A detached process is still just a one-shot spawn — nothing
         # restarts it after a crash or a reboot/relogin without this.
@@ -1522,7 +1522,7 @@ def start_channel_detached(
         # bridge start that already succeeded above.
         autostart_status = ensure_windows_autostart(channel)
         if not autostart_status.get("ok"):
-            _info(f"  ⚠ windows autostart registration failed: {autostart_status.get('error')}")
+            _info(f"  WARN: windows autostart registration failed: {autostart_status.get('error')}")
 
         _p("Bridge started — waiting for WhatsApp to generate the QR…")
         return {

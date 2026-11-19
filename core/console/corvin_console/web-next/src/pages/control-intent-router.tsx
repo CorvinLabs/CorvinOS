@@ -80,21 +80,8 @@ export default function ControlIntentRouterPage() {
     },
   });
 
-  // Reset statistics
-  const resetMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`${API_BASE}/reset`, { method: "POST" });
-      if (!res.ok) throw new Error("Failed to reset stats");
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["control-intent-router"] });
-      toast({ title: "Statistics reset successfully" });
-    },
-    onError: () => {
-      toast({ title: "Failed to reset stats", variant: "destructive" });
-    },
-  });
+  // No "Reset Stats": no backend route resets router statistics, so the button
+  // that used to sit in the control bar could only ever report a failure.
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -165,15 +152,6 @@ export default function ControlIntentRouterPage() {
           aria-label={autoRefresh ? "Pause auto-refresh" : "Resume auto-refresh"}
         >
           {autoRefresh ? "Pause" : "Resume"} Auto-Refresh
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => resetMutation.mutate()}
-          disabled={resetMutation.isPending}
-          aria-label="Reset all router statistics"
-        >
-          Reset Stats
         </Button>
       </div>
 

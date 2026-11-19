@@ -40,6 +40,21 @@ CHAT_OUTPUT_MODULES = (
     "corvin_operator/bridges/shared/acs_runtime.py",
 )
 
+# Modules whose strings are log lines, CLI output or machine-read records (review
+# 2026-11-19, BR-8). They carry a status as TEXT (``OK:`` / ``WARN:`` / ``ERROR:``) and
+# no status icon at all, so the same literal scan applies to them: a glyph here is not
+# "a second source" of the vocabulary, it is an icon where none belongs. Kept apart from
+# CHAT_OUTPUT_MODULES because the remedy differs (text, not ``status_markers.icon()``).
+MACHINE_OUTPUT_MODULES = (
+    "corvin_operator/bridges/bridge_manager.py",
+    "corvin_operator/license/cli.py",
+    "corvin_operator/bridges/shared/compliance/eu_ai_act_audit.py",
+    "corvin_operator/bridges/shared/compliance_manifest.py",
+    "corvin_operator/bridges/shared/ulo_schema.py",
+    "corvin_operator/context_engineering/talent_score.py",
+    "core/learning/active_loop.py",
+)
+
 # JavaScript chat-output modules (T-0249): every bridge daemon (discord, telegram, slack,
 # whatsapp, signal, teams, email) and every other non-test module under corvin_operator/bridges
 # (shared/js, per-bridge helpers), node_modules excluded. They take their icons from
@@ -193,6 +208,19 @@ class StatusGlyphLiteralGuardTests(unittest.TestCase):
             for line, value in find_literal_glyphs(text, rel):
                 offenders.append(f"{rel}:{line}: {value!r}")
         self.assertEqual(offenders, [], "use status_markers.icon() / _status_icon() instead")
+
+
+    def test_no_status_glyph_literal_in_log_cli_and_machine_output(self) -> None:
+        offenders = []
+        for rel in MACHINE_OUTPUT_MODULES:
+            path = REPO / rel
+            # Positive control: the file is there and the scan sees its string literals.
+            self.assertTrue(path.is_file(), f"missing module: {rel}")
+            text = path.read_text(encoding="utf-8")
+            self.assertGreater(count_string_literals(text), 0, rel)
+            for line, value in find_literal_glyphs(text, rel):
+                offenders.append(f"{rel}:{line}: {value!r}")
+        self.assertEqual(offenders, [], "write the status as text (OK: / WARN: / ERROR:)")
 
 
 class StatusMarkerJsonExportTests(unittest.TestCase):

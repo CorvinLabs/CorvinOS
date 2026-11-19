@@ -69,6 +69,8 @@ def _sandbox(tmp_path: Path, tenant_id: str = "_default"):
         from fastapi.testclient import TestClient
 
         webhooks_route._rate_hits.clear()  # per-process window must not leak between tests
+
+        webhooks_route._unauth_hits.clear()
         webhooks_route._seen_signatures.clear()  # ditto for the replay nonce cache
 
         rec = _auth.create_session(tenant_id=tenant_id, token_fingerprint="test-fp")
@@ -170,7 +172,7 @@ class WebhookHardeningTests(unittest.TestCase):
             )
             ok = client.post(f"/v1/console/webhook/{tid}/signed", content=payload,
                              headers={"X-Hub-Signature-256": _sign(payload)})
-            self.assertEqual(ok.status_code, 200, ok.text)
+            self.assertEqual(ok.status_code, 202, ok.text)
             # the secret is never echoed back by the admin listing
             listing = admin.get("/v1/console/bridges/custom").json()
             self.assertNotIn(SECRET.decode(), json.dumps(listing))
@@ -205,7 +207,7 @@ class WebhookHardeningTests(unittest.TestCase):
                 codes.append(client.post(
                     f"/v1/console/webhook/{tid}/throttled", content=body,
                     headers={"X-Hub-Signature-256": _sign(body)}).status_code)
-            self.assertEqual(codes[:3], [200, 200, 200], codes)
+            self.assertEqual(codes[:3], [202, 202, 202], codes)
             self.assertEqual(codes[3:], [429, 429, 429], codes)
 
     def test_rate_limit_is_per_channel_and_per_tenant(self):
@@ -214,12 +216,12 @@ class WebhookHardeningTests(unittest.TestCase):
             _legacy_channel(wh, tid, "b", hmac_secret_env=ENV_VAR, rate_limit_per_hour=1)
             b1, b2, b3 = b'{"n":1}', b'{"n":2}', b'{"n":3}'
             self.assertEqual(client.post(f"/v1/console/webhook/{tid}/a", content=b1,
-                                         headers={"X-Hub-Signature-256": _sign(b1)}).status_code, 200)
+                                         headers={"X-Hub-Signature-256": _sign(b1)}).status_code, 202)
             self.assertEqual(client.post(f"/v1/console/webhook/{tid}/a", content=b2,
                                          headers={"X-Hub-Signature-256": _sign(b2)}).status_code, 429)
             # a different channel has its own budget
             self.assertEqual(client.post(f"/v1/console/webhook/{tid}/b", content=b3,
-                                         headers={"X-Hub-Signature-256": _sign(b3)}).status_code, 200)
+                                         headers={"X-Hub-Signature-256": _sign(b3)}).status_code, 202)
 
 
     def test_throttled_request_is_refused_before_hmac_and_before_audit(self):
@@ -256,7 +258,7 @@ class WebhookHardeningTests(unittest.TestCase):
             at_cap = b"b" * cap
             ok = client.post(f"/v1/console/webhook/{tid}/signed", content=at_cap,
                              headers={"X-Hub-Signature-256": _sign(at_cap)})
-            self.assertEqual(ok.status_code, 200, ok.text)
+            self.assertEqual(ok.status_code, 202, ok.text)
 
     def test_oversized_chunked_body_without_content_length_is_rejected(self):
         """A streamed body carries no Content-Length — the cap must still hold
@@ -332,7 +334,7 @@ class WebhookReplayTests(unittest.TestCase):
             body = b'{"event": "payment.captured", "amount": 500}'
             hdr = {"X-Hub-Signature-256": _sign(body)}
             url = f"/v1/console/webhook/{tid}/replay"
-            self.assertEqual(client.post(url, content=body, headers=hdr).status_code, 200)
+            self.assertEqual(client.post(url, content=body, headers=hdr).status_code, 202)
             before = len(self._chain_lines(home, tid))
             for _ in range(3):
                 r = client.post(url, content=body, headers=hdr)
@@ -354,7 +356,7 @@ class WebhookReplayTests(unittest.TestCase):
                 body = json.dumps({"n": i}).encode()
                 r = client.post(url, content=body,
                                 headers={"X-Hub-Signature-256": _sign(body)})
-                self.assertEqual(r.status_code, 200, r.text)
+                self.assertEqual(r.status_code, 202, r.text)
 
     def test_replay_cache_is_scoped_per_channel(self):
         with _sandbox(Path(self._tmp)) as (client, admin, home, tid, wh):
@@ -362,8 +364,8 @@ class WebhookReplayTests(unittest.TestCase):
             _legacy_channel(wh, tid, "c2", hmac_secret_env=ENV_VAR, rate_limit_per_hour=100)
             body = b'{"x": 1}'
             hdr = {"X-Hub-Signature-256": _sign(body)}
-            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/c1", content=body, headers=hdr).status_code, 200)
-            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/c2", content=body, headers=hdr).status_code, 200)
+            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/c1", content=body, headers=hdr).status_code, 202)
+            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/c2", content=body, headers=hdr).status_code, 202)
             self.assertEqual(client.post(f"/v1/console/webhook/{tid}/c1", content=body, headers=hdr).status_code, 409)
 
     def test_unsigned_request_cannot_poison_the_nonce_cache(self):
@@ -378,7 +380,7 @@ class WebhookReplayTests(unittest.TestCase):
                                          headers={"X-Hub-Signature-256": "sha256=bad"}).status_code, 401)
             self.assertEqual(wh._seen_signatures, {})
             self.assertEqual(client.post(url, content=body,
-                                         headers={"X-Hub-Signature-256": _sign(body)}).status_code, 200)
+                                         headers={"X-Hub-Signature-256": _sign(body)}).status_code, 202)
 
     # ── opt-in signed timestamp ──────────────────────────────────────────────
 
@@ -412,7 +414,7 @@ class WebhookReplayTests(unittest.TestCase):
             ok = client.post(url, content=body,
                              headers={"X-Hub-Signature-256": _sign_ts(fresh, body),
                                       "X-Corvin-Timestamp": fresh})
-            self.assertEqual(ok.status_code, 200, ok.text)
+            self.assertEqual(ok.status_code, 202, ok.text)
 
     def test_timestamp_is_covered_by_the_signature(self):
         """A captured body whose timestamp header is simply rewritten must fail
@@ -427,7 +429,7 @@ class WebhookReplayTests(unittest.TestCase):
             sig = _sign_ts(captured_ts, body)
             self.assertEqual(client.post(url, content=body,
                                          headers={"X-Hub-Signature-256": sig,
-                                                  "X-Corvin-Timestamp": captured_ts}).status_code, 200)
+                                                  "X-Corvin-Timestamp": captured_ts}).status_code, 202)
             # attacker keeps the signature, bumps the timestamp
             r = client.post(url, content=body,
                             headers={"X-Hub-Signature-256": sig,

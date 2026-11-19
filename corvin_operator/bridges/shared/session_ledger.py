@@ -418,9 +418,14 @@ def append_turn(
     assistant_text: str, msg_id: str = "", ts: float | None = None,
     sender: str = "", refused: str = "", spawned: bool = True,
     observers: Optional[list] = None, observer_text: str = "", tenant_id: str = "",
-    persona: str = "",
+    persona: str = "", route: str = "",
 ) -> Optional[dict[str, Any]]:
     """Record one finished turn. Never raises; a failure is audited.
+
+    ``route`` names the CLI session the turn was spawned in when that is not the
+    chat's own one (ADR-2268: the ``.route-<provider>`` directory of a rerouted
+    turn). Coverage is decided per session: a turn can only be live in the
+    transcript of the session it ran in.
 
     ``user_text`` is the OWNER's message only. In a group chat the framed
     observer transcript that preceded it goes into ``observer_text``, kept
@@ -452,6 +457,8 @@ def append_turn(
                  "user_chars": len(user_text)}
         user_text = ""
         observer_text = ""
+    if route:
+        extra["route"] = str(route)
     try:
         return _append(workdir, {
             **extra,
@@ -718,6 +725,9 @@ def _withheld(rec: dict[str, Any]) -> str:
              # cleared, so never re-supplied — but no gate refused it either.
              "pre_spawn_cancelled": "the turn was stopped before its safety check "
                                     "finished",
+             # A turn that raised before any engine was started: nothing proves
+             # which pre-spawn gates it passed, so its text is not kept.
+             "failed_before_spawn": "the turn failed before any engine was started",
              PERSONAL_COMMAND: "a personal-space command is never recorded"}.get(why, f"refused by the {why} gate")
     return f"(message withheld: {label} — not re-supplied)"
 
@@ -827,7 +837,7 @@ def last_manual_reset(records: list[dict[str, Any]]) -> Optional[dict[str, Any]]
 
 
 def uncovered_turns(
-    records: list[dict[str, Any]], live_entries: Optional[list[str]],
+    records: list[dict[str, Any]], live_entries: Optional[list[str]], *, route: str = "",
 ) -> list[dict[str, Any]]:
     """Turns since the operator's last ``/new`` that the live transcript does
     not verifiably hold. ``live_entries is None`` (unreadable) ⇒ all of them.
@@ -835,7 +845,12 @@ def uncovered_turns(
     A turn is live only if a transcript entry IS its message: equal to it, or
     ending with ``"\n" + message`` (the spawn puts a brief / volatile prefix
     in front of the user's text, never after it), aligned contiguously from
-    the newest turn and entry backwards. Anything unproven is re-supplied."""
+    the newest turn and entry backwards. Anything unproven is re-supplied.
+
+    ``route`` is the session ``live_entries`` was read from ("" = the chat's own
+    one). A turn spawned in another session (its recorded ``route`` differs) is
+    never in this transcript: like a delegated turn it is stepped over and
+    re-supplied, and it can neither claim an entry nor end the alignment."""
     fence = last_manual_reset(records)
     fence_seq = int(fence.get("seq") or 0) if fence else 0
     turns = [r for r in records if r.get("kind") == "turn" and int(r.get("seq") or 0) > fence_seq]
@@ -859,7 +874,8 @@ def uncovered_turns(
     pos = len(live_entries)
     for idx in range(len(turns) - 1, -1, -1):
         rec = turns[idx]
-        if rec.get("refused") or rec.get("spawned") is False:
+        if (rec.get("refused") or rec.get("spawned") is False
+                or str(rec.get("route") or "") != str(route or "")):
             continue
         while pos > 0 and live_entries[pos - 1] in notes:
             pos -= 1
@@ -876,7 +892,7 @@ def render_from_records(
     records: list[dict[str, Any]], live_entries: Optional[list[str]], *,
     ledger_file: str = VIEW_FILE,
     verbatim_budget: int = VERBATIM_BUDGET, index_budget: int = INDEX_BUDGET,
-    withhold: Optional[Any] = None,
+    withhold: Optional[Any] = None, route: str = "",
 ) -> tuple[str, dict[str, int]]:
     """Pure renderer (see module docstring). Returns ``(block, stats)``.
 
@@ -888,7 +904,7 @@ def render_from_records(
     whole. The recorded ANSWER is never withheld: it is the assistant's own
     text, and an answer quoting an observer is the same as any reply the
     model gave while that consent held."""
-    unc = uncovered_turns(records, live_entries)
+    unc = uncovered_turns(records, live_entries, route=route)
     if withhold is not None:
         unc = [r if r.get("refused") else _apply_withhold(r, withhold(r)) for r in unc]
     total = sum(1 for r in records if r.get("kind") == "turn")
@@ -995,18 +1011,84 @@ def _publish(workdir: Path | str, records: list[dict[str, Any]], *,
         pass
 
 
+#: Name prefix of a rerouted turn's session directory below the chat workdir
+#: (``session_state.ROUTE_SESSION_PREFIX``; repeated here to keep this module import-free).
+_ROUTE_DIR_GLOB = ".route-*"
+
+
+def _unlink_view(path: Path) -> bool:
+    """Remove one view file (or a symlink planted under its name). Never raises."""
+    try:
+        os.unlink(path)
+        return True
+    except OSError:
+        return False
+
+
+def purge_route_views(workdir: Path | str) -> int:
+    """Remove every ``<chat>/.route-*/.corvin-history.md``; returns how many went.
+
+    A rerouted turn's view is rendered with the provider's withholding, which can
+    show turns the chat's native engine is not cleared for. The adapter removes
+    it when the rerouted spawn ends; this is the second line for a spawn that
+    never reached its cleanup (killed process). Symlinked route directories are
+    not entered. Never raises."""
+    n = 0
+    try:
+        for d in Path(workdir).glob(_ROUTE_DIR_GLOB):
+            if d.is_symlink() or not d.is_dir():
+                continue
+            if _unlink_view(d / VIEW_FILE):
+                n += 1
+    except OSError:
+        pass
+    return n
+
+
 def render_context(
     workdir: Path | str, *, channel: str = "", chat_key: str = "",
     session_id: Optional[str] = None, tenant_id: str = "",
     engine_transcript: bool = True,
     withhold: Optional[Any] = None,
     verbatim_budget: int = VERBATIM_BUDGET, index_budget: int = INDEX_BUDGET,
+    session_dir: Optional[Path | str] = None,
 ) -> str:
     """The block to append to this turn's system prompt ("" when the live
-    transcript already holds every recorded turn). Never raises."""
+    transcript already holds every recorded turn). Never raises.
+
+    ``session_dir`` is the directory the CLI runs in when that is not the chat
+    workdir (ADR-2268: a rerouted turn's ``.route-<provider>``). The RECORD is
+    always the chat's (``workdir``); coverage is decided against the transcript
+    of the session in ``session_dir``, the view is published there (rendered
+    from the record with this call's ``withhold``, never copied), and only the
+    turns recorded for that route can count as live."""
+    route = ""
+    # Where this call publishes its view: the directory the CLI runs in.
+    view_target = view_path(session_dir if session_dir is not None else workdir)
     try:
+        if session_dir is not None:
+            # The chat's own view carries the NATIVE engine's withholding and is one
+            # directory above the provider worker's cwd: it does not stay while that
+            # worker runs (the next native spawn renders it again).
+            _unlink_view(view_path(workdir))
+        else:
+            # A route view carries a PROVIDER's withholding and sits below this
+            # worker's cwd: none survives into a spawn in the chat directory.
+            purge_route_views(workdir)
         records = read_ledger(workdir)
+        if session_dir is not None:
+            route = Path(session_dir).name
+            ledger_wd, workdir = workdir, Path(session_dir)
+        else:
+            ledger_wd = workdir
         if not any(r.get("kind") == "turn" for r in records):
+            if session_dir is not None:
+                # No record (never written, or erased): a view left in the route
+                # directory by an earlier turn must not outlive it.
+                try:
+                    os.unlink(view_path(workdir))
+                except OSError:
+                    pass
             return ""
         sid = current_session_id(workdir) if session_id is None else session_id
         if not engine_transcript:
@@ -1028,21 +1110,32 @@ def render_context(
         # Only the view changes; the record itself is untouched.
         block, stats = render_from_records(
             records, live, verbatim_budget=verbatim_budget, index_budget=index_budget,
-            withhold=withhold)
+            withhold=withhold, route=route)
         _publish(workdir, records, withhold=withhold)
-        _note_render(workdir, stats, channel=channel, chat_key=chat_key, tenant_id=tenant_id)
+        _note_render(ledger_wd, stats, state_name=route, channel=channel, chat_key=chat_key,
+                     tenant_id=tenant_id)
         return block
     except Exception as exc:  # noqa: BLE001
+        # The view in the target directory was rendered by an EARLIER call, possibly
+        # with another engine's or provider's withholding (the chat's own view is
+        # published for the native engine before the route is known). A render that
+        # failed proves nothing about it, so it does not stay in this worker's cwd;
+        # the next successful render publishes it again.
+        _unlink_view(view_target)
         _audit("session_ledger.append_failed", channel=channel, chat_key=chat_key,
                tenant_id=tenant_id, details={"record_kind": "render",
                                              "reason": type(exc).__name__})
         return ""
 
 
-def _note_render(workdir: Path | str, stats: dict[str, int], **kw: Any) -> None:
-    """Audit when the re-supplied set changes (not on every identical turn)."""
+def _note_render(workdir: Path | str, stats: dict[str, int], *, state_name: str = "",
+                 **kw: Any) -> None:
+    """Audit when the re-supplied set changes (not on every identical turn).
+    ``state_name``: a route session keeps its own last-rendered state, so the
+    chat's and the route's renders of one turn do not read as a change each."""
     key = f"{stats['turns_resupplied']}/{stats['verbatim']}/{stats['indexed']}/{stats['omitted']}"
-    state = ledger_dir(workdir) / _STATE_FILE
+    _safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(state_name or "")).strip(".")[:80]
+    state = ledger_dir(workdir) / (f"render_state.{_safe}.json" if _safe else _STATE_FILE)
     try:
         prev = json.loads(state.read_text(encoding="utf-8")).get("key")
     except (OSError, ValueError, AttributeError):

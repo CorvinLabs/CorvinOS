@@ -51,6 +51,8 @@ class StageCtx:
     task_obj: Any = None                           # the _task_adapter view
     persona: str = ""                              # active persona id (namespace gate for
                                                    # explicit skill requests, ADR-0281/0283)
+    session: Any = None                            # the caller's session object (who the turn
+                                                   # is for: the memory stage's owner check)
 
 
 @dataclass

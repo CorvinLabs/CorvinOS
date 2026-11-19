@@ -316,17 +316,38 @@ def _console_tier(task_type: str, tenant_id: str | None) -> str | None:
         return None
 
 
+def _env_tier(name: str) -> str:
+    """An operator's tier model from the environment, in the form the CLI accepts.
+
+    ``CORVIN_OS_MODEL_LOW`` / ``CORVIN_OS_MODEL_HIGH`` are operator input like any
+    pin, and Tier 3 (autoselect), Tier 2.8 (ATO), ``escalate_for_error`` and the
+    savings cap all return these values straight to ``--model``. Returned verbatim,
+    a provider-qualified value (``anthropic/claude-sonnet-5``) or a family id the
+    registry only holds as a dated snapshot reached the CLI unresolved and every
+    turn on the default path answered 404. Same treatment as the pin tiers:
+    :func:`normalise_pin` (never fail-closed — an id this process cannot verify
+    stays the operator's business, minus a ``provider/`` prefix).
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return ""
+    try:
+        return normalise_pin(raw, "claude_code") or raw
+    except Exception:  # noqa: BLE001 — normalisation must never break a turn
+        return raw
+
+
 def low_model(tenant_id: str | None = None) -> str:
     """Low-tier model id: the Console ``SIMPLE`` choice, else
     ``CORVIN_OS_MODEL_LOW``, else the newest Haiku."""
-    val = _console_tier("SIMPLE", tenant_id) or os.environ.get("CORVIN_OS_MODEL_LOW", "").strip()
+    val = _console_tier("SIMPLE", tenant_id) or _env_tier("CORVIN_OS_MODEL_LOW")
     return val if val else tier_model("haiku")
 
 
 def high_model(tenant_id: str | None = None) -> str:
     """High-tier (default) model id: the Console ``MEDIUM`` choice, else
     ``CORVIN_OS_MODEL_HIGH``, else the newest Sonnet."""
-    val = _console_tier("MEDIUM", tenant_id) or os.environ.get("CORVIN_OS_MODEL_HIGH", "").strip()
+    val = _console_tier("MEDIUM", tenant_id) or _env_tier("CORVIN_OS_MODEL_HIGH")
     return val if val else tier_model("sonnet")
 
 
@@ -988,9 +1009,12 @@ def classify_os_model(
         ml = _lineage()
         fam = ml.family_of(registry_id) if ml else None
         if fam:
-            newest = tier_model(fam)
-            if resolve_registry_id(newest, engine_id):
-                registry_id = newest
+            # The RESOLVED id, not the family name tier_model() returned: where the
+            # registry holds the newest version only as a dated snapshot, the bare
+            # family id is not something the CLI accepts.
+            newest_id = resolve_registry_id(tier_model(fam), engine_id)
+            if newest_id:
+                registry_id = newest_id
 
     # Guard 3 — never de-escalate an already-large context (see docstring).
     default_rank = _rank(high_model(tenant_id))

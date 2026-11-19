@@ -8,6 +8,7 @@ import { AlertCircle, XCircle } from "lucide-react";
 import { useIDBQuota, formatBytes } from "@/hooks/use-idb-quota";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { icon } from "@/lib/status-markers";
 
 export function QuotaWarningBanner() {
   const { quota } = useIDBQuota();
@@ -51,7 +52,7 @@ export function QuotaWarningBanner() {
 
           {quota.isCritical && (
             <p className={cn("text-xs mt-2 font-medium", textColor)}>
-              ⚠️ Please review and delete old tasks to free up space.
+              {icon("warning")} Please review and delete old tasks to free up space.
             </p>
           )}
         </div>

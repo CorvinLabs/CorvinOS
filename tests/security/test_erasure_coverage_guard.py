@@ -156,7 +156,9 @@ def test_ccc_erase_rejects_invalid_subject(home):
     from corvin_console import chat_router
     from entity_extract import EntityPlan  # type: ignore
 
-    plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": "alice@example.com"}, confidence=1.0)
+    # "@" is a valid subject character since the 2026-11-19 review (SEC-5: channel ids carry
+    # it); whitespace and path separators still are not.
+    plan = EntityPlan(entity_type="erasure_request", slots={"subject_id": "alice smith/../x"}, confidence=1.0)
     # /erase asks for a one-time code first; take the one the router would have shown the user.
     plan.slots["confirm"] = chat_router._issue_erase_code("_default", plan.slots["subject_id"])
     result = asyncio.run(chat_router.dispatch(plan, "_default"))

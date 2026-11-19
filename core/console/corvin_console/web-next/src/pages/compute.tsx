@@ -12,6 +12,7 @@ import {
   MessageSquare, Package, Play, RefreshCw, Server, Settings, Shield,
   Tag, Target, TrendingDown, Trash2, Trophy, X, Zap,
 } from "lucide-react";
+import { Flag } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -1785,7 +1786,11 @@ function ExperimentComparisonTable({ runs, baselineId, championId }: {
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-1">
                     {isChampion && <span className="text-[10px]">🏆</span>}
-                    {isBaseline && !isChampion && <span className="text-[10px]">📌</span>}
+                    {isBaseline && !isChampion && (
+                      <span title="Baseline run" className="inline-flex">
+                        <Flag className="h-3 w-3 text-amber-600 dark:text-amber-400" aria-label="Baseline run" />
+                      </span>
+                    )}
                     <span className="font-mono text-[10px] truncate max-w-32">{run.run_id}</span>
                   </div>
                 </td>
@@ -2136,8 +2141,8 @@ function WorldMap({ countries }: { countries: string[] }) {
           title={cc}
         />
       ))}
-      <div className="absolute bottom-1 right-2 text-[9px] text-muted-foreground">
-        🟢 {countries.length} markets covered
+      <div className="absolute bottom-1 right-2 flex items-center gap-1 text-[9px] text-muted-foreground">
+        <Globe className="h-2.5 w-2.5" aria-hidden="true" /> {countries.length} markets covered
       </div>
     </div>
   );

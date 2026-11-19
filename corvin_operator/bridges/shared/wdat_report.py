@@ -60,8 +60,57 @@ def _corvin_home() -> Path:
     return Path.home() / ".corvin"
 
 
-def _audit_path(tenant_id: str) -> Path:
-    return _corvin_home() / "tenants" / tenant_id / "global" / "audit.jsonl"
+def _forge_paths():
+    if _FORGE_PATH not in sys.path:
+        sys.path.insert(0, _FORGE_PATH)
+    from forge import paths as _fp  # type: ignore[import-untyped]
+    return _fp
+
+
+def _audit_path(tenant_id: str, corvin_home: "Path | None" = None) -> Path:
+    """THE tenant audit chain (``forge.paths.tenant_audit_chain``).
+
+    Review 2026-11-19 (SEC-4): this returned a hand-composed
+    ``<tenant>/global/<chain>`` - a sibling file. The report therefore READ a
+    chain no ACS writer appends to, verified that file for its "Chain:" badge,
+    and WROTE ``audit.wdat_content_accessed`` (the record of a decrypt) into a
+    file the boot tripwire never verifies. With an explicit *corvin_home* the
+    resolver's own tenant-relative layout is rebased onto that root, so the
+    layout still has exactly one definition.
+    """
+    fp = _forge_paths()
+    chain = Path(fp.tenant_audit_chain(tenant_id))
+    if corvin_home is None:
+        return chain
+    try:
+        return Path(corvin_home) / chain.relative_to(Path(fp.corvin_home()))
+    except ValueError:
+        return chain
+
+
+def _legacy_sibling_chains(canonical: Path, tenant_id: str) -> list[Path]:
+    """Historical non-canonical chains of this tenant that exist on disk. They
+    are append-only history (never merged or rewritten) and are only READ, so a
+    run recorded before the convergence stays reportable."""
+    try:
+        fp = _forge_paths()
+        root = Path(fp.corvin_home())
+        base = canonical
+        for _ in _chain_parts(canonical, fp, tenant_id):
+            base = base.parent
+        out = []
+        for legacy in fp.legacy_audit_chains(tenant_id).values():
+            cand = base / Path(legacy).relative_to(root)
+            if cand != canonical and cand.is_file():
+                out.append(cand)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _chain_parts(canonical: Path, fp, tenant_id: str) -> tuple:
+    """Path components of the canonical chain below the runtime root."""
+    return Path(fp.tenant_audit_chain(tenant_id)).relative_to(Path(fp.corvin_home())).parts
 
 
 def _iter_audit_events(audit_path: Path, event_types: frozenset[str]) -> list[dict]:
@@ -69,17 +118,20 @@ def _iter_audit_events(audit_path: Path, event_types: frozenset[str]) -> list[di
     events: list[dict] = []
     if not audit_path.exists():
         return events
+    # Streamed with a cheap substring pre-filter: the canonical chain is
+    # hundreds of MB, and ``read_text().splitlines()`` held all of it twice.
+    needles = tuple(t.encode("utf-8") for t in event_types)
     try:
-        for line in audit_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if obj.get("event_type") in event_types:
-                events.append(obj)
+        with audit_path.open("rb") as fh:
+            for raw in fh:
+                if not any(n in raw for n in needles):
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(obj, dict) and obj.get("event_type") in event_types:
+                    events.append(obj)
     except OSError as exc:
         log.warning("wdat_report: cannot read %s: %s", audit_path, exc)
     return events
@@ -281,11 +333,11 @@ def generate_report(
     can pass it in — avoids the ~/.corvin vs project-.corvin split on dev machines.
     """
     effective_home = corvin_home or _corvin_home()
-    if corvin_home is not None:
-        audit_path_obj = corvin_home / "tenants" / tenant_id / "global" / "audit.jsonl"
-    else:
-        audit_path_obj = _audit_path(tenant_id)
-    events = _iter_audit_events(audit_path_obj, _WDAT_EVENTS)
+    audit_path_obj = _audit_path(tenant_id, corvin_home)
+    events: list[dict] = []
+    for _legacy in _legacy_sibling_chains(audit_path_obj, tenant_id):
+        events.extend(_iter_audit_events(_legacy, _WDAT_EVENTS))
+    events.extend(_iter_audit_events(audit_path_obj, _WDAT_EVENTS))
     tree = _build_tree(events, run_id)
 
     workers = tree["workers"]

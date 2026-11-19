@@ -470,6 +470,7 @@ class ClaudeCodeEngine:
         "add_system_prompt": True,
         "version_flag": "--version",
         "session_pinning": True,        # ADR-0049: supports --resume <session-id>
+        "argv_prefix": True,            # L29.5: launcher argv (bwrap) is prepended
     }
 
     # ECI manifest (ADR-0069 M6) — declared lazily to avoid import-time
@@ -709,6 +710,7 @@ class ClaudeCodeEngine:
         continue_session: bool = False,
         resume_session_id: str | None = None,
         streaming: bool = True,
+        argv_prefix: list[str] | None = None,
     ) -> Iterator[StreamEvent]:
         if resume_session_id and continue_session:
             raise ValueError(
@@ -835,6 +837,12 @@ class ClaudeCodeEngine:
         _shim = prepare_cli_argv(args, None if prompt_via_stdin else prompt)
         self._shim_prep = _shim
         args = _shim.argv
+        # Layer 29.5 (delegate sandbox): ``argv_prefix`` is a launcher argv
+        # (bwrap ...) the caller wants in FRONT of the engine command. Declared
+        # as capability "argv_prefix"; a caller that requires the sandbox checks
+        # the capability before it passes the prefix.
+        if argv_prefix:
+            args = [*[str(a) for a in argv_prefix], *args]
         stdin_pipe = subprocess.PIPE if (prompt_via_stdin or _shim.stdin_text is not None) else None
 
         # Windows: npm installs the `claude` CLI as a `claude.cmd` shim, and

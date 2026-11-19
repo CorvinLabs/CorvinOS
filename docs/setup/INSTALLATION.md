@@ -50,8 +50,12 @@ A path that is not a CorvinOS checkout is refused before anything is downloaded.
 The installer bootstraps the `uv` runtime (which brings its own Python — no system Python, pip, or
 package manager needed) and a local Node.js runtime, then installs your checkout with
 `uv tool install --editable` into an isolated tool environment and adds it to your PATH. It also
-installs the Claude Code CLI (skip with `--no-claude-code` / `-NoClaudeCode`) and provisions the
-voice (STT + TTS) models so the install is voice-ready out of the box. No local LLM model is
+provisions the voice (STT + TTS) models so the install is voice-ready out of the box.
+`install.sh` does **not** install the Claude Code CLI unless you pass `--with-claude-code`: the
+vendor installer is neither pinned nor checksummed, so running it is an explicit choice
+(`--no-claude-code` is still accepted and is the default). Without the flag, install Claude Code
+yourself and log in once with `claude`. `install.ps1` never installs it: it only detects an
+existing `claude` on PATH (`-NoClaudeCode` skips that detection). No local LLM model is
 downloaded — local Ollama inference was removed in ADR-2091.
 
 Because the install is editable, the code that runs **is** your checkout: `git pull` +

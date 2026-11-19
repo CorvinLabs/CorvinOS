@@ -1595,6 +1595,20 @@ def tenant_metrics(
     tenant's activity. Cross-tenant aggregates require a separate
     Gateway-operator endpoint (out of scope for Phase 6).
     """
+    # Validate the tenant id BEFORE it names a path. An id such as ``..`` used
+    # to reach the chain-path resolver, raise there and surface as a 500; it
+    # is not a tenant, so the answer is 404 (same body as an unknown resource).
+    # The CANONICAL validator (``forge.tenants``): ``core.tenants`` additionally
+    # reserves names such as ``test``/``local``/``admin`` that are valid
+    # tenants everywhere else, so their ``/metrics`` answered 404.
+    from forge.tenants import validate_tenant_id as _validate_tid  # noqa: PLC0415
+    try:
+        _validate_tid(tid)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"reason": "tenant-not-found"},
+        )
     since: float | None = None
     since_q = request.query_params.get("since")
     if since_q:
@@ -1610,7 +1624,8 @@ def tenant_metrics(
         # chain rescan on every cache miss.
         seconds = min(seconds, 30 * 86400.0)
         import time as _time
-        since = _time.time() - seconds
+        # Snapped to a 60 s grid so repeated scrapes share one cache key.
+        since = _audit_metrics.quantize_since(_time.time() - seconds)
     body = _audit_metrics.render(tid, since=since)
     return PlainTextResponse(
         content=body,

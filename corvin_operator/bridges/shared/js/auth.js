@@ -4,6 +4,29 @@
 // nahezu identisch wiederholt waren.
 
 const fs = require('fs');
+const crypto = require('crypto');
+
+// PIN brute-force lockout (review 2026-11-19, R3-NEW-12). `/auth <pin>` used
+// to be guessable without any throttle. After PIN_MAX_FAILURES wrong PINs
+// inside PIN_FAILURE_WINDOW_MS a sender is locked out for PIN_LOCKOUT_MS;
+// while locked, the PIN is not compared at all (a correct guess is refused
+// too) and the lockout is audited at most once per lockout window.
+const PIN_MAX_FAILURES = 5;
+const PIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+const PIN_LOCKOUT_MS = 15 * 60 * 1000;
+// Bound on the per-sender bookkeeping maps (rate limit + PIN failures). An
+// unknown sender is attacker-chosen input, so an unbounded map is a memory
+// leak anyone can drive (R3-NEW-14).
+const MAX_TRACKED_SENDERS = 10000;
+const DEFAULT_RATE_PER_HOUR = 60;
+
+// Constant-time string comparison. Both sides are hashed first so the
+// comparison length never depends on the secret's length.
+function safeEqual(a, b) {
+  const ha = crypto.createHash('sha256').update(String(a), 'utf8').digest();
+  const hb = crypto.createHash('sha256').update(String(b), 'utf8').digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
 
 // Audit (optional). When voice-audit is missing or the chain library
 // is unavailable, auditEventSync is a no-op — auth never blocks on it.
@@ -27,6 +50,64 @@ function audienceFor(settingsFile, chatKey) {
   }
   try { return _audience(settingsFile, String(chatKey)); }
   catch { return 'owner'; }
+}
+
+// Keep a bookkeeping map bounded: drop the oldest entries (Map iteration
+// order is insertion order; a touched key is re-inserted, so this is LRU).
+function boundMap(map, max = MAX_TRACKED_SENDERS) {
+  while (map.size > max) {
+    map.delete(map.keys().next().value);
+  }
+}
+
+/**
+ * PIN brute-force guard, shared by makeAuth() and the WhatsApp daemon's own
+ * authOk(). Usage, in this order:
+ *   if (guard.isLocked(uid, chatKey)) deny;      // BEFORE comparing the PIN
+ *   if (safeEqual(given, pin)) { guard.clear(uid); accept; }
+ *   guard.fail(uid); deny;
+ * `onLockout(uid, chatKey)` fires at most once per lockout window.
+ */
+function makePinGuard({ now, onLockout } = {}) {
+  const clock = typeof now === 'function' ? now : Date.now;
+  // uid -> { count, first, lockedUntil, notified }
+  const fails = new Map();
+
+  function isLocked(uid, chatKey) {
+    const t = clock();
+    const st = fails.get(uid);
+    if (!st) return false;
+    if (st.lockedUntil && t < st.lockedUntil) {
+      if (!st.notified) {
+        st.notified = true;
+        if (typeof onLockout === 'function') {
+          try { onLockout(uid, chatKey); } catch { /* never block auth */ }
+        }
+      }
+      return true;
+    }
+    if (st.lockedUntil || t - st.first >= PIN_FAILURE_WINDOW_MS) {
+      fails.delete(uid);  // lockout served / failure window expired
+    }
+    return false;
+  }
+
+  function fail(uid) {
+    const t = clock();
+    let st = fails.get(uid);
+    fails.delete(uid);
+    if (!st || t - st.first >= PIN_FAILURE_WINDOW_MS) {
+      st = { count: 0, first: t, lockedUntil: 0, notified: false };
+    }
+    st.count += 1;
+    if (st.count >= PIN_MAX_FAILURES) st.lockedUntil = t + PIN_LOCKOUT_MS;
+    fails.set(uid, st);
+    boundMap(fails);
+  }
+
+  function clear(uid) { fails.delete(uid); }
+
+  return { isLocked, fail, clear, size: () => fails.size };
 }
 
 /**
@@ -76,9 +157,21 @@ function audienceFor(settingsFile, chatKey) {
  *                                            (fail-closed already means no
  *                                            first-sender claim is possible).
  */
-function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normalize, channel, denyOnEmptyWhitelist, lockFirstSender }) {
+function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normalize, channel, denyOnEmptyWhitelist, lockFirstSender, now }) {
   const nrm = normalize || ((x) => String(x));
   const rateMap = new Map();
+  // Injectable clock (tests); defaults to the wall clock.
+  const clock = typeof now === 'function' ? now : Date.now;
+  const pinGuard = makePinGuard({
+    now: clock,
+    onLockout: (u, chatKey) => {
+      if (logger) logger(`auth: PIN lockout for ${u}`);
+      _audit('bridge.pin_failure', {
+        channel: channel || '', user: u, chatKey: chatKey || '',
+        details: { reason: 'lockout' },
+      });
+    },
+  });
   const ch = channel || '';
   const denyEmpty = !!denyOnEmptyWhitelist;
   const lockFirst = !!lockFirstSender && !denyEmpty;
@@ -98,6 +191,9 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
   /**
    * Tri-state classification helper. Returns one of:
    *   'owner'      — user is on the whitelist, full access.
+   *   'guest'      — user is NOT on the whitelist but the chat is open
+   *                  (`audience=all`, `/all on`): may talk to the bot, has
+   *                  NO owner surface (/vault, /all, /debug, /invite, ...).
    *   'read_only'  — user is on the read_only list (and NOT on whitelist),
    *                  may be in the chat but must NOT trigger the bot.
    *   'unknown'    — user is on neither list; legacy whitelist_deny applies.
@@ -105,8 +201,10 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
    * Resolution order: whitelist beats read_only (so an operator who appears
    * on both lists keeps owner privileges). Empty whitelist => DEV mode,
    * everyone classifies as 'owner' (mirrors authOk's legacy fail-open).
-   * audience='all' on the chat profile also classifies the sender as
-   * 'owner' (chat is open to anyone), bypassing read_only on that chat.
+   * audience='all' on the chat profile classifies a non-whitelisted sender
+   * as 'guest' (chat is open to anyone), bypassing read_only on that chat.
+   * It never grants 'owner': until 2026-11-19 it did, and every participant
+   * of a `/all on` chat reached /vault and the rest of the owner surface.
    */
   function classify(uid, chatKey) {
     const cs = currentSettings();
@@ -114,10 +212,21 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
     if (wl.length === 0) return emptyWhitelistIsOwner(cs) ? 'owner' : 'unknown';
     const u = nrm(uid);
     if (wl.includes(u)) return 'owner';
-    if (chatKey && audienceFor(settingsFile, chatKey) === 'all') return 'owner';
+    if (chatKey && audienceFor(settingsFile, chatKey) === 'all') return 'guest';
     const ro = (cs.read_only || []).map(nrm);
     if (ro.includes(u)) return 'read_only';
     return 'unknown';
+  }
+
+  /**
+   * Owner check for the command surface. Whitelist membership ONLY — the
+   * per-chat audience is deliberately not consulted (chatKey = null), so a
+   * guest of an open chat is never an owner. Daemons pass this as `isOwner`
+   * to every command dispatch; `authOk` only answers "may this sender reach
+   * the bot at all".
+   */
+  function isOwner(uid) {
+    return classify(uid, null) === 'owner';
   }
 
   /**
@@ -153,11 +262,16 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
   }
 
   function rateAllow(uid, perHour) {
-    const now = Date.now();
+    const now = clock();
     const HOUR = 3600 * 1000;
+    // A missing / non-numeric limit used to compare `n >= undefined` (never
+    // true) while still booking a timestamp: no limit, but a growing map.
+    if (!(Number.isFinite(perHour) && perHour > 0)) perHour = DEFAULT_RATE_PER_HOUR;
     const arr = (rateMap.get(uid) || []).filter((t) => now - t < HOUR);
+    rateMap.delete(uid);  // re-insert below => most recently used is last
     if (arr.length >= perHour) {
       rateMap.set(uid, arr);
+      boundMap(rateMap);
       _audit('bridge.rate_limit_exceeded', {
         channel: ch, user: nrm(uid),
         details: { per_hour: perHour, observed: arr.length },
@@ -166,6 +280,7 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
     }
     arr.push(now);
     rateMap.set(uid, arr);
+    boundMap(rateMap);
     return true;
   }
 
@@ -212,7 +327,11 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
     // PIN-Auth: User schickt "/auth <pin>" → wenn Match, in Whitelist aufnehmen.
     if (cs.pin && text && text.trim().startsWith('/auth ')) {
       const given = text.trim().slice(6).trim();
-      if (given === cs.pin) {
+      // Lockout BEFORE the comparison: a locked-out sender gets no oracle,
+      // not even for the correct PIN, and costs no further audit record.
+      if (pinGuard.isLocked(u, chatKey)) return false;
+      if (safeEqual(given, cs.pin)) {
+        pinGuard.clear(u);
         const cur = loadSettings();
         cur.whitelist = (cur.whitelist || []).concat([u]);
         // Direct write — kein saveSettings() weil der Caller eventuell
@@ -227,7 +346,8 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
         });
         return true;
       }
-      // wrong PIN — fall through to deny
+      // wrong PIN — count it, then deny
+      pinGuard.fail(u);
       _audit('bridge.pin_failure', {
         channel: ch, user: u, chatKey: chatKey || '',
         details: {},
@@ -243,7 +363,10 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
     return false;
   }
 
-  return { rateAllow, authOk, readOnlyOk, classify };
+  return { rateAllow, authOk, readOnlyOk, classify, isOwner, _rateMapSize: () => rateMap.size };
 }
 
-module.exports = { makeAuth };
+module.exports = {
+  makeAuth, makePinGuard, safeEqual, boundMap,
+  PIN_MAX_FAILURES, PIN_LOCKOUT_MS, PIN_FAILURE_WINDOW_MS, MAX_TRACKED_SENDERS,
+};

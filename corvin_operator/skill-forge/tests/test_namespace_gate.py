@@ -334,6 +334,11 @@ def test_no_caller_persona_is_refused_not_wildcard():
 
 # -- Case 4: unknown persona → its OWN namespace (RL-6) -----------------------
 
+def _own_namespace(persona: str) -> str:
+    from skill_forge.mcp_server import persona_namespace
+    return persona_namespace(persona)
+
+
 def test_unknown_persona_is_namespaced_to_its_own_name():
     print("\n[case 4: persona NOT in persona_namespaces → own-name namespace (RL-6)]")
     sandbox = Path(tempfile.mkdtemp(prefix="sf-ns-4-"))
@@ -345,8 +350,13 @@ def test_unknown_persona_is_namespaced_to_its_own_name():
             client.initialize()
             r = _call(client, "skill_create", _create_args("freeform.thing"))
             assert r.get("isError") is True, r
-            assert "totally_unknown_persona." in r["content"][0]["text"], r
+            # R3-NEW-37: a name a skill name cannot carry gets its sanitised form PLUS a
+            # digest, never the plain ``totally_unknown_persona.`` of another persona.
+            own = _own_namespace("totally-unknown-persona")
+            assert own + "." in r["content"][0]["text"], r
             r = _call(client, "skill_create", _create_args("totally_unknown_persona.thing"))
+            assert r.get("isError") is True, r["content"][0]["text"]
+            r = _call(client, "skill_create", _create_args(own + ".thing"))
             assert r.get("isError") is False, r["content"][0]["text"]
             t("unknown persona is namespaced to its own name", True)
         finally:
@@ -373,7 +383,7 @@ def test_rl6_delegate_and_custom_personas_are_not_wildcards():
                 c.initialize()
                 r = _call(c, "skill_create", _create_args("zz.rl_skill"))
                 assert r.get("isError") is True and "namespace-gate" in r["content"][0]["text"], r
-                r = _force_promote(c, persona.replace("-", "_") + ".rl_skill")
+                r = _force_promote(c, _own_namespace(persona) + ".rl_skill")
                 assert r.get("isError") is True, (persona, r)
             finally:
                 c.close()
@@ -392,7 +402,7 @@ def test_rl5_wildcard_name_without_a_launch_record_is_namespaced():
             c.initialize()
             r = _call(c, "skill_create", _create_args("anything.goes"))
             assert r.get("isError") is True, r
-            r = _force_promote(c, "skill_forge.self_started")
+            r = _force_promote(c, _own_namespace(OPERATOR) + ".self_started")
             assert r.get("isError") is True, r
         finally:
             c.close()

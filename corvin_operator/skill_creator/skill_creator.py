@@ -25,10 +25,11 @@ from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 try:  # package-relative (normal import path)
-    from .llm_client import resolve_llm_client, engine_id_of, ClaudeCodeUnavailable
+    from .llm_client import resolve_llm_client, engine_id_of, ClaudeCodeUnavailable, gated_client
     from .registry_bridge import promote_to_registry
 except ImportError:  # pragma: no cover — flat sys.path insert (console route)
-    from skill_creator.llm_client import resolve_llm_client, engine_id_of, ClaudeCodeUnavailable
+    from skill_creator.llm_client import (resolve_llm_client, engine_id_of, ClaudeCodeUnavailable,
+                                          gated_client)
     from skill_creator.registry_bridge import promote_to_registry
 
 
@@ -415,6 +416,22 @@ def normalize_spec(spec: "SkillSpec") -> "SkillSpec":
             "method": shorten_method(normalize_method(spec.method)),
         }
     )
+
+
+def _tenant_of_registry_root(registry_root) -> Optional[str]:
+    """The tenant a registry root belongs to (``<home>/tenants/<tid>/skill-forge``), or None
+    for a root outside the tenant layout - the client then uses the process tenant. Same rule
+    as the registry's own ``_tenant_and_home``; derived from the path, never the environment."""
+    if not registry_root:
+        return None
+    try:
+        from pathlib import Path as _Path  # noqa: PLC0415
+        root = _Path(str(registry_root))
+        if root.parent.parent.name == "tenants" and root.parent.name:
+            return root.parent.name
+    except Exception:  # noqa: BLE001
+        return None
+    return None
 
 
 # ============================================================================
@@ -1583,7 +1600,8 @@ class SkillCreatorOrchestrator:
     def __init__(self, claude_client=None, registry_root: str = None,
                  progress_cb: Optional[Callable[[str, int, str], None]] = None,
                  iteration_cb: Optional[Callable[[int, float, "SkillSpec"], None]] = None,
-                 escalate_on_k_max: bool = False):
+                 escalate_on_k_max: bool = False,
+                 spawn_gate: Optional[Callable[[str], None]] = None):
         """Initialize orchestrator.
 
         Args:
@@ -1599,10 +1617,24 @@ class SkillCreatorOrchestrator:
             escalate_on_k_max: see ``SkillTester``. Defaults to False here —
                 an operator-facing run returns its best iterate rather than
                 discarding the whole generation.
+            spawn_gate: ``gate(text)`` run on the text of EVERY engine call of
+                this orchestrator before it is made (plan, repair, each LDD
+                iteration, each reviewer); raises to refuse. The client is
+                gated before any phase object receives it, so no phase holds
+                an ungated one. None = the caller gated the request itself.
         """
         # Resolve ONCE and inject, so all four phases provably run on the
-        # same engine and a run cannot half-succeed on two backends.
-        self.client = resolve_llm_client(claude_client)
+        # same engine and a run cannot half-succeed on two backends. An
+        # injected client is returned unchanged; a resolved one is bound to
+        # the tenant the registry root belongs to (its spans, worker env and
+        # model choice - review PLS-2).
+        if claude_client is not None:
+            self.client = resolve_llm_client(claude_client)
+        else:
+            self.client = resolve_llm_client(
+                None, tenant_id=_tenant_of_registry_root(registry_root))
+        self.spawn_gate = spawn_gate
+        self.client = gated_client(self.client, spawn_gate)
         self.engine_id = engine_id_of(self.client)
         self.registry_root = registry_root
         self.progress_cb = progress_cb

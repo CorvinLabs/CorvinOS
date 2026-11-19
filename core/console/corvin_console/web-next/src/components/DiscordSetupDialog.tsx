@@ -11,6 +11,7 @@
 import { useState } from 'react'
 import { CheckCircle, AlertCircle, Copy, ExternalLink, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { icon } from '@/lib/status-markers'
 
 interface ValidateTokenResponse {
   valid: boolean
@@ -63,7 +64,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
 
   const handleValidate = async () => {
     if (!token.trim()) {
-      setError('Token erforderlich')
+      setError('Token required')
       return
     }
 
@@ -157,7 +158,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
         <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-4 flex items-start justify-between">
           <div>
             <h2 className="text-xl font-bold">🤖 Discord Bot Activation</h2>
-            <p className="text-sm text-indigo-100 mt-1">Nur 2 Schritte bis der Bot einsatzbereit ist</p>
+            <p className="text-sm text-indigo-100 mt-1">Two steps until the bot is ready</p>
           </div>
           <button
             onClick={onClose}
@@ -176,7 +177,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
             <>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-2">
-                  Bot Token von Discord Developer Portal
+                  Bot token from the Discord Developer Portal
                 </label>
                 <textarea
                   value={token}
@@ -186,7 +187,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
                   rows={3}
                 />
                 <p className="text-xs text-muted-foreground mt-2">
-                  Token findest du hier: Discord Developer Portal → Applications → Deine App → Bot → Copy Token
+                  Where to find the token: Discord Developer Portal → Applications → your app → Bot → Copy Token
                 </p>
               </div>
 
@@ -205,7 +206,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
           {step === 'validating' && (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-8 h-8 animate-spin text-accent mr-3" />
-              <span>Validiere Token...</span>
+              <span>Validating token…</span>
             </div>
           )}
 
@@ -215,7 +216,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
               <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-4">
                 <div className="flex items-center">
                   <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400 mr-2" />
-                  <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Token validiert ✓</span>
+                  <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Token validated</span>
                 </div>
                 <p className="text-sm text-emerald-700 dark:text-emerald-400 mt-2">
                   App: <strong>{validationResult.appName}</strong> ({validationResult.appId})
@@ -223,7 +224,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
               </div>
 
               <div>
-                <h3 className="font-semibold text-foreground mb-2">Berechtigungen</h3>
+                <h3 className="font-semibold text-foreground mb-2">Permissions</h3>
                 <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
                   {validationResult.permissionsHuman?.map((perm, i) => (
                     <li key={i}>{perm}</li>
@@ -232,7 +233,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
               </div>
 
               <div>
-                <h3 className="font-semibold text-foreground mb-2">Discord Autorisierung</h3>
+                <h3 className="font-semibold text-foreground mb-2">Discord authorisation</h3>
                 <p className="text-sm text-muted-foreground mb-3">
                   Click the button to add the bot to Discord:
                 </p>
@@ -249,7 +250,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
 
               <div className="rounded-md border border-accent/30 bg-accent/10 p-3">
                 <p className="text-xs text-accent-foreground/90">
-                  💡 Alternatively, copy this URL and open it yourself:</p>
+                  {icon("suggestion")} Alternatively, copy this URL and open it yourself:</p>
                 <div className="mt-2 flex items-center justify-between bg-card border border-border rounded p-2">
                   <code className="text-xs font-mono text-muted-foreground overflow-hidden text-ellipsis">
                     {validationResult.url?.substring(0, 50)}...
@@ -270,7 +271,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
 
               <div className="border-t border-border pt-4">
                 <p className="text-sm text-muted-foreground mb-3">
-                  Nach der Autorisierung speichern wir den Token lokal:
+                  After authorising, the token is stored locally:
                 </p>
                 <Button variant="accent" className="w-full" onClick={handleSaveToken}>
                   Save token &amp; finish setup

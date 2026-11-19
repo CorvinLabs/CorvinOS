@@ -62,8 +62,11 @@ class TalentRealDataTests(unittest.TestCase):
         self.td = tempfile.TemporaryDirectory()
         self.addCleanup(self.td.cleanup)
         self.base = Path(self.td.name)
-        self.p = patch.object(T._forge_paths, "tenant_global_dir",
-                              lambda tid: self.base / tid / "global")
+        # The route resolves the chain through core.paths.tenant_audit_chain
+        # (the one resolver); the test redirects that name in the route module.
+        self.p = patch.object(
+            T, "tenant_audit_chain",
+            lambda tid: self.base / tid / "global" / "forge" / "audit.jsonl")
         self.p.start(); self.addCleanup(self.p.stop)
 
     def _client(self, tenant="_default"):

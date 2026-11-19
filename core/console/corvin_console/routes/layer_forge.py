@@ -11,6 +11,11 @@ written audit-first into that tenant's hash chain by the orchestrator; a chain
 write that does not commit answers 503 and changes nothing. Quality gates cannot
 be skipped from here (the CLI's ``--skip-gates`` is an operator-local tool).
 
+Every MUTATING route requires an owner/admin session (``_owner``): creating,
+deploying or overriding the review of a layer definition changes how the
+platform enforces its own rules, so "any authenticated session" is not enough
+(review 2026-11-19 round 3, R3-NEW-18). Reads stay open to every session.
+
 Handlers are sync ``def``: the pipeline runs pytest subprocesses, and FastAPI
 runs sync handlers in its threadpool instead of on the event loop.
 """
@@ -20,7 +25,7 @@ import re
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status as http_status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .. import auth as session_auth
 from .. import forge_runs
@@ -34,6 +39,14 @@ _PLAN_PHASES = ("plan",)
 _CREATE_PHASES = ("validate", "test", "enforce", "review", "create")
 _PROMOTE_PHASES = ("promote",)
 _PCT = {"plan": 50, "validate": 10, "test": 30, "enforce": 55, "review": 75, "create": 90, "promote": 50}
+
+
+def _owner(rec: Any) -> None:
+    """403 unless the session is an owner or admin (same rule as
+    ``skill_forge_distribution_routes._owner``)."""
+    if getattr(rec, "tier", None) not in {"owner", "admin"}:
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN,
+                            detail="owner or admin required")
 
 
 def _orchestrator(tenant_id: str, observer=None):
@@ -98,7 +111,9 @@ class PlanBody(BaseModel):
 class TransitionBody(BaseModel):
     to_status: Literal["accepted", "deployed", "superseded", "proposed"]
     override_review_flags: bool = False
-    override_reason: str = ""
+    #: Required with ``override_review_flags``. Bounded; the audit chain keeps
+    #: a fingerprint of it, never the text.
+    override_reason: str = Field(default="", max_length=500)
 
 
 class GateThresholdAnalysisBody(BaseModel):
@@ -152,6 +167,7 @@ def plan_definition(
     Output (failure):
         {status: 'FAILED', error: '...', phase: 'plan'}
     """
+    _owner(rec)
     layer_id, intent = body_in.layer_id, body_in.intent
     if body_in.attachment_ids:  # re-analysed from the stored bytes now; any problem fails the whole request
         from .forge_intake_api import pack_prompt_block, resolve_pack  # noqa: PLC0415
@@ -179,6 +195,7 @@ def create_definition(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
     manifest: Annotated[dict[str, Any], Body()],
 ) -> dict[str, Any]:
+    _owner(rec)
     identifiable = _identifiable(manifest)
     run, observe = _start_run(rec, "create", _CREATE_PHASES) if identifiable else (None, None)
     result = _orchestrator(rec.tenant_id, observe).create_layer_definition(manifest, skip_gates=False)
@@ -217,6 +234,8 @@ def transition_definition(
         Updated definition with new status
 
     Raises:
+        403: Session is not an owner/admin
+        422: override_review_flags without override_reason
         409: FLAGGED without override, or invalid transition
         404: Definition not found
         503: Audit chain write failed
@@ -224,6 +243,10 @@ def transition_definition(
     from core.orchestration.layer_forge.audit import LayerForgeAuditError
     from core.orchestration.layer_forge.registry import LayerNotFoundError, LayerPromotionError
 
+    _owner(rec)
+    if body.override_review_flags and not body.override_reason.strip():
+        raise HTTPException(status_code=422,
+                            detail="override_reason is required when override_review_flags is set")
     orch = _orchestrator(rec.tenant_id)
     try:
         orch.get(entry_id, version)  # an unknown definition is a 404 and records no run
@@ -287,6 +310,7 @@ def analyze_gate_threshold(
     from core.orchestration.layer_forge.analytics import LayerForgeAnalytics
     from core.orchestration.layer_forge.optimizer import GateThresholdAnalyzer
 
+    _owner(rec)
     orchestrator = _orchestrator(rec.tenant_id)
     analytics = LayerForgeAnalytics(registry=orchestrator.registry, tenant_id=rec.tenant_id)
     analyzer = GateThresholdAnalyzer(rec.tenant_id, analytics_engine=analytics)
@@ -315,6 +339,7 @@ def apply_gate_threshold(
     ``501 Not Implemented`` with the reason in ``detail`` and writes no audit
     record. ``POST /layer-forge/gate-thresholds/analyze`` is the real surface.
     """
+    _owner(rec)
     # Nothing persists a gate threshold: the registry stores none and no gate
     # reads one. This route used to emit ``layer_forge.gate_threshold_applied``
     # with a hard-coded ``old_threshold=1.0`` and answer "not yet persisted",

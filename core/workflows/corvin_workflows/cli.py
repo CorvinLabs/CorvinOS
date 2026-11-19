@@ -567,6 +567,33 @@ def _build_engine(engine_name: str | None):
     raise SystemExit(f"unknown --engine {engine_name!r} (expected 'stub' or 'claude')")
 
 
+
+#: Exit status of a run whose graph finished but whose result is incomplete (a delegation
+#: loop out of budget). Distinct from 1 (failed) so a script can tell the two apart; never 0.
+EXIT_PARTIAL = 3
+
+
+def _partial_nodes(result: Any) -> list[str]:
+    try:
+        return [str(n) for n in (getattr(result, "partial_nodes", None) or [])]
+    except Exception:  # noqa: BLE001 — reporting never raises
+        return []
+
+
+def _run_status(result: Any) -> str:
+    """``result.state``, except ``partial`` for a complete run with a budget-exhausted loop."""
+    if result.state == "complete" and _partial_nodes(result):
+        return "partial"
+    return result.state
+
+
+def _run_exit_code(result: Any) -> int:
+    status = _run_status(result)
+    if status in ("complete", "paused"):
+        return 0
+    return EXIT_PARTIAL if status == "partial" else 1
+
+
 def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tuple[str, int]:
     """Shared pretty/json rendering for both a fresh run() and a resume()."""
     history_len = len(getattr(engine, "history", []))
@@ -605,12 +632,24 @@ def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tu
                 for nid, n in result.nodes.items()
             },
             "final_state": result.final_state,
+            # "partial": the graph ran to its end, but a delegation loop ended on its budget
+            # before its manager said COMPLETE — `state` stays "complete", so a caller that
+            # reads only `state` would take an unfinished result for a finished one.
+            "status": _run_status(result),
+            "partial_nodes": _partial_nodes(result),
         }
-        exit_code = 0 if result.state in ("complete", "paused") else 1
-        return json.dumps(payload, indent=2, default=str), exit_code
+        return json.dumps(payload, indent=2, default=str), _run_exit_code(result)
 
-    icon = {"complete": "✅", "paused": "⏸️", "failed": "❌"}.get(result.state, "❓")
-    lines: list[str] = [f"{icon} **{doc.name}** → `{result.state}`"]
+    status = _run_status(result)
+    # Plain-text label, no status icon: this output is also machine-read (logs, pipes).
+    label = {"complete": "[OK]", "partial": "[PARTIAL]", "paused": "[PAUSED]",
+             "failed": "[FAILED]"}.get(status, f"[{str(status).upper()}]")
+    lines: list[str] = [f"{label} **{doc.name}** → `{status}`"]
+    if status == "partial":
+        lines.append(
+            "A delegation loop reached its budget before its manager completed "
+            f"(node(s): {', '.join(_partial_nodes(result)[:8])}). The result is incomplete."
+        )
     if synthetic:
         lines.append(
             "[STUB] Synthetic demo data (--engine stub). These are not real results."
@@ -624,8 +663,8 @@ def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tu
     for nid, n in result.nodes.items():
         status_tag = "" if n.status == "success" else f" [{n.status}]"
         if n.node_type == "delegation_loop":
-            term = n.output.get("terminal", {})
-            iters = n.output.get("iterations", [])
+            term = n.output.get("_terminal") or n.output.get("terminal") or {}
+            iters = n.output.get("_iterations") or n.output.get("iterations") or []
             lines.append(
                 f"• `{nid}` ({n.node_type}){status_tag}  "
                 f"→ {term.get('state')}  "
@@ -644,8 +683,7 @@ def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tu
         lines.append("```")
         lines.append(reporter_node.output["report_text"])
         lines.append("```")
-    exit_code = 0 if result.state in ("complete", "paused") else 1
-    return "\n".join(lines), exit_code
+    return "\n".join(lines), _run_exit_code(result)
 
 
 def _run_workflow(

@@ -649,6 +649,16 @@ def _load_completion_notify() -> Any:
         return None
 
 
+def _partial_node_ids(result: Any) -> list[str]:
+    """Nodes of a finished run that succeeded without finishing their work (a delegation_loop
+    that ran out of budget before its manager said COMPLETE). Empty for anything else,
+    including a result object that predates ``RunResult.partial_nodes``."""
+    try:
+        return [str(n) for n in (getattr(result, "partial_nodes", None) or [])]
+    except Exception:  # noqa: BLE001 - reporting never decides a run's outcome
+        return []
+
+
 def _notify_result_text(label: str, result: Any) -> tuple[str, bool]:
     """Render a finished AWP ``RunResult`` as plain completion-notify text.
 
@@ -667,7 +677,19 @@ def _notify_result_text(label: str, result: Any) -> tuple[str, bool]:
         return text, True
     if state == "failed":
         return f"{label} failed: {getattr(result, 'error', '') or 'unknown error'}", False
-    return f"{label} completed.", True
+    partial = _partial_node_ids(result) if state == "complete" else []
+    if partial:
+        # PLS-1: a loop that hit its budget is not a finished one. ok stays True (the run did
+        # not fail and its output may be useful), the text says what is missing.
+        return (
+            f"{label} ended PARTIAL: the delegation budget ran out before the manager "
+            f"completed (node(s): {', '.join(partial[:8])}). The result is incomplete.",
+            True,
+        )
+    if state == "complete":
+        return f"{label} completed.", True
+    # "cancelled" or a state this server does not know: never reported as a success.
+    return f"{label} ended with state {state!r}.", False
 
 
 def _completion_notify_hooks(
@@ -926,6 +948,22 @@ def _datasource_licence_problem(tenant_id: str, names: list[str]) -> str | None:
             return (f"datasource '{name}': the '{adapter}' adapter requires a Member licence "
                     "(the Free tier binds local_file connections only)")
     return None
+
+#: The only status of an ACS run that is NOT an error. Measured against the emitters
+#: (2026-11-19): the runtime's run-level ``ACSResult.status`` is "success" | "failed" |
+#: "budget_exhausted", the quota fallback and the adapter's own refusals report "success" |
+#: "failed", the budget watchdog "timeout". ("partial" exists only as a WORKER status inside a
+#: run, never as the run's own.) A positive list (PLS-6): the earlier deny list
+#: ("timeout", "failed") let "budget_exhausted" - and any status added later - through as a
+#: clean result.
+_ACS_OK_STATUSES = ("success",)
+
+
+def _acs_result_is_error(result: Any) -> bool:
+    """True unless the ACS run reported a status on the positive list. A result that is not a
+    dict, or carries no status, is an error too: nothing vouches for it."""
+    return not (isinstance(result, dict) and result.get("status") in _ACS_OK_STATUSES)
+
 
 _ACS_DELEGATE_SCHEMA: dict = {
     "type": "object",
@@ -1465,8 +1503,12 @@ class OrchestrationServer:
     def _run_result_envelope(self, result: Any) -> dict:
         if isinstance(result, dict):  # _run_with_budget timeout sentinel
             return self._text_result(result, is_error=True)
+        partial = _partial_node_ids(result) if result.state == "complete" else []
         envelope = {
-            "status": result.state,  # "complete" | "failed" | "paused"
+            # "complete" | "partial" | "failed" | "paused" | "cancelled". "partial" = the graph
+            # ran to its end but a delegation_loop exhausted its budget first (PLS-1).
+            "status": "partial" if partial else result.state,
+            "partial_nodes": partial,
             "run_id": result.run_id,
             "error": result.error,
             "paused_at_node": result.paused_at_node,
@@ -1480,7 +1522,7 @@ class OrchestrationServer:
                 for nid, n in result.nodes.items()
             },
         }
-        return self._text_result(envelope, is_error=(result.state == "failed"))
+        return self._text_result(envelope, is_error=(result.state in ("failed", "cancelled")))
 
     def _call_workflow_list_paused(self, msgid: Any, args: dict) -> None:
         if not _AWP_AVAILABLE:
@@ -1715,8 +1757,7 @@ class OrchestrationServer:
         except Exception as exc:  # noqa: BLE001
             self._error(msgid, INTERNAL_ERROR, f"acs_delegate failed: {exc}")
             return
-        is_error = isinstance(result, dict) and result.get("status") in ("timeout", "failed")
-        self._respond(msgid, self._text_result(result, is_error=is_error))
+        self._respond(msgid, self._text_result(result, is_error=_acs_result_is_error(result)))
 
 
 def main(argv: list[str] | None = None) -> int:  # noqa: ARG001

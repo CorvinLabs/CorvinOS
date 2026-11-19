@@ -20,8 +20,16 @@ Security properties
   Accepting instances skip sig verification for remote-issued tokens.
 * Keys in token (``hk``, ``rk``) are freshly generated per invite —
   compromise of one token does not affect other connections.
-* ``exp`` field enforces time-bounded validity; ``su`` flag enforces
-  single-use via the registry on the issuing instance.
+* ``exp`` is mandatory and bounded; a token without it is refused.
+* ``su`` (single-use) is enforced ONLY where the registry is: on the issuing
+  instance. An accepting instance cannot verify a foreign token's signature and
+  has no view of the issuer's registry, so two different instances can each
+  accept the same "single-use" token and both hold its keys. The issuer learns
+  of a use only when it claims the invite itself. The effective bound on a
+  leaked token is ``exp`` plus revocation, not ``su``.
+* The payload FORM is validated at parse time (64-hex keys, bounded persona
+  list, bounded ``mt``, mandatory ``exp``): the accepting side writes these
+  fields into its origin / endpoint files.
 
 CI lint: module MUST NOT ``import anthropic``.
 """
@@ -33,6 +41,7 @@ import json
 import os
 import re
 import secrets
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +71,49 @@ OID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Receive path appended to the invite URL: a plain absolute path only — no
 # "@" (userinfo host swap), "?", "#", "\\" or "..".
 _RP_RE = re.compile(r"^(?:/[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}){0,8}$")
+
+
+# ── payload form (review 2026-11-19, A2A-13) ───────────────────────────────
+# A remote-issued token's signature cannot be checked by the accepting side, so
+# every field is the issuer's unverified choice and lands verbatim in the
+# origin / endpoint files. The FORM is therefore enforced at parse time.
+_HEX_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")          # 32 random bytes, hex
+_PERSONA_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+MAX_PERSONAS = 32
+#: Bounds of ``mt`` (max TTL of ONE task the acceptor may send): 1 s .. 24 h.
+MIN_CALL_TTL_S = 1
+MAX_CALL_TTL_S = 24 * 3600
+#: An invite always expires. Default and ceiling of its lifetime.
+DEFAULT_INVITE_TTL_S = 7 * 86400
+MAX_INVITE_TTL_S = 366 * 86400
+_MAX_IID_LEN = 128
+_MAX_URL_LEN = 2048
+
+
+def _valid_personas(pa: object) -> "list[str] | None":
+    """The persona list when it is well-formed, else ``None``."""
+    if not isinstance(pa, list) or not (1 <= len(pa) <= MAX_PERSONAS):
+        return None
+    out: list[str] = []
+    for item in pa:
+        if not isinstance(item, str) or not _PERSONA_RE.fullmatch(item) or ".." in item:
+            return None
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def _valid_call_ttl(mt: object) -> "int | None":
+    if isinstance(mt, bool) or not isinstance(mt, int):
+        return None
+    return mt if MIN_CALL_TTL_S <= mt <= MAX_CALL_TTL_S else None
+
+
+def _finite_number(value: object) -> "float | None":
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    f = float(value)
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
 def is_valid_oid(oid: object) -> bool:
@@ -96,10 +148,32 @@ def _load_or_create_master_key() -> bytes:
         return bytes.fromhex(path.read_text("utf-8").strip())
     path.parent.mkdir(parents=True, exist_ok=True)
     key = secrets.token_bytes(32)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(key.hex(), encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    # 0600 from the first byte (review 2026-11-19, A2A-14): ``write_text`` then
+    # ``chmod`` left the key world-readable at umask for the time in between,
+    # under a predictable ``.tmp`` name. ``mkstemp`` creates the file 0600 with
+    # O_EXCL under a random name; ``os.link`` publishes it only if no other
+    # process created the key meanwhile (two first calls must not end up with
+    # two different master keys).
+    fd, tmp_name = tempfile.mkstemp(prefix=".invite_master_key.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(key.hex())
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp_name, path)
+        except FileExistsError:
+            return bytes.fromhex(path.read_text("utf-8").strip())
+        except OSError:
+            # No hard links on this filesystem: atomic replace (last writer wins).
+            os.replace(tmp_name, path)
+            tmp_name = ""
+    finally:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
     return key
 
 
@@ -147,7 +221,7 @@ def generate_invite(
     receive_path: str = "/v1/a2a/receive",
     allowed_personas: list[str] | None = None,
     max_ttl_s: int = 300,
-    ttl_seconds: float | None = 7 * 86400,
+    ttl_seconds: float | None = DEFAULT_INVITE_TTL_S,
     single_use: bool = False,
     label: str | None = None,
     spawn_worker: bool = False,
@@ -156,7 +230,11 @@ def generate_invite(
 
     Returns ``(InviteToken, token_string)``.
 
-    ``ttl_seconds=None`` means no expiry — explicit opt-out required.
+    Every invite expires: ``ttl_seconds=None`` means the default lifetime
+    (:data:`DEFAULT_INVITE_TTL_S`), and a lifetime above
+    :data:`MAX_INVITE_TTL_S` is refused. (There used to be a no-expiry
+    opt-out; a pairing secret that is valid forever is not issued any more,
+    and ``parse_invite`` refuses a token without ``exp``.)
     """
     if allowed_personas is None:
         allowed_personas = ["assistant"]
@@ -164,9 +242,26 @@ def generate_invite(
         raise InviteError(f"invalid origin_id: {origin_id!r}")
     if not _RP_RE.fullmatch(receive_path or ""):
         raise InviteError(f"invalid receive_path: {receive_path!r}")
+    personas = _valid_personas(list(allowed_personas))
+    if personas is None:
+        raise InviteError("invalid allowed_personas: 1..%d identifiers" % MAX_PERSONAS)
+    allowed_personas = personas
+    if _valid_call_ttl(max_ttl_s) is None:
+        raise InviteError(
+            f"invalid max_ttl_s: an integer in [{MIN_CALL_TTL_S}, {MAX_CALL_TTL_S}]")
+    if not isinstance(iid, str) or not iid or len(iid) > _MAX_IID_LEN:
+        raise InviteError("invalid issuer instance id")
+    if not isinstance(url, str) or not url or len(url) > _MAX_URL_LEN:
+        raise InviteError("invalid url")
+    if ttl_seconds is None:
+        ttl_seconds = DEFAULT_INVITE_TTL_S
+    ttl = _finite_number(ttl_seconds)
+    if ttl is None or not (0 < ttl <= MAX_INVITE_TTL_S):
+        raise InviteError(
+            f"invalid ttl_seconds: an invite must expire within {MAX_INVITE_TTL_S} s")
 
     now = time.time()
-    exp: float | None = (now + ttl_seconds) if ttl_seconds is not None else None
+    exp: float = now + ttl
     hk = secrets.token_hex(32)
     rk = secrets.token_hex(32)
 
@@ -184,8 +279,7 @@ def generate_invite(
         "url": url,
         "v": 1,
     }
-    if exp is not None:
-        payload_dict["exp"] = exp
+    payload_dict["exp"] = exp
     if label:
         payload_dict["lbl"] = label[:_MAX_LABEL_LEN]
 
@@ -229,6 +323,8 @@ def parse_invite(token_str: str) -> tuple[InviteToken, bytes]:
 
     Raises ``InviteError`` on malformed input.
     """
+    if not isinstance(token_str, str) or len(token_str) > 16384:
+        raise InviteError("token is not a string of plausible length")
     if not token_str.startswith(TOKEN_PREFIX):
         raise InviteError("token does not start with 'corvin-a2a:v1:'")
     rest = token_str[len(TOKEN_PREFIX):]
@@ -245,6 +341,12 @@ def parse_invite(token_str: str) -> tuple[InviteToken, bytes]:
         d = json.loads(payload_bytes.decode("utf-8"))
     except Exception as exc:
         raise InviteError(f"token payload JSON invalid: {exc}") from exc
+    # Checked BEFORE any field access: valid JSON need not be an object. A
+    # payload of ``5`` or ``null`` raised TypeError at the ``in`` test below
+    # (a 500 at the pairing route, which maps only InviteError to a 4xx), and a
+    # string payload passed that test by substring match.
+    if not isinstance(d, dict):
+        raise InviteError("token payload is not an object")
 
     missing = {f for f in ("v", "iid", "oid", "url", "rp", "hk", "rk", "pa", "mt", "iat") if f not in d}
     if missing:
@@ -257,19 +359,55 @@ def parse_invite(token_str: str) -> tuple[InviteToken, bytes]:
     if not isinstance(d["rp"], str) or not _RP_RE.fullmatch(d["rp"]):
         raise InviteError("token receive path is not a plain path")
 
+    if isinstance(d["v"], bool) or d["v"] != 1:
+        raise InviteError("token version is not 1")
+    if not isinstance(d["iid"], str) or not d["iid"] or len(d["iid"]) > _MAX_IID_LEN \
+            or not d["iid"].isprintable():
+        raise InviteError("token issuer id is malformed")
+    if not isinstance(d["url"], str) or not d["url"] or len(d["url"]) > _MAX_URL_LEN \
+            or not d["url"].isprintable():
+        raise InviteError("token url is malformed")
+    # The two keys become ``hmac_key`` / ``recv_key`` of the pairing: exactly
+    # 32 bytes of hex. Anything else (a short key, an empty string, a non-string
+    # that str() would have turned into "None") is refused, never coerced.
+    for _field in ("hk", "rk"):
+        if not isinstance(d[_field], str) or not _HEX_KEY_RE.fullmatch(d[_field]):
+            raise InviteError(f"token {_field} is not a 64-hex-character key")
+    if d["hk"].lower() == d["rk"].lower():
+        raise InviteError("token hk and rk must differ")
+    personas = _valid_personas(d["pa"])
+    if personas is None:
+        raise InviteError("token persona list is malformed")
+    call_ttl = _valid_call_ttl(d["mt"])
+    if call_ttl is None:
+        raise InviteError("token mt is out of bounds")
+    iat = _finite_number(d["iat"])
+    if iat is None or iat < 0:
+        raise InviteError("token iat is malformed")
+    # ``exp`` is mandatory: a token without it never expired.
+    exp = _finite_number(d.get("exp"))
+    if exp is None or exp <= iat or exp - iat > MAX_INVITE_TTL_S + 1:
+        raise InviteError("token exp is missing or out of bounds")
+    if not isinstance(d.get("su", False), bool) or not isinstance(d.get("sw", False), bool):
+        raise InviteError("token flags are malformed")
+    if d.get("lbl") is not None and not isinstance(d.get("lbl"), str):
+        raise InviteError("token label is malformed")
+    if len(sig_bytes) != 32:
+        raise InviteError("token signature has the wrong length")
+
     ikey = sig_bytes.hex()[:16]
     token = InviteToken(
-        v=int(d["v"]),
-        iid=str(d["iid"]),
+        v=1,
+        iid=d["iid"],
         oid=str(d["oid"]),
-        url=str(d["url"]),
+        url=d["url"],
         rp=str(d["rp"]),
-        hk=str(d["hk"]),
-        rk=str(d["rk"]),
-        pa=list(d["pa"]),
-        mt=int(d["mt"]),
-        iat=float(d["iat"]),
-        exp=float(d["exp"]) if "exp" in d else None,
+        hk=d["hk"].lower(),
+        rk=d["rk"].lower(),
+        pa=personas,
+        mt=call_ttl,
+        iat=iat,
+        exp=exp,
         su=bool(d.get("su", False)),
         lbl=str(d["lbl"])[:_MAX_LABEL_LEN] if d.get("lbl") else None,
         ikey=ikey,
@@ -309,7 +447,11 @@ def validate_invite(
     """
     ts = now if now is not None else time.time()
 
-    if token.exp is not None and ts >= token.exp:
+    # Fail-closed: a token object without an expiry (hand-built; parse_invite
+    # never returns one) is not valid.
+    if token.exp is None:
+        return ValidationResult(ok=False, reason="no_expiry")
+    if ts >= token.exp:
         return ValidationResult(ok=False, reason="expired")
 
     if registry is not None:

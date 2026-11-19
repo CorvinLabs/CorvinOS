@@ -1,23 +1,72 @@
 """
-Speech-to-Text Engine (Phase 2b)
-Abstraction layer for STT providers with graceful fallback
+Speech-to-Text availability for the Voice Summary routes.
 
-Supports:
-- Google Cloud Speech-to-Text (production)
-- Local mock STT (development/testing)
-- Fallback mode when STT unavailable
+What is real here: :func:`is_stt_available` asks the platform's own STT stack
+(``stt.provider_status()``, the same introspection the Console voice-status
+panel shows) whether a provider can transcribe right now.
 
-@date 2026-09-25
-@phase Phase 2b: Real STT Integration
+What is NOT real: :class:`STTEngine` with ``STTProvider.MOCK``. It returns one
+of four canned sentences picked by a hash of the input - it transcribes
+nothing. It exists for unit tests and must be constructed explicitly; no
+production path selects it. Until 2026-11-19 ``get_stt_engine()`` defaulted to
+the mock, a missing Google credential or package silently fell back to it, and
+``/chat/voice/health`` therefore reported "healthy" on an install with no
+speech-to-text at all (review round 3, R3-NEW-30).
 """
 
 import asyncio
 import logging
+import threading
+import time
 from typing import Optional, Tuple
 from enum import Enum
 import os
 
 logger = logging.getLogger(__name__)
+
+
+#: Seconds an availability verdict is reused. ``provider_status()`` imports
+#: packages and stats model files; the health route may be polled.
+_AVAILABILITY_TTL_S = 30.0
+_availability: Optional[Tuple[float, bool]] = None
+_availability_lock = threading.Lock()
+
+
+def _probe_platform_stt() -> bool:
+    """True when at least one real STT provider reports ``ready``.
+
+    BLOCKING (imports, file stats) - async callers use ``asyncio.to_thread``.
+    Any failure to ask means "not available": nothing is assumed."""
+    try:
+        from stt import provider_status  # type: ignore[import-not-found]  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 - the voice stack is not importable here
+        try:
+            # voice.py puts the voice scripts on sys.path at import time.
+            from ..routes import voice as _voice  # noqa: F401,PLC0415
+            from stt import provider_status  # type: ignore[import-not-found]  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            return False
+    try:
+        status = provider_status()
+    except Exception:  # noqa: BLE001
+        logger.warning("STT provider status unavailable", exc_info=True)
+        return False
+    return any(bool((info or {}).get("ready")) for info in status.values()
+               if isinstance(info, dict))
+
+
+def is_stt_available(*, max_age_s: float = _AVAILABILITY_TTL_S) -> bool:
+    """Whether a real speech-to-text provider is usable right now (cached for
+    ``max_age_s``). BLOCKING on a cache miss. Never answered from the mock."""
+    global _availability
+    now = time.monotonic()
+    with _availability_lock:
+        if _availability is not None and now - _availability[0] < max_age_s:
+            return _availability[1]
+    verdict = _probe_platform_stt()
+    with _availability_lock:
+        _availability = (time.monotonic(), verdict)
+    return verdict
 
 
 class STTProvider(str, Enum):
@@ -34,11 +83,14 @@ class STTResult:
 
 class STTEngine:
     """
-    Speech-to-Text engine with multi-provider support.
-    Phase 2b: MVP with mock provider. Phase 2c: Real Google Cloud integration.
+    Speech-to-Text engine. The provider is ALWAYS chosen by the caller:
+
+    * ``GOOGLE_CLOUD`` - real; unavailable (never mocked) without credentials
+      or without the ``google-cloud-speech`` package.
+    * ``MOCK`` - canned sentences for unit tests. Not a transcription.
     """
 
-    def __init__(self, provider: STTProvider = STTProvider.MOCK):
+    def __init__(self, provider: STTProvider):
         self.provider = provider
         self.available = True
         self._validate_provider()
@@ -46,12 +98,11 @@ class STTEngine:
     def _validate_provider(self):
         """Check if provider is available"""
         if self.provider == STTProvider.GOOGLE_CLOUD:
-            # Phase 2c: Check for Google Cloud credentials
-            has_credentials = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") is not None
-            self.available = has_credentials
-            if not has_credentials:
-                logger.warning("Google Cloud STT credentials not found - using mock STT")
-                self.provider = STTProvider.MOCK
+            # No credentials -> unavailable. It used to switch itself to the
+            # mock provider and keep reporting available.
+            self.available = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") is not None
+            if not self.available:
+                logger.warning("Google Cloud STT credentials not found - STT unavailable")
         else:
             self.available = True
 
@@ -110,16 +161,17 @@ class STTEngine:
 
             return None, "No transcription results from Google Cloud STT"
         except ImportError:
-            logger.warning("google-cloud-speech not installed - using mock STT")
-            return await self._transcribe_mock(audio_data)
+            logger.warning("google-cloud-speech not installed - STT unavailable")
+            return None, "STT provider unavailable: google-cloud-speech is not installed"
         except Exception as e:
             logger.error(f"Google Cloud STT error: {e}")
             return None, f"STT error: {str(e)}"
 
     async def _transcribe_mock(self, audio_data: bytes) -> Tuple[Optional[STTResult], Optional[str]]:
         """
-        Mock STT for Phase 2b testing.
-        Returns a simulated transcript with confidence.
+        TEST DOUBLE. Returns one of four canned sentences chosen by a hash of
+        the input and an invented confidence. Reached only through an engine
+        constructed with ``STTProvider.MOCK``.
         """
         # Phase 2b: Mock implementation
         # In real usage, audio_data would contain raw audio bytes
@@ -164,15 +216,10 @@ class STTEngine:
 _stt_engine: Optional[STTEngine] = None
 
 
-def get_stt_engine(provider: STTProvider = STTProvider.MOCK) -> STTEngine:
-    """Get or create STT engine instance"""
+def get_stt_engine(provider: STTProvider = STTProvider.GOOGLE_CLOUD) -> STTEngine:
+    """Get or create the STT engine instance. The default is the REAL provider
+    (unavailable without credentials); the mock must be asked for by name."""
     global _stt_engine
     if _stt_engine is None:
         _stt_engine = STTEngine(provider=provider)
     return _stt_engine
-
-
-def is_stt_available() -> bool:
-    """Check if STT is available"""
-    engine = get_stt_engine()
-    return engine.available

@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -36,7 +37,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
-from .linter import lint, LintResult
+from .linter import lint, lint_description, LintResult
+
+# A skill name: dot-separated segments of ASCII letters, digits and ``_``. ASCII on
+# purpose (review R3-NEW-37): ``str.isalnum`` accepts every Unicode letter and digit, so
+# ``аssistant.x`` (Cyrillic a) was a valid name that reads as ``assistant.x`` in every
+# list, log and audit record while sitting outside the ``assistant.`` namespace.
+SKILL_NAME_RE = re.compile(r"[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*")
 
 
 def _yaml_quote(s: str) -> str:
@@ -47,7 +54,10 @@ def _yaml_quote(s: str) -> str:
     if not s:
         return "''"
     # If contains special chars or starts with special markers, use single-quoted form.
-    if any(c in s for c in '\n:@#|>&*![]{}') or s.startswith(('-', '?', '!')):
+    # (Quote characters, ``%``, ``,``, a backtick and edge whitespace are YAML syntax at
+    # the start of a plain scalar too - a description beginning with ``"`` did not parse.)
+    if any(c in s for c in '\n\r\t:@#|>&*![]{}\'"%,`<') or s.startswith(('-', '?', '!')) \
+            or s != s.strip():
         # Escape single quotes inside the string.
         escaped = s.replace("'", "''")
         return f"'{escaped}'"
@@ -199,7 +209,7 @@ def _render_slot_md(sanitized_name: str, description: str, body_md: str) -> str:
     fm = (
         "---\n"
         f"name: {sanitized_name}\n"
-        f"description: {description}\n"
+        f"description: {_yaml_quote(description)}\n"
         "---\n\n"
     )
     return fm + body_md
@@ -306,13 +316,19 @@ def skill_authoring_tier(tenant_id: str) -> str:
 
     ADR-2095 amends ADR-0701 for SKILLS: skill authoring is no longer
     member-only; the free tier gets ``skill_forge_per_day`` writes per UTC
-    day. ``forge.create`` stays the member test (Tool Forge keeps it as a hard
-    gate). Fail-closed: an unloadable licensing module or an enforcement
-    failure refuses.
+    day (``None`` = unlimited while ``limits.FORGE_FREE_UNLOCK`` is set).
+
+    The answer is the licence TIER the gate resolved, never "was
+    ``forge.create`` allowed": while the Free unlock is on, ``forge.create``
+    is ALLOWED on Free, and reading ALLOW as "member" reported every Free
+    install as a member (console quota panel, audit). A Free install stays
+    ``"free"`` and goes through the quota path, whose limit decides.
+    Fail-closed: an unloadable licensing module or an enforcement failure
+    refuses.
     """
     try:
         from corvin_operator.license.capability_api import (
-            Decision, LicenseDenied, require_capability,
+            Decision, LicenseDenied, Tier, require_capability,
         )
     except ImportError as exc:
         raise ValueError(
@@ -333,7 +349,7 @@ def skill_authoring_tier(tenant_id: str) -> str:
             raise ValueError(f"license_required: {exc}") from exc
         return "free"
     if decision is not None and decision.decision is Decision.ALLOW:
-        return "member"
+        return "member" if decision.tier is Tier.MEMBER else "free"
     verdict = getattr(getattr(decision, "decision", None), "value", "none")
     reason = getattr(decision, "reason", None) or "not_allowed"
     raise ValueError(f"license_required: forge.create {verdict} ({reason})")
@@ -934,9 +950,10 @@ class SkillRegistry:
         if "/" in name or ".." in name \
                 or name.startswith(".") or name.endswith("."):
             raise ValueError(f"skill name has illegal sequence: {name!r}")
-        if not all(c.isalnum() or c in "._" for c in name):
+        if not isinstance(name, str) or SKILL_NAME_RE.fullmatch(name) is None:
             raise ValueError(
-                f"skill name must be alphanumeric + . + _ : {name!r}"
+                f"skill name must be ASCII alphanumeric + . + _ "
+                f"(dot-separated, no empty segment): {name!r}"
             )
         if type not in VALID_TYPES:
             raise ValueError(
@@ -955,6 +972,11 @@ class SkillRegistry:
         result = lint(body_md)
         if not result.ok:
             raise LinterError(result.errors)
+        # R3-NEW-15: the description is engine-facing text too (front-matter line,
+        # ``<auto_skill description=...>`` attribute) and was never linted.
+        description_result = lint_description(description)
+        if not description_result.ok:
+            raise LinterError(description_result.errors)
 
         with self._locked():
             data = self._load()

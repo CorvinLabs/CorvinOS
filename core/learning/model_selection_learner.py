@@ -210,6 +210,10 @@ def _read_acs_completions(chain_path: Path, max_bytes: int) -> list[dict[str, An
             continue
         det = rec.get("details") or {}
         completions.append({
+            # Join key onto the worker span of the same run (review 2026-11-19,
+            # R2-A2A-1): ACS and corvin-delegate name it spn-<run_id>-<worker_id>.
+            # Internal only - consumed and removed by _drop_span_duplicates.
+            "_span_join": _acs_span_join(det),
             "model": det.get("model_id", ""),
             "input_tokens": int(det.get("input_tokens") or 0),
             "output_tokens": int(det.get("output_tokens") or 0),
@@ -218,6 +222,83 @@ def _read_acs_completions(chain_path: Path, max_bytes: int) -> list[dict[str, An
             "completed_ts": rec.get("ts"),
         })
     return completions
+
+
+def _acs_span_join(det: dict[str, Any]) -> str:
+    """The worker span id an ``acs.engine_completed`` record belongs to.
+
+    The record's own ``span_id`` when it carries one (records written from
+    2026-11-19 on), else the id both emitters derive it from:
+    ``spn-<run_id>-<worker_id>``. Empty when the record names no run, in which
+    case it can be joined to nothing and is kept.
+    """
+    explicit = det.get("span_id")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    run_id, worker_id = det.get("run_id"), det.get("worker_id")
+    if run_id and worker_id:
+        return f"spn-{run_id}-{worker_id}"
+    return ""
+
+
+def _has_usage(entry: dict[str, Any]) -> bool:
+    return bool(
+        entry.get("input_tokens") or entry.get("output_tokens")
+        or entry.get("cache_creation_input_tokens") or entry.get("cache_read_input_tokens")
+    )
+
+
+def _drop_span_duplicates(
+    completions: list[dict[str, Any]], spans: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """One entry per worker run out of its TWO chain records.
+
+    An ACS / corvin-delegate worker run writes ``acs.engine_completed`` AND a
+    worker ``engine.span.end``. Reading both counted every run twice: with the
+    token split on both records (history up to 2026-11-19) the run was priced
+    twice; with the split on the span only (records after it) the completion
+    became a second, unpriced turn and coverage read "1 of 2". The chain is
+    append-only, so the reader reconciles them - which heals old and new
+    records alike:
+
+    * a completion whose span was read is dropped, the span stands;
+    * unless the span carries no token data and the completion does (the audit
+      floor dropped the span's four token fields on 2026-09-18) - then the
+      completion stands and the span is dropped, so measured usage is never
+      traded for an unpriced entry;
+    * a completion with no readable span (pre-ADR-0171 history, a span outside
+      the scan window, the legacy chain file) is kept as it is.
+    """
+    # Completions and spans are paired PER JOIN ID IN ORDER, not through a dict
+    # (review R3-BR-6): a worker id reused inside one run (two iterations of
+    # ``w1``) yields the same join id twice. A dict kept only the last span, so
+    # two completions were both judged against it - with one span in the scan
+    # window both completions were dropped and one run vanished; with usage on
+    # only one of the spans the other run traded its measured usage for an
+    # unpriced entry. Both lists are in chain order, so the n-th completion of
+    # an id belongs to its n-th span; a completion beyond the spans read is kept.
+    spans_by_id: dict[str, list[int]] = {}
+    for idx, s in enumerate(spans):
+        sid = s.get("span_id")
+        if sid:
+            spans_by_id.setdefault(sid, []).append(idx)
+    next_span: dict[str, int] = {}
+    dropped_spans: set[int] = set()
+    kept: list[dict[str, Any]] = []
+    for c in completions:
+        c = dict(c)
+        join = c.pop("_span_join", "")
+        candidates = spans_by_id.get(join, []) if join else []
+        pos = next_span.get(join, 0)
+        if pos >= len(candidates):
+            kept.append(c)
+            continue
+        next_span[join] = pos + 1
+        span_idx = candidates[pos]
+        if _has_usage(c) and not _has_usage(spans[span_idx]):
+            dropped_spans.add(span_idx)
+            kept.append(c)
+    return kept + [s for idx, s in enumerate(spans) if idx not in dropped_spans]
 
 
 def _acs_chain_paths(tenant_id: str) -> list[Path]:
@@ -670,7 +751,8 @@ def compute_cost_efficiency(
         acs_completions.extend(_read_acs_completions(_chain, _MAX_SCAN_BYTES))
     # Gateway worker runs (ADR-0759). Only on the canonical chain — the
     # dispatcher has always written there.
-    acs_completions.extend(_read_worker_spans(_chain_paths[-1], _MAX_SCAN_BYTES))
+    acs_completions = _drop_span_duplicates(
+        acs_completions, _read_worker_spans(_chain_paths[-1], _MAX_SCAN_BYTES))
     _deduped: list[dict[str, Any]] = []
     for _c in acs_completions:
         _key = (_c.get("completed_ts"), _c.get("model"), _c.get("span_id"),

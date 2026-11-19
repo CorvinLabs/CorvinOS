@@ -1,8 +1,9 @@
 """Dashboard route — health-card data for the console landing page.
 
 Phase A: returns a small JSON snapshot the SPA renders into a
-header-grid. Sources are read fresh per request (no caching) — the
-data shape is small so the cost is negligible.
+header-grid. Everything is read fresh per request except today's
+severity counts, which are kept per tenant and advanced by a byte cursor
+(``_today_event_counts``) so a page load never re-parses the chain.
 
 Future viewer phases (B+) will add separate endpoints for sessions,
 runs, personas, tools, skills, memory, etc. — each as its own
@@ -13,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
 import time
 from typing import Annotated, Any
 
@@ -153,7 +155,7 @@ def _audit_chain_status(tenant_id: str) -> dict[str, Any]:
     F will add an explicit "verify now" button that runs it on
     demand.
     """
-    chain = _forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
+    chain = _forge_paths.tenant_audit_chain(tenant_id)
     if not chain.exists():
         return {"present": False}
     try:
@@ -201,36 +203,88 @@ def _stt_chain() -> dict[str, Any]:
     return {"mode": "chain", "providers": [p.strip() for p in chain.split(",") if p.strip()]}
 
 
-def _today_event_counts(tenant_id: str) -> dict[str, int]:
-    """Coarse counts of audit events from today (best-effort).
+#: First-scan window for today's counts. A page load after a restart reads at
+#: most this much of the chain; later loads read only appended bytes.
+_TODAY_MAX_SCAN_BYTES = 32 * 1024 * 1024
 
-    Reads at most the last 4 KiB of the chain to keep cost bounded.
-    For a full-day rollup we'd page through the whole file — that's
-    a Phase F concern, not Phase A.
+#: tenant -> {"ino", "offset", "midnight", "counts", "truncated"}
+_TODAY_STATE: dict[str, dict[str, Any]] = {}
+_TODAY_LOCK = threading.Lock()
+
+
+def _today_scan(tenant_id: str) -> tuple[dict[str, int], dict[str, Any]]:
+    """``(counts, window)`` - today's audit events by severity, and what the
+    scan covered.
+
+    Until 2026-11-19 this parsed the WHOLE chain on every ``GET /dashboard``
+    (while its docstring promised "at most the last 4 KiB"). It now keeps a
+    per-tenant byte cursor: the first call of a day scans the last
+    ``_TODAY_MAX_SCAN_BYTES``, every later call reads only what was appended.
+    The cursor stops at the last complete line. ``window["truncated"]`` is
+    true when the first scan window began after local midnight, i.e. the
+    counts may miss the early part of today - a narrowed count is never
+    returned without that flag.
     """
-    chain = _forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
-    if not chain.exists():
-        return {}
+    chain = _forge_paths.tenant_audit_chain(tenant_id)
     midnight = _start_of_day_local()
-    counts: dict[str, int] = {}
-    try:
-        # Read full file, count today's events. Bounded by typical
-        # audit-chain volume; a busy operator will outgrow this and
-        # we'll switch to indexed storage later.
-        with chain.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                ts = rec.get("ts")
-                if not isinstance(ts, (int, float)) or ts < midnight:
-                    continue
-                sev = rec.get("severity", "INFO")
-                counts[sev] = counts.get(sev, 0) + 1
-    except OSError:
-        return {}
-    return counts
+    with _TODAY_LOCK:
+        try:
+            fh = chain.open("rb")
+        except OSError:
+            _TODAY_STATE.pop(tenant_id, None)
+            return {}, {"truncated": False, "since_ts": midnight}
+        with fh:
+            try:
+                st = os.fstat(fh.fileno())
+                state = _TODAY_STATE.get(tenant_id)
+                if (state is None or state["ino"] != st.st_ino
+                        or state["midnight"] != midnight or st.st_size < state["offset"]):
+                    start = max(0, st.st_size - _TODAY_MAX_SCAN_BYTES)
+                    first_ts_pending = start > 0
+                    if start > 0:
+                        fh.seek(start - 1)
+                        if fh.read(1) != b"\n":
+                            start += len(fh.readline())  # drop the cut line
+                    state = {"ino": st.st_ino, "offset": start, "midnight": midnight,
+                             "counts": {}, "truncated": False}
+                else:
+                    first_ts_pending = False
+                fh.seek(state["offset"])
+                offset = state["offset"]
+                counts: dict[str, int] = state["counts"]
+                for raw in fh:
+                    if not raw.endswith(b"\n"):
+                        break  # half-written record: next call reads it whole
+                    offset += len(raw)
+                    try:
+                        rec = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if not isinstance(rec, dict):
+                        continue
+                    ts = rec.get("ts")
+                    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+                        continue
+                    if first_ts_pending:
+                        # The window's first dated record is already from
+                        # today: earlier records of today lie before it.
+                        state["truncated"] = ts >= midnight
+                        first_ts_pending = False
+                    if ts < midnight:
+                        continue
+                    sev = str(rec.get("severity", "INFO"))
+                    counts[sev] = counts.get(sev, 0) + 1
+                state["offset"] = offset
+                _TODAY_STATE[tenant_id] = state
+            except OSError:
+                _TODAY_STATE.pop(tenant_id, None)
+                return {}, {"truncated": False, "since_ts": midnight}
+        return dict(state["counts"]), {"truncated": bool(state["truncated"]), "since_ts": midnight}
+
+
+def _today_event_counts(tenant_id: str) -> dict[str, int]:
+    """Today's audit events by severity (see :func:`_today_scan`)."""
+    return _today_scan(tenant_id)[0]
 
 
 def _start_of_day_local() -> float:
@@ -249,6 +303,7 @@ def dashboard(
 ) -> dict[str, Any]:
     """Return the dashboard payload for the owner's tenant."""
     tid = rec.tenant_id
+    today_counts, today_window = _today_scan(tid)
     return {
         "tenant_id":       tid,
         "ts":              time.time(),
@@ -257,7 +312,8 @@ def dashboard(
         "stt":             _stt_chain(),
         "bridges":         [_bridge_status(b) for b in _BRIDGES],
         "audit_chain":     _audit_chain_status(tid),
-        "today_counts":    _today_event_counts(tid),
+        "today_counts":    today_counts,
+        "today_counts_window": today_window,
         "fingerprint":     rec.token_fingerprint,
         "expires_at":      rec.expires_at,
     }
