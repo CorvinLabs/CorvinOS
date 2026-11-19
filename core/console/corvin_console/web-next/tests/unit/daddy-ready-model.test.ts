@@ -38,6 +38,8 @@ describe("daddy-ready model", () => {
     expect(stepTone("done")).toBe("ok");
     expect(stepTone("failed")).toBe("bad");
     expect(stepTone("waiting")).toBe("wait");
+    expect(stepTone("unconfirmed")).toBe("bad");
+    expect(stepTone("sending")).toBe("wait");
     expect(stepTone(undefined)).toBe("none");
     expect(newSource("local_folder", ["local-folder"]).key).toBe("local-folder-2");
     expect(isDirty({ a: 1 }, { a: 1 })).toBe(false);

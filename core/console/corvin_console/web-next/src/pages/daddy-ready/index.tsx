@@ -20,7 +20,7 @@ import { ApiError } from "@/lib/api/client";
 import {
   getBrief, getConcepts, getEpisodes, getGraph, getKb, getKbEntry, getOverview, getSettings, getVideos, makeConceptVideo, renderEpisode,
   saveSettings, templateVideoUrl, videoUrl,
-  type EpisodeRow, type KbItem,
+  type EpisodeRow, type KbItem, type RenderJob,
 } from "@/lib/api/daddy-ready";
 import { useAuth } from "@/lib/auth";
 import { SettingsForm } from "./SettingsForm";
@@ -97,7 +97,7 @@ function EpisodesView() {
                 <span className="font-medium tabular-nums">{r.day}</span>
                 <span className="flex gap-1">
                   {r.has_video ? <Badge variant="secondary">video</Badge> : null}
-                  {Object.entries(r.steps).filter(([, v]) => stepTone(v) === "bad").map(([k]) => <Badge key={k} variant="danger">{k} failed</Badge>)}
+                  {Object.entries(r.steps).filter(([, v]) => stepTone(v) === "bad").map(([k, v]) => <Badge key={k} variant="danger">{k} {v === "unconfirmed" ? "unconfirmed - check the channel" : "failed"}</Badge>)}
                 </span>
               </div>
               <div className="truncate text-xs text-muted-foreground">{r.method ?? "No method"}</div>
@@ -124,7 +124,10 @@ function EpisodesView() {
             ) : (
               <div className="space-y-2" data-testid="dr-no-video">
                 <p className="text-sm text-muted-foreground">There is no rendered video for this day yet.</p>
-                {current.has_brief ? <RenderButton day={current.day} /> : null}
+                {current.has_brief ? (
+                  <RenderButton day={current.day} engine={eps.data?.engine} voice={eps.data?.voice ?? null}
+                    job={eps.data?.jobs?.find((j) => j.day === current.day)} />
+                ) : null}
               </div>
             )}
           </CardContent></Card>
@@ -141,26 +144,43 @@ function EpisodesView() {
   );
 }
 
-function RenderButton({ day }: { day: string }) {
+function renderHelp(engine: string | undefined, voice: string | null): string {
+  if (engine === "template") {
+    return voice === "openai"
+      ? "The video is made on this computer; only the narration text goes to the OpenAI voice. It takes a few minutes."
+      : "The video is made entirely on this computer with the offline voice. It takes a few minutes.";
+  }
+  return "Rendering takes several minutes and sends this day's brief to the video service (CorvinTV).";
+}
+
+function RenderButton({ day, engine, voice, job }: { day: string; engine?: string; voice: string | null; job?: RenderJob }) {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
   const qc = useQueryClient();
-  const [started, setStarted] = useState(false);
   const go = useMutation({
     mutationFn: () => renderEpisode(day, csrf),
-    onSuccess: () => {
-      setStarted(true);
-      // the render runs in the background: refresh the episode list until the step status changes
-      const t = setInterval(() => void qc.invalidateQueries({ queryKey: KEY }), 15_000);
-      setTimeout(() => clearInterval(t), 30 * 60_000);
-    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: KEY }),
   });
+  const running = job?.state === "running";
+  // refresh the episode list while the render runs; the interval ends with the job or when the view goes away
+  useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(() => void qc.invalidateQueries({ queryKey: KEY }), 10_000);
+    return () => clearInterval(t);
+  }, [running, qc]);
   return (
     <div className="space-y-2">
-      <Button type="button" variant="accent" disabled={go.isPending || started || !csrf} onClick={() => go.mutate()}>
-        {go.isPending ? "Starting…" : started ? "Rendering in the background…" : "Create video"}
+      <Button type="button" variant="accent" disabled={go.isPending || running || !csrf} onClick={() => go.mutate()}>
+        {go.isPending ? "Starting…" : running ? "Making the video…" : job?.state === "failed" ? "Try again" : "Create video"}
       </Button>
-      <p className="text-xs text-muted-foreground">Rendering takes several minutes and sends this day's brief to the video service (CorvinTV). It is refused unless video rendering is on and every source is approved for it under Settings.</p>
+      <p className="text-xs text-muted-foreground">
+        {renderHelp(engine, voice)} It is refused unless video rendering is on and every source is approved for it under Settings.
+      </p>
+      {job?.state === "failed" ? (
+        <p role="alert" className="text-sm text-destructive" data-testid="dr-render-failed">
+          The video could not be made{job.error ? `: ${job.error}` : "."}
+        </p>
+      ) : null}
       {go.isError ? <ErrorLine error={go.error} /> : null}
     </div>
   );

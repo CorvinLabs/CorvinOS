@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import re
@@ -34,7 +35,10 @@ _MAX_SETTINGS_BYTES = 256 * 1024
 _USER = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _ID = re.compile(r"^[A-Z]{3}-[0-9a-f]{12}$")
-_PASS_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "TMPDIR")
+# The environment a job may see: the basics, plus the speech and secret variables the config may reference by name.
+_PASS_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "TMPDIR", "PIPER_BIN",
+             "CORVIN_TTS_OPENAI_KEY", "PLAYWRIGHT_BROWSERS_PATH")
+_MAX_JOBS = 2                                      # renders + concept videos at once (the pool has the same size)
 
 
 def _plugin_dir() -> Optional[Path]:
@@ -136,7 +140,7 @@ def _run_cli(tenant_id: str, *args: str, stdin: str | None = None) -> Any:
 async def _call(rec, op: str, *args: str, stdin: str | None = None, audit: bool = True) -> Any:
     out = await asyncio.to_thread(_run_cli, rec.tenant_id, op, *args, stdin=stdin)
     if audit:
-        _audit(rec.tenant_id, "daddy_ready.panel_read", {"op": op})
+        await asyncio.to_thread(_audit, rec.tenant_id, "daddy_ready.panel_read", {"op": op})
     return out
 
 
@@ -168,7 +172,15 @@ async def kb_entry(entry_id: str, rec=Depends(_require_enabled)) -> Any:
 
 @router.get("/episodes")
 async def episodes(rec=Depends(_require_enabled)) -> Any:
-    return await _call(rec, "episodes", audit=False)
+    doc = await _call(rec, "episodes", audit=False)
+    prefix = f"{rec.tenant_id}:"
+    doc["jobs"] = [{"day": k[len(prefix):], "state": v["state"], "error": v.get("error", "")}
+                   for k, v in _RENDER_JOBS.items() if k.startswith(prefix)]
+    seen = {j["day"] for j in doc["jobs"]}
+    for row in doc.get("episodes", []):                 # a render still running after a console restart: show it as running
+        if row.get("rendering") and row["day"] not in seen:
+            doc["jobs"].append({"day": row["day"], "state": "running", "error": ""})
+    return doc
 
 
 @router.get("/episodes/{day}/brief")
@@ -196,48 +208,75 @@ async def graph(rec=Depends(_require_enabled)) -> Any:
 
 
 _RENDER_JOBS: dict[str, dict[str, Any]] = {}
+_CONCEPT = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
+_VIDEO = re.compile(r"^[a-z0-9_]+-\d{4}-\d{2}-\d{2}\.mp4$")
+_CONCEPT_JOBS: dict[str, dict[str, Any]] = {}
+# One long-lived pool for the background renders (no thread per request; survives the request's event loop).
+_JOB_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="daddy-ready-job")
+
+
+def _cli_cmd(pdir: Path, user: str, *args: str) -> list[str]:
+    return [sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); sys.argv = ['daddy_ready'] + sys.argv[2:]; "
+            "from daddy_ready.cli import main; sys.exit(main())", str(pdir / "src"), "--user", user, *args]
+
+
+def _run_job(cmd: list[str], pdir: Path, timeout: int) -> tuple[int, str]:
+    """Blocking: runs in the loop's long-lived executor, never on the event loop. Returns the exit code and the CLI's
+    own (already redacted) error line, so the panel can say WHY a render was refused."""
+    env = {k: os.environ[k] for k in _PASS_ENV if k in os.environ}
+    env["PYTHONPATH"] = str(pdir / "src")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout, cwd=str(pdir), encoding="utf-8",
+                           errors="replace")
+    except subprocess.TimeoutExpired:
+        return -1, "the render took too long and was stopped"
+    except OSError:
+        return -1, "the render could not be started"
+    lines = [ln for ln in (r.stderr or "").splitlines() if ln.startswith("error:")]
+    return r.returncode, (lines[-1][len("error:"):].strip()[:300] if lines and r.returncode != 0 else "")
+
+
+def _busy() -> int:
+    return sum(1 for j in (*_RENDER_JOBS.values(), *_CONCEPT_JOBS.values()) if j.get("state") == "running")
+
+
+def _render_job(tenant_id: str, key: str, cmd: list[str], pdir: Path, timeout: int, audit_op: str, state_key: dict) -> None:
+    """Runs in the job pool, never on the event loop: runs the CLI, records the outcome, writes the audit record. A job
+    can never stay `running`: any failure in here ends it as `failed`."""
+    try:
+        code, err = _run_job(cmd, pdir, timeout)
+    except BaseException:                                  # noqa: BLE001 - the slot must be freed whatever happened
+        logger.exception("daddy-ready: job %s crashed", key)
+        code, err = -1, "the job crashed"
+    state = "done" if code == 0 else "failed"
+    state_key[key] = {"state": state, "error": err}
+    if not _audit(tenant_id, "daddy_ready.render_finished", {"op": audit_op, "outcome": state}):
+        logger.warning("daddy-ready: finish record for %s was not written", key)
 
 
 @router.post("/episodes/{day}/render", status_code=202)
 async def episode_render(day: str, rec=Depends(_require_enabled)) -> Any:
     """Start rendering the day's episode in the background. The plugin's own gates run inside (brief, approvals,
-    video enabled). Poll `/episodes` for the step status; a render never blocks the request."""
+    video enabled). Poll `/episodes` for the step status and `jobs` for a refusal; a render never blocks the request."""
     if not _DAY.match(day):
         raise HTTPException(status_code=422, detail="day must be YYYY-MM-DD")
-    pdir = _plugin_dir()
+    pdir = await asyncio.to_thread(_plugin_dir)
     if pdir is None:
         raise HTTPException(status_code=503, detail="The DaddyReady plugin source was not found")
     key = f"{rec.tenant_id}:{day}"
-    prev = _RENDER_JOBS.get(key)
-    if prev and prev.get("thread") and prev["thread"].is_alive():
+    user = await asyncio.to_thread(_config_user, rec.tenant_id)
+    # check and claim in one step with no await in between: two requests cannot both start the same render
+    if _RENDER_JOBS.get(key, {}).get("state") == "running":
         raise HTTPException(status_code=409, detail="A render for this day is already running")
-    env = {k: os.environ[k] for k in _PASS_ENV if k in os.environ}
-    env["PYTHONPATH"] = str(pdir / "src")
-    cmd = [sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); sys.argv = ['daddy_ready'] + sys.argv[2:]; "
-           "from daddy_ready.cli import main; sys.exit(main())", str(pdir / "src"),
-           "--user", _config_user(rec.tenant_id), "render", day]
-    import threading  # noqa: PLC0415
-    holder: dict[str, Any] = {}
+    if _busy() >= _MAX_JOBS:
+        raise HTTPException(status_code=409, detail="Two videos are already being made; try again when one is finished")
+    _RENDER_JOBS[key] = {"state": "running"}                 # claimed BEFORE the audit await: no second request can slip in
+    if not await asyncio.to_thread(_audit, rec.tenant_id, "daddy_ready.render_started", {"op": "render"}):
+        _RENDER_JOBS.pop(key, None)
+        raise HTTPException(status_code=503, detail="The audit record could not be written; nothing was started")
 
-    def _work() -> None:
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=7200, cwd=str(pdir), encoding="utf-8",
-                               errors="replace")
-            holder["code"] = r.returncode
-        except (OSError, subprocess.TimeoutExpired):
-            holder["code"] = -1
-        _audit(rec.tenant_id, "daddy_ready.render_finished", {"op": "render", "outcome": "ok" if holder.get("code") == 0 else "failed"})
-
-    t = threading.Thread(target=_work, name=f"daddy-ready-render-{day}", daemon=True)
-    _RENDER_JOBS[key] = {"thread": t, "holder": holder}
-    t.start()
-    _audit(rec.tenant_id, "daddy_ready.render_started", {"op": "render"})
+    _JOB_POOL.submit(_render_job, rec.tenant_id, key, _cli_cmd(pdir, user, "render", day), pdir, 7200, "render", _RENDER_JOBS)
     return {"day": day, "status": "started"}
-
-
-_CONCEPT = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
-_VIDEO = re.compile(r"^[a-z0-9_]+-\d{4}-\d{2}-\d{2}\.mp4$")
-_CONCEPT_JOBS: dict[str, dict[str, Any]] = {}
 
 
 @router.get("/concepts")
@@ -266,34 +305,26 @@ async def video_file(name: str, rec=Depends(_require_enabled)) -> FileResponse:
 
 @router.post("/videos/concept/{concept_id}", status_code=202)
 async def video_concept(concept_id: str, rec=Depends(_require_enabled)) -> Any:
-    """Make a template video for one psychology concept, locally and in the background (offline voice, the child's photos
-    stay on this machine). Poll GET /videos for the job state."""
+    """Make a template video for one psychology concept, locally and in the background. Poll GET /videos for the job
+    state."""
     if not _CONCEPT.match(concept_id):
         raise HTTPException(status_code=422, detail="not a concept id")
-    pdir = _plugin_dir()
+    pdir = await asyncio.to_thread(_plugin_dir)
     if pdir is None:
         raise HTTPException(status_code=503, detail="The DaddyReady plugin source was not found")
     key = f"{rec.tenant_id}:{concept_id}"
+    user = await asyncio.to_thread(_config_user, rec.tenant_id)
     if _CONCEPT_JOBS.get(key, {}).get("state") == "running":
         raise HTTPException(status_code=409, detail="A video for this concept is already being made")
-    env = {k: os.environ[k] for k in _PASS_ENV if k in os.environ}
-    env["PYTHONPATH"] = str(pdir / "src")
-    cmd = [sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); sys.argv = ['daddy_ready'] + sys.argv[2:]; "
-           "from daddy_ready.cli import main; sys.exit(main())", str(pdir / "src"),
-           "--user", _config_user(rec.tenant_id), "video", "concept", concept_id]
-    import threading  # noqa: PLC0415
-    _CONCEPT_JOBS[key] = {"state": "running"}
+    if _busy() >= _MAX_JOBS:
+        raise HTTPException(status_code=409, detail="Two videos are already being made; try again when one is finished")
+    _CONCEPT_JOBS[key] = {"state": "running"}                # claimed BEFORE the audit await
+    if not await asyncio.to_thread(_audit, rec.tenant_id, "daddy_ready.render_started", {"op": "video-concept"}):
+        _CONCEPT_JOBS.pop(key, None)
+        raise HTTPException(status_code=503, detail="The audit record could not be written; nothing was started")
 
-    def _work() -> None:
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=3600, cwd=str(pdir), encoding="utf-8", errors="replace")
-            _CONCEPT_JOBS[key] = {"state": "done" if r.returncode == 0 else "failed"}
-        except (OSError, subprocess.TimeoutExpired):
-            _CONCEPT_JOBS[key] = {"state": "failed"}
-        _audit(rec.tenant_id, "daddy_ready.render_finished", {"op": "video-concept", "outcome": _CONCEPT_JOBS[key]["state"]})
-
-    threading.Thread(target=_work, name=f"daddy-ready-concept-{concept_id}", daemon=True).start()
-    _audit(rec.tenant_id, "daddy_ready.render_started", {"op": "video-concept"})
+    _JOB_POOL.submit(_render_job, rec.tenant_id, key, _cli_cmd(pdir, user, "video", "concept", concept_id), pdir, 3600,
+                     "video-concept", _CONCEPT_JOBS)
     return {"concept": concept_id, "state": "running"}
 
 
@@ -302,11 +333,27 @@ async def settings_get(rec=Depends(_require_enabled)) -> Any:
     return await _call(rec, "settings", audit=False)
 
 
+_SECRET_FIELDS = (("video", "template_openai_key"), ("delivery", "webhook_url"))
+_REFERENCE = re.compile(r"^(\$\{[A-Za-z_][A-Za-z0-9_]*\}|file:.+)$")
+
+
+def _check_secret_references(body: dict) -> None:
+    """Secrets are only ever REFERENCES (an env variable or a file), never the literal value - a literal would be written
+    into the config file and echoed back by the settings view."""
+    for group, key in _SECRET_FIELDS:
+        value = (body.get(group) or {}).get(key) if isinstance(body.get(group), dict) else None
+        if isinstance(value, str) and value and not _REFERENCE.match(value):
+            raise HTTPException(status_code=422, detail=f"{group}.{key} must be a reference such as ${{VAR}} or file:PATH, not the value")
+
+
 @router.put("/settings")
 async def settings_put(body: dict = Body(...), rec=Depends(_require_enabled)) -> Any:
     raw = json.dumps(body)
     if len(raw.encode("utf-8")) > _MAX_SETTINGS_BYTES:
         raise HTTPException(status_code=413, detail="settings are too large")
-    out = await asyncio.to_thread(_run_cli, rec.tenant_id, "settings-save", stdin=raw)
-    _audit(rec.tenant_id, "daddy_ready.settings_saved", {"op": "settings-save"})
+    _check_secret_references(body)
+    out = await asyncio.to_thread(_run_cli, rec.tenant_id, "settings-save", stdin=raw)   # validates and saves
+    # recorded only once the save succeeded: a refused change never appears as "settings saved"
+    if not await asyncio.to_thread(_audit, rec.tenant_id, "daddy_ready.settings_saved", {"op": "settings-save"}):
+        logger.warning("daddy-ready: settings were saved but the audit record could not be written")
     return out

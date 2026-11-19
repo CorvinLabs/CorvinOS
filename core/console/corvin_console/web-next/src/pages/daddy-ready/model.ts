@@ -76,8 +76,8 @@ export function pageLabel(offset: number, limit: number, total: number): string 
 /** Status words of a pipeline step -> a badge tone. */
 export function stepTone(status: string | undefined): "ok" | "bad" | "wait" | "none" {
   if (status === "done") return "ok";
-  if (status === "failed") return "bad";
-  if (status === "running" || status === "waiting" || status === "invalidated") return "wait";
+  if (status === "failed" || status === "unconfirmed") return "bad"; // unconfirmed: check the channel, then `deliver --resend`
+  if (status === "running" || status === "waiting" || status === "invalidated" || status === "sending" || status === "retry") return "wait";
   return "none";
 }
 

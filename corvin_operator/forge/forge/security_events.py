@@ -1398,6 +1398,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "daddy_ready.settings_saved":        "INFO",
     "daddy_ready.render_started":        "INFO",
     "daddy_ready.render_finished":       "INFO",
+    "daddy_ready.forget":                "WARNING",
     "video_producer.style_deleted":      "INFO",
     "video_producer.style_applied":      "INFO",
     # ADR-2247 R2b: the HOST's record of a video job's lifecycle (start, the one terminal state, a
@@ -5417,6 +5418,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "daddy_ready.settings_saved": frozenset({"tenant_id", "op"}),
     "daddy_ready.render_started": frozenset({"tenant_id", "op"}),
     "daddy_ready.render_finished": frozenset({"tenant_id", "op", "outcome"}),
+    "daddy_ready.forget": frozenset({"tenant_id", "count"}),
     "video_producer.style_saved": frozenset({
         "tenant_id", "style_id", "source_kind", "has_plate", "has_mark",
     }),

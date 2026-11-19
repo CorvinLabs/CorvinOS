@@ -54,7 +54,14 @@ export interface EpisodeRow {
   method: string | null;
   steps: Record<string, string>;
 }
-export interface Episodes { episodes: EpisodeRow[]; autoplay: boolean }
+export interface RenderJob { day: string; state: "running" | "done" | "failed"; error: string }
+export interface Episodes {
+  episodes: EpisodeRow[];
+  autoplay: boolean;
+  engine?: "template" | "corvintv";
+  voice?: "piper" | "openai" | null;
+  jobs?: RenderJob[];
+}
 export interface SettingsDoc {
   config: Record<string, unknown>;
   blocks: Record<string, BlockSchema>;
