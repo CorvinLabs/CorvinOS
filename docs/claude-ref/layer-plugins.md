@@ -1128,6 +1128,25 @@ AND enabled (`capabilities._plugin_is_enabled`) — a stale
 with nothing behind it — and `get_panel_registry` re-creates its cached
 instance when the tenant home moves.
 
+**Private plugin sources (ADR-2331, 2026-11-19).** The operator's own plugins live in a private repository laid out
+like the marketplace (`plugins/<tier>/<category>/<name>/plugin.yaml`). `bootstrap.private_plugin_roots()` resolves
+them: `CORVIN_PRIVATE_PLUGIN_ROOTS` (`os.pathsep`-separated `plugins` directories) replaces the default when set -
+an EMPTY value disables private sources; otherwise the sibling checkout `../CorvinOS-Apps/plugins` is used when it
+exists, so a clone next to CorvinOS makes the plugins available on that machine with no configuration. Rules:
+- the resolver searches private roots AFTER every trusted root, so a private directory never shadows a marketplace
+  or in-wheel plugin; a private manifest whose `plugin_id` a trusted root already declares is refused
+  (`marketplace_resolve.PrivateIdCollision`);
+- origin is ALWAYS `community` (`private_root:<rel>`), whatever tier folder it sits in and whatever the manifest
+  claims - enabling needs the operator's explicit consent;
+- the marketplace index stays the install allowlist for marketplace plugins; a plugin that resolves under a private
+  root needs no index entry (`marketplace_resolve.is_private_source`), any other id still does;
+- a private plugin's `console_panel` reaches the sidebar exactly like a marketplace plugin's: on enable, in its
+  `group`, as the generic plugin inspector unless it declares another element kind. A custom panel UI waits for
+  the sandboxed mount of ADR-2189; do not declare `element_kind: iframe` before that.
+Private plugins do not appear in the browse list (the index is public); they are installed by index id
+(`POST /v1/console/api/v1/marketplace/plugins/plugin:<tier>-<category>-<name>/install`).
+Proof: `core/console/tests/test_adr_2331_private_plugin_sources_e2e.py`.
+
 **Discovery lists every indexed plugin (amendment 2026-09-21).** It used to
 drop every contributor-tier entry unless the `marketplace_rollout_pct` flag was
 enabled AND the tenant hashed into its canary bucket

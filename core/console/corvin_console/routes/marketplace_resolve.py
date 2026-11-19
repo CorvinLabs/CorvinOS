@@ -99,6 +99,29 @@ def _plugins_roots() -> list[Path]:
     return roots
 
 
+class PrivateIdCollision(MarketplaceResolveError):
+    """A private plugin declares the plugin_id of a marketplace/builtin plugin (ADR-2331) - never installable."""
+
+
+def _private_roots() -> list[Path]:
+    """The operator's private plugin sources (ADR-2331), searched AFTER every trusted root."""
+    try:
+        return list(_bootstrap.private_plugin_roots())
+    except Exception:  # noqa: BLE001 - no private source is the safe answer
+        return []
+
+
+def _trusted_plugin_ids() -> set[str]:
+    """Every plugin_id declared under the trusted roots - a private plugin may not reuse one (ADR-2331)."""
+    ids: set[str] = set()
+    for root in _plugins_roots():
+        for d in _bootstrap._builtin_plugin_dirs(root):
+            m = _bootstrap.load_from_manifest_safe(d / "plugin.yaml")
+            if isinstance(m, dict) and m.get("plugin_id"):
+                ids.add(str(m["plugin_id"]))
+    return ids
+
+
 #: Tiers whose source lives in the Corvin-Marketplace checkout and may be
 #: installed from it. ``buildin`` resolves to origin ``vetted``, ``contributor``
 #: to ``community`` (bootstrap.origin_for_plugin_dir — location-derived, the
@@ -141,6 +164,9 @@ def resolve_builtin_dir(index_id: str) -> Path:
     found = _find()
     if found is not None:
         return found
+    private = _find_private(tier, category, name)
+    if private is not None:
+        return private
     # A fresh install has no sibling Corvin-Marketplace checkout yet (operator
     # rule: plugin source lives there, not in CorvinOS) — try a one-shot GitHub
     # sync (bootstrap.ensure_marketplace_source) before giving up, the same way
@@ -158,6 +184,36 @@ def resolve_builtin_dir(index_id: str) -> Path:
         f"no local source for {index_id!r} "
         f"(expected {tier}/{category}/{name}/plugin.yaml under the marketplace checkout)"
     )
+
+
+def _find_private(tier: str, category: str, name: str) -> Path | None:
+    """ADR-2331: the same ``<tier>/<category>/<name>`` layout under a private root, contained, and never a plugin_id a
+    trusted root already declares (a private copy cannot replace a marketplace or builtin plugin)."""
+    for root in _private_roots():
+        candidate = (root / tier / category / name).resolve(strict=False)
+        if root not in candidate.parents or not (candidate / "plugin.yaml").is_file():
+            continue
+        manifest = _bootstrap.load_from_manifest_safe(candidate / "plugin.yaml")
+        pid = str(manifest.get("plugin_id") or "") if isinstance(manifest, dict) else ""
+        if pid and pid in _trusted_plugin_ids():
+            raise PrivateIdCollision(
+                f"private plugin {pid!r} reuses the id of a marketplace or builtin plugin; rename it")
+        return candidate
+    return None
+
+
+def is_private_source(index_id: str) -> bool:
+    """True when ``index_id`` resolves to a directory under an operator-configured private root (ADR-2331).
+
+    The marketplace index is the install allowlist for marketplace plugins; for a private plugin the private root the
+    operator configured is that allowlist. Anything that does not resolve there stays bound to the index."""
+    try:
+        d = resolve_builtin_dir(index_id)
+    except PrivateIdCollision:
+        raise
+    except MarketplaceResolveError:
+        return False
+    return any(r in d.parents for r in _private_roots())
 
 
 def load_manifest(index_id: str) -> Tuple[Path, dict]:

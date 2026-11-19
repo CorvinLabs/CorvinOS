@@ -366,7 +366,13 @@ def _run_install(
     #    installable here (no arbitrary local paths).
     _phase(0)
     if not _index_has(plugin_id):
-        return _fail(f"{plugin_id} is not in the marketplace index")
+        # ADR-2331: a plugin from an operator-configured private root is installable without an index entry
+        try:
+            private = _resolve.is_private_source(plugin_id)
+        except _resolve.MarketplaceResolveError as exc:
+            return _fail(str(exc))
+        if not private:
+            return _fail(f"{plugin_id} is not in the marketplace index")
 
     # 2. Resolve to a local source dir + manifest under a trusted root
     #    (buildin → vetted, contributor → community; ADR-0892).

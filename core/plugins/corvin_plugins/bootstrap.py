@@ -744,6 +744,36 @@ def _marketplace_sibling_dir() -> Path:
     return Path(__file__).resolve().parents[3].parent / "Corvin-Marketplace" / "plugins" / "buildin"
 
 
+#: Default private plugin source (ADR-2331): a sibling checkout named ``CorvinOS-Apps`` next to the CorvinOS
+#: repo, laid out like the marketplace (``plugins/<tier>/<category>/<name>/plugin.yaml``).
+PRIVATE_SIBLING_REPO = "CorvinOS-Apps"
+
+
+def private_plugin_roots() -> list[Path]:
+    """The ``.../plugins`` directories of the operator's PRIVATE plugin sources (ADR-2331).
+
+    ``CORVIN_PRIVATE_PLUGIN_ROOTS`` (``os.pathsep``-separated ``plugins`` directories) REPLACES the default when
+    set - an empty value disables private sources. Otherwise the sibling ``CorvinOS-Apps/plugins`` checkout is used
+    when it exists. A missing directory is skipped. Plugins found here are ALWAYS origin ``community``
+    (:func:`origin_for_plugin_dir`): nobody vetted them, so enabling one needs the operator's explicit consent.
+    """
+    import os
+    env = os.environ.get("CORVIN_PRIVATE_PLUGIN_ROOTS")
+    if env is not None:
+        cands = [Path(p).expanduser() for p in env.split(os.pathsep) if p.strip()]
+    else:
+        cands = [Path(__file__).resolve().parents[3].parent / PRIVATE_SIBLING_REPO / "plugins"]
+    out: list[Path] = []
+    for c in cands:
+        try:
+            r = c.resolve(strict=False)
+        except OSError:
+            continue
+        if r.is_dir() and r not in out:
+            out.append(r)
+    return out
+
+
 def _corvin_home() -> Path:
     """Same resolution ``awpkg.installer._resolve_corvin_home`` uses: an explicit
     ``CORVIN_HOME``, else ``~/.corvin`` (the directory a running install's
@@ -1037,6 +1067,13 @@ def origin_for_plugin_dir(plugin_dir: Path) -> tuple[str, str]:
     rel = _under(_marketplace_contributor_root())
     if rel is not None:
         return "community", f"marketplace_contributor:{rel}"
+    # ADR-2331: the operator's private plugin sources are community-origin whatever their tier directory says -
+    # a private "buildin/" folder is a name, not a review. Checked BEFORE the explicit-root fallback, which would
+    # otherwise label them vetted.
+    for root in private_plugin_roots():
+        rel = _under(root)
+        if rel is not None:
+            return "community", f"private_root:{rel}"
     return "vetted", f"explicit_root:{resolved.name}"
 
 
