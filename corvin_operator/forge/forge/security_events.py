@@ -1394,6 +1394,8 @@ EVENT_SEVERITY: dict[str, str] = {
     # applied to a job. Ids, sizes and counts only - never a filename, a colour, or any slide text.
     "video_producer.style_imported":     "INFO",
     "video_producer.style_saved":        "INFO",
+    "daddy_ready.panel_read":            "INFO",
+    "daddy_ready.settings_saved":        "INFO",
     "video_producer.style_deleted":      "INFO",
     "video_producer.style_applied":      "INFO",
     # ADR-2247 R2b: the HOST's record of a video job's lifecycle (start, the one terminal state, a
@@ -5280,6 +5282,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "video_producer.style_imported": frozenset({
         "tenant_id", "bytes", "warning_count", "sha256_prefix", "outcome", "format",
     }),
+    "daddy_ready.panel_read": frozenset({"tenant_id", "op"}),
+    "daddy_ready.settings_saved": frozenset({"tenant_id", "op"}),
     "video_producer.style_saved": frozenset({
         "tenant_id", "style_id", "source_kind", "has_plate", "has_mark",
     }),

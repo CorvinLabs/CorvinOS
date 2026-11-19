@@ -204,6 +204,12 @@ export const VideoProducerPage = React.lazy(() =>
   import("@/pages/video-producer").then((m) => ({ default: m.VideoProducerPage }))
 );
 
+// DaddyReady — the console panel of the operator's private plugin `daddy_ready`. Not a static panel: it mounts
+// only while the plugin is installed AND enabled (capability manifest -> manifestPanelRoutes), like CorvinTV.
+export const DaddyReadyPage = React.lazy(() =>
+  import("@/pages/daddy-ready").then((m) => ({ default: m.DaddyReadyPage }))
+);
+
 export const DataHubUnifiedPage = React.lazy(() =>
   import("@/pages/datahub-unified").then((m) => ({ default: m.default }))
 );
