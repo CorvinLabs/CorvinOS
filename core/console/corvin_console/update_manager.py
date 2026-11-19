@@ -310,10 +310,40 @@ def _scrub(text: str) -> str:
 
 
 
+def _windows_updater_alive() -> bool:
+    """True while update.ps1 / install.ps1 holds ``%TEMP%\\corvinos-setup.lock`` and its pid lives.
+
+    The Windows updater stops this console and starts a new one while it is still verifying;
+    the new process has no in-process lock, so without this it settled the run as
+    "interrupted" a few seconds before the updater wrote "verification ok" (2026-11-19)."""
+    try:
+        pid = int((Path(tempfile.gettempdir()) / "corvinos-setup.lock" / "pid").read_text(
+            encoding="utf-8-sig", errors="replace").split()[0])
+    except (OSError, ValueError, IndexError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(k32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+        finally:
+            k32.CloseHandle(handle)
+    except (OSError, AttributeError):
+        return False
+
+
 def _isolated_run_active() -> bool:
     """True while a transient ``corvin-update-*`` systemd unit (the isolated updater) is active.
     False where systemd-run is not used (no unit, or not a Linux systemd host): the in-process
     lock is then the only truth, as before."""
+    if sys.platform == "win32":
+        return _windows_updater_alive()
     if sys.platform != "linux":
         return False
     try:

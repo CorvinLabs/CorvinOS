@@ -1143,6 +1143,10 @@ function Start-ConsoleAgain {
         Install-ConsoleWatchdog $t
     }
     foreach ($t in $script:RestartTasks) {
+        # The AutoRestart task runs corvin-ensure-console.ps1, which exits at once while the
+        # setup lock exists -- and this run holds it. Starting it here is a guaranteed no-op
+        # that only costs the 15 s wait below, then the "launched no console" warning.
+        if ($script:LockHeld -and $t.TaskName -like 'CorvinOS-AutoRestart*') { continue }
         try { Start-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction Stop; $started = $started -or ($t.TaskName -like 'CorvinOS-AutoRestart*' -or $t.TaskName -eq 'CorvinOS-Console') } catch { }
     }
     if (-not $started -and $ConsoleTask) {
