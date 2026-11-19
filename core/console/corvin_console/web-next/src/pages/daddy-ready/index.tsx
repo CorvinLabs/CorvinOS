@@ -18,7 +18,8 @@ import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError } from "@/lib/api/client";
 import {
-  getBrief, getEpisodes, getGraph, getKb, getKbEntry, getOverview, getSettings, renderEpisode, saveSettings, videoUrl,
+  getBrief, getConcepts, getEpisodes, getGraph, getKb, getKbEntry, getOverview, getSettings, getVideos, makeConceptVideo, renderEpisode,
+  saveSettings, templateVideoUrl, videoUrl,
   type EpisodeRow, type KbItem,
 } from "@/lib/api/daddy-ready";
 import { useAuth } from "@/lib/auth";
@@ -161,6 +162,83 @@ function RenderButton({ day }: { day: string }) {
       </Button>
       <p className="text-xs text-muted-foreground">Rendering takes several minutes and sends this day's brief to the video service (CorvinTV). It is refused unless video rendering is on and every source is approved for it under Settings.</p>
       {go.isError ? <ErrorLine error={go.error} /> : null}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ template videos */
+function Player({ src, testid }: { src: string; testid: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [src]);
+  if (failed) return <p role="alert" className="text-sm text-destructive">The video could not be played in this browser.</p>;
+  return (
+    <video key={src} data-testid={testid} controls controlsList="nofullscreen nodownload" playsInline preload="metadata"
+      className="max-h-[28rem] w-full rounded-md bg-black [&::-webkit-media-controls-fullscreen-button]:hidden" src={src} onError={() => setFailed(true)} />
+  );
+}
+
+function VideosView() {
+  const { session } = useAuth();
+  const csrf = session?.csrf_token ?? "";
+  const qc = useQueryClient();
+  const vids = useQuery({
+    queryKey: [...KEY, "videos"], queryFn: ({ signal }) => getVideos(signal), retry: false,
+    refetchInterval: (q) => (q.state.data?.jobs.some((j) => j.state === "running") ? 8_000 : false),
+  });
+  const cons = useQuery({ queryKey: [...KEY, "concepts"], queryFn: ({ signal }) => getConcepts(signal), retry: false });
+  const [concept, setConcept] = useState("");
+  const [name, setName] = useState<string | null>(null);
+  const make = useMutation({
+    mutationFn: (id: string) => makeConceptVideo(id, csrf),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: [...KEY, "videos"] }),
+  });
+  if (vids.isPending || cons.isPending) return <Loading what="videos" />;
+  if (vids.isError) return <ErrorLine error={vids.error} />;
+  if (cons.isError) return <ErrorLine error={cons.error} />;
+  const list = vids.data.videos;
+  const current = list.find((v) => v.name === name) ?? list[0];
+  const running = vids.data.jobs.filter((j) => j.state === "running").map((j) => j.concept);
+  const failed = vids.data.jobs.filter((j) => j.state === "failed").map((j) => j.concept);
+  const chosen = cons.data.concepts.find((c) => c.id === (concept || cons.data.concepts[0]?.id));
+  return (
+    <div className="space-y-4" data-testid="dr-videos">
+      <Card><CardContent className="space-y-3 p-4">
+        <h3 className="text-base font-semibold">Make a concept video</h3>
+        <p className="text-sm text-muted-foreground">A short explainer about one psychology concept, with pictures of your child. It is made on this machine: the voice is offline and the photos never leave it.</p>
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-[16rem] flex-1">
+            <label htmlFor="dr-concept" className="mb-1 block text-xs text-muted-foreground">Concept</label>
+            <Select id="dr-concept" value={chosen?.id ?? ""} onChange={(e) => setConcept(e.target.value)}>
+              {cons.data.concepts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Select>
+          </div>
+          <Button type="button" variant="accent" disabled={!chosen || make.isPending || running.length > 0 || !csrf} onClick={() => chosen && make.mutate(chosen.id)}>
+            {running.length > 0 ? "Making a video…" : make.isPending ? "Starting…" : "Create video"}
+          </Button>
+        </div>
+        {chosen ? <p className="text-xs text-muted-foreground">{chosen.definition} Source: {chosen.source}{chosen.verified ? "" : " (not yet checked by you)"}.</p> : null}
+        {running.length > 0 ? <p role="status" className="text-sm" data-testid="dr-video-running">Rendering takes about a minute. This list updates when it is ready.</p> : null}
+        {failed.length > 0 && running.length === 0 ? <p role="alert" className="text-sm text-destructive">The last video could not be made. Check that the voice and the browser component are installed.</p> : null}
+        {make.isError ? <ErrorLine error={make.error} /> : null}
+      </CardContent></Card>
+      {list.length === 0 ? (
+        <Card><CardContent className="p-6 text-sm text-muted-foreground" data-testid="dr-videos-empty">No concept videos yet. Pick a concept above and press Create video.</CardContent></Card>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
+          <ul className="space-y-1" aria-label="Concept videos">
+            {list.map((v) => (
+              <li key={v.name}>
+                <button type="button" onClick={() => setName(v.name)} aria-current={v.name === current?.name}
+                  className={`w-full rounded-md border p-3 text-left text-sm transition-colors hover:bg-muted ${v.name === current?.name ? "border-primary bg-muted" : ""}`}>
+                  <div className="font-medium">{cons.data.concepts.find((c) => c.id === v.concept)?.name ?? v.concept}</div>
+                  <div className="text-xs text-muted-foreground tabular-nums">{v.day} · {formatDuration(v.duration_s)} · {formatBytes(v.bytes)}</div>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {current ? <Card><CardContent className="space-y-3 p-4"><Player src={templateVideoUrl(current.name)} testid="dr-template-video" /></CardContent></Card> : null}
+        </div>
+      )}
     </div>
   );
 }
@@ -322,11 +400,13 @@ export function DaddyReadyPage() {
       <Tabs defaultValue="episodes">
         <TabsList>
           <TabsTrigger value="episodes">Episodes</TabsTrigger>
+          <TabsTrigger value="videos">Videos</TabsTrigger>
           <TabsTrigger value="knowledge">Knowledge</TabsTrigger>
           <TabsTrigger value="graph">Graph</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
         <TabsContent value="episodes"><EpisodesView /></TabsContent>
+        <TabsContent value="videos"><VideosView /></TabsContent>
         <TabsContent value="knowledge"><KnowledgeView /></TabsContent>
         <TabsContent value="graph"><GraphTab /></TabsContent>
         <TabsContent value="settings"><SettingsView /></TabsContent>

@@ -90,3 +90,13 @@ export interface GraphDoc { nodes: GraphNode[]; edges: GraphEdge[]; truncated: b
 export const getGraph = (signal?: AbortSignal) => api<GraphDoc>(`${P}/graph`, { signal });
 export const renderEpisode = (day: string, csrf: string) =>
   api<{ day: string; status: string }>(`${P}/episodes/${encodeURIComponent(day)}/render`, { method: "POST", csrf });
+
+export interface TemplateVideo { name: string; concept: string; day: string; bytes: number; duration_s: number | null; made_at: string }
+export interface VideoList { videos: TemplateVideo[]; jobs: { concept: string; state: "running" | "done" | "failed" }[] }
+export interface ConceptRow { id: string; name: string; definition: string; source: string; verified: boolean; age_min: number; age_max: number }
+export interface ConceptList { concepts: ConceptRow[]; photos: number; language: string }
+export const getVideos = (signal?: AbortSignal) => api<VideoList>(`${P}/videos`, { signal });
+export const getConcepts = (signal?: AbortSignal) => api<ConceptList>(`${P}/concepts`, { signal });
+export const templateVideoUrl = (name: string) => `${BASE}${P}/videos/${encodeURIComponent(name)}`;
+export const makeConceptVideo = (id: string, csrf: string) =>
+  api<{ concept: string; state: string }>(`${P}/videos/concept/${encodeURIComponent(id)}`, { method: "POST", csrf });

@@ -235,6 +235,68 @@ async def episode_render(day: str, rec=Depends(_require_enabled)) -> Any:
     return {"day": day, "status": "started"}
 
 
+_CONCEPT = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
+_VIDEO = re.compile(r"^[a-z0-9_]+-\d{4}-\d{2}-\d{2}\.mp4$")
+_CONCEPT_JOBS: dict[str, dict[str, Any]] = {}
+
+
+@router.get("/concepts")
+async def concepts(rec=Depends(_require_enabled)) -> Any:
+    return await _call(rec, "concepts", audit=False)
+
+
+@router.get("/videos")
+async def videos_list(rec=Depends(_require_enabled)) -> Any:
+    doc = await _call(rec, "videos", audit=False)
+    prefix = f"{rec.tenant_id}:"
+    doc["jobs"] = [{"concept": k[len(prefix):], "state": v["state"]} for k, v in _CONCEPT_JOBS.items() if k.startswith(prefix)]
+    return doc
+
+
+@router.get("/videos/{name}")
+async def video_file(name: str, rec=Depends(_require_enabled)) -> FileResponse:
+    if not _VIDEO.match(name):
+        raise HTTPException(status_code=422, detail="not a video name")
+    doc = await _call(rec, "video-file", name)
+    p = Path(str(doc.get("path", "")))
+    if p.parent.name != "videos" or not _VIDEO.match(p.name) or not p.is_file():
+        raise HTTPException(status_code=404, detail="no such video")
+    return FileResponse(p, media_type="video/mp4", headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/videos/concept/{concept_id}", status_code=202)
+async def video_concept(concept_id: str, rec=Depends(_require_enabled)) -> Any:
+    """Make a template video for one psychology concept, locally and in the background (offline voice, the child's photos
+    stay on this machine). Poll GET /videos for the job state."""
+    if not _CONCEPT.match(concept_id):
+        raise HTTPException(status_code=422, detail="not a concept id")
+    pdir = _plugin_dir()
+    if pdir is None:
+        raise HTTPException(status_code=503, detail="The DaddyReady plugin source was not found")
+    key = f"{rec.tenant_id}:{concept_id}"
+    if _CONCEPT_JOBS.get(key, {}).get("state") == "running":
+        raise HTTPException(status_code=409, detail="A video for this concept is already being made")
+    env = {k: os.environ[k] for k in _PASS_ENV if k in os.environ}
+    env["PYTHONPATH"] = str(pdir / "src")
+    cmd = [sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); sys.argv = ['daddy_ready'] + sys.argv[2:]; "
+           "from daddy_ready.cli import main; sys.exit(main())", str(pdir / "src"),
+           "--user", _config_user(rec.tenant_id), "video", "concept", concept_id]
+    import threading  # noqa: PLC0415
+    _CONCEPT_JOBS[key] = {"state": "running"}
+
+    def _work() -> None:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=3600, cwd=str(pdir), encoding="utf-8", errors="replace")
+            _CONCEPT_JOBS[key] = {"state": "done" if r.returncode == 0 else "failed"}
+        except (OSError, subprocess.TimeoutExpired):
+            _CONCEPT_JOBS[key] = {"state": "failed"}
+        _audit(rec.tenant_id, "daddy_ready.render_finished", {"op": "video-concept", "outcome": _CONCEPT_JOBS[key]["state"]})
+
+    threading.Thread(target=_work, name=f"daddy-ready-concept-{concept_id}", daemon=True).start()
+    _audit(rec.tenant_id, "daddy_ready.render_started", {"op": "video-concept"})
+    return {"concept": concept_id, "state": "running"}
+
+
 @router.get("/settings")
 async def settings_get(rec=Depends(_require_enabled)) -> Any:
     return await _call(rec, "settings", audit=False)

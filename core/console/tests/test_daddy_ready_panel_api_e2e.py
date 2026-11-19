@@ -194,6 +194,40 @@ class TestDaddyReadyPanelApi(unittest.TestCase):
             self.assertEqual(r.status_code, 202, r.text)                          # background, never blocking
             self.assertEqual(client.post(f"{_API}/episodes/2099-2-3/render", headers=hdr).status_code, 422)
 
+    def test_template_videos_list_range_paths_and_background_creation(self):
+        import time
+        with _sandbox(self.tmp) as (client, hdr, _home, data):
+            self._enable(client, hdr)
+            self._seed(data)
+            cons = client.get(f"{_API}/concepts").json()
+            self.assertGreaterEqual(len(cons["concepts"]), 6)
+            self.assertTrue(all(c["source"] for c in cons["concepts"]))
+            self.assertEqual(client.get(f"{_API}/videos").json()["videos"], [])
+            # a hand-made video in the data dir is listed and served with Range
+            vdir = data / "videos"
+            vdir.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=duration=2:size=160x120:rate=10", "-f", "lavfi",
+                            "-i", "sine=duration=2", "-shortest", "-c:v", "libx264", "-c:a", "aac", str(vdir / "scaffolding-2099-01-01.mp4")],
+                           check=True, timeout=120)
+            lst = client.get(f"{_API}/videos").json()["videos"]
+            self.assertEqual([v["name"] for v in lst], ["scaffolding-2099-01-01.mp4"])
+            self.assertEqual(client.get(f"{_API}/videos/scaffolding-2099-01-01.mp4", headers={"Range": "bytes=0-49"}).status_code, 206)
+            for bad in ("..%2Fsecret.mp4", "x.mp4", "scaffolding-2099-01-01.mp4.bak"):
+                self.assertIn(client.get(f"{_API}/videos/{bad}").status_code, (404, 422))
+            self.assertEqual(client.get(f"{_API}/videos/other-2099-01-01.mp4").status_code, 404)
+            self.assertEqual(client.post(f"{_API}/videos/concept/scaffolding").status_code, 403)     # CSRF
+            self.assertEqual(client.post(f"{_API}/videos/concept/..%2Fx", headers=hdr).status_code, 404)
+            self.assertEqual(client.post(f"{_API}/videos/concept/Bad-Id", headers=hdr).status_code, 422)
+            # background creation: the sandbox has no Piper voice path guarantee, so the job must END (done or failed), never hang
+            r = client.post(f"{_API}/videos/concept/secure_base", headers=hdr)
+            self.assertEqual(r.status_code, 202, r.text)
+            for _ in range(240):
+                jobs = client.get(f"{_API}/videos").json()["jobs"]
+                if jobs and jobs[0]["state"] != "running":
+                    break
+                time.sleep(1)
+            self.assertIn(jobs[0]["state"], ("done", "failed"))
+
     def test_audit_records_carry_the_operation_only(self):
         with _sandbox(self.tmp) as (client, hdr, home, data):
             self._enable(client, hdr)
