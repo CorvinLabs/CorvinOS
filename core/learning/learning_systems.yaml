@@ -204,8 +204,8 @@ systems:
     state: A
     callers:
       - corvin_operator/bridges/shared/adapter.py:3602:collect_active_skills
-      - corvin_operator/bridges/shared/adapter.py:13608:grade_from_user_followup
-      - corvin_operator/bridges/shared/adapter.py:14344:auto_grade_from_output
+      - corvin_operator/bridges/shared/adapter.py:13825:grade_from_user_followup
+      - corvin_operator/bridges/shared/adapter.py:14561:auto_grade_from_output
       - corvin_operator/skill-forge/skill_forge/mcp_server.py:581:promote
       - core/console/corvin_console/routes/chat.py:827:grade_followup
       - core/console/corvin_console/chat_runtime.py:8939:record_turn_skills
@@ -252,9 +252,9 @@ systems:
     name: Model selector learner (descriptive only, shown on the Models page)
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:6004:shadow_classify_task
-      - corvin_operator/bridges/shared/adapter.py:7542:report_turn_outcome
-      - corvin_operator/bridges/shared/adapter.py:7542:report_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:6208:shadow_classify_task
+      - corvin_operator/bridges/shared/adapter.py:7746:report_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:7746:report_turn_outcome
       - core/console/corvin_core/task_manager.py:684:_update_model_selection_confidence
       # reader: GET /v1/console/v1/engine/config -> the Models page task cards
       - core/console/corvin_console/routes/engine_api.py:667:optimizer.get_stats
@@ -300,7 +300,7 @@ systems:
     name: User model distillation (L28, opt-in per chat)
     state: A
     callers:
-      - corvin_operator/bridges/shared/adapter.py:14437:_user_model_distill_async
+      - corvin_operator/bridges/shared/adapter.py:14654:_user_model_distill_async
     readers:
       # the distilled model is loaded into the prompt of the opted-in chat
       - corvin_operator/bridges/shared/adapter.py:3928:_user_model.load
@@ -380,12 +380,12 @@ systems:
       - core/console/corvin_console/chat_runtime.py:4381:resolve_delegation_route
       - core/console/corvin_console/chat_runtime.py:4683:_shared_target
       - core/console/corvin_console/chat_runtime.py:4721:route_and_record
-      - corvin_operator/bridges/shared/adapter.py:10524:resolve_delegation_route
-      - corvin_operator/bridges/shared/adapter.py:10126:resolve_worker_engine
-      - corvin_operator/bridges/shared/adapter.py:10366:route_and_record
+      - corvin_operator/bridges/shared/adapter.py:10728:resolve_delegation_route
+      - corvin_operator/bridges/shared/adapter.py:10330:resolve_worker_engine
+      - corvin_operator/bridges/shared/adapter.py:10570:route_and_record
       # outcome record, joined to the decision by turn_id
       - core/console/corvin_console/chat_runtime.py:4821:record_turn_outcome
-      - corvin_operator/bridges/shared/adapter.py:10430:record_turn_outcome
+      - corvin_operator/bridges/shared/adapter.py:10634:record_turn_outcome
       # console engine guard: a cleared Phase 2 Skill route onto an unavailable engine
       # records its decision and a judged ok:false outcome (the bridge does the same)
       - core/console/corvin_console/routes/chat.py:1068:record_unavailable_skill_route

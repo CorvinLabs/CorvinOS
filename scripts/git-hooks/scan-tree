@@ -1,0 +1,14 @@
+#!/bin/sh
+# Scan the CURRENT tracked tree (git ls-files) for forbidden terms.
+#
+# Checks every tracked file name and file content (binaries skipped, at most
+# 2 MB read per file) against the local terms file
+# ${CORVIN_FORBIDDEN_TERMS_FILE:-$HOME/.config/corvin/public-forbidden-terms.txt}
+# and prints "<path>: term #<n>" per hit plus a count. Never prints the
+# matched text or the term. Exit 1 on any hit, 0 when clean, 2 when the terms
+# file is missing, empty or invalid.
+#
+# Not a git hook: git never calls a file with this name. The implementation
+# lives in the sibling pre-push script (shared term loading). Usage, from
+# anywhere inside a work tree:  scripts/git-hooks/scan-tree
+exec python3 "$(dirname "$0")/pre-push" --scan-tree "$@"

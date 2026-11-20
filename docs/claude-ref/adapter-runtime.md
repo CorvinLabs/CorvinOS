@@ -1671,3 +1671,67 @@ deny-by-default". The bridge's gates take the tenant from
 `adapter._bridge_gate_tenant` (the validated process tenant) — no gate reads
 `CORVIN_TENANT_ID` itself; an ACS run that an inner gate ended is recorded as not
 judged (`no_engine`, `ACSResult.gate_refusal`).
+
+## App-bound channels — a chat that belongs to one plugin (ADR-2333, 2026-11-20)
+
+A plugin can own a chat: every message there goes to the plugin's handler and to NOTHING else — no OS turn, no
+persona routing, no delegation, no background task, no engine. The registry is `core/channel_bindings`
+(`<corvin_home>/tenants/<tid>/global/channel_bindings.json`, 0600, flock + atomic replace, runtime data only); the
+plugin lifecycle fills it (manifest key `bridge_channel`, see layer-plugins.md), the adapter reads it.
+
+**Where it runs.** `_app_channel_turn` is called at the TOP of `process_one`, right after the envelope is parsed —
+before observer envelopes, side-channel envelopes (`_btw`, `_reset`, `_signal`, `_cancel`), the sender re-authorization,
+the per-branch L44 calls and everything else. `process_one` has no single gate, so "after the gates" would have
+skipped several of them; the bound-chat path brings its own, stricter ones. An envelope without a `channel` field (the
+daemon's slash-interaction envelopes) is matched by chat id alone.
+
+**Order inside a bound chat.**
+
+1. `pending` binding (claimed, not yet confirmed): the chat behaves exactly as before — except `/bind`.
+2. observer envelopes: dropped (never buffered, never injected later).
+3. sender: whitelisted owner only (`roles.is_intrinsic_owner`; an empty whitelist makes nobody an owner). Everyone
+   else in a multi-user channel is ignored silently. The disclosure card and `/pass`, `/leave`, `/join` stay in the
+   daemon and are not affected.
+3b. system-made envelopes (any truthy `_*` flag other than the side-channel ones: scheduler, background monitor,
+   shares, completion notices): dropped - never the owner's words.
+4. `/bind status|confirm|resume|release`: the core's own command, matched exactly (`/binder` is the app's).
+   `confirm` = `pending -> active`; `resume` = `suspended -> active` ONLY after handler failures (a binding suspended
+   because its plugin is disabled comes back with the plugin, never from the chat); both re-check that the chat is
+   still closed (no `audience: all`, no observer transcript); `release` = the chat becomes ordinary again (the plugin may claim it again on its next enable or at boot; a chat
+   with history then stays `pending` - ordinary - until the owner confirms once more).
+5. `suspended`: one notice per 10 minutes, the message is dropped — never handed to the OS turn.
+6. `_btw` / `_reset` / `_signal`: one notice; `_cancel` silently. No OS work starts.
+7. pictures, documents, video, audio, empty text: one notice, nothing else.
+8. L44 on the deterministic LOCAL floor only (`spawn_gates.check_l44_floor`) — the cloud classifier never sees the text.
+   Then the owning plugin must be enabled in the tenant's plugin registry right now (a disable whose suspend failed
+   never keeps the handler running).
+9. the handler: `core.channel_bindings.call_handler` runs the declared argv inside the plugin directory with a CLEARED
+   environment (the manifest's `env_allow` names + `PYTHONPATH` from `pythonpath` + `CORVIN_TENANT_ID`,
+   `CORVIN_BRIDGE_SENDER` = `HMAC(per-tenant key, uid)`[:16], `CORVIN_BRIDGE_OWNER=1`, `CORVIN_BRIDGE_CHANNEL`,
+   `CORVIN_BRIDGE_MSG_ID`), text on stdin (4 kB cap), 15 s timeout, JSON `{"text", "changed"}` on stdout. The reply goes
+   to the chat the message came from — whatever the handler prints. 3 consecutive failures suspend the binding.
+
+**Every drop removes the media too.** A dropped envelope's `image_path`/`document_path`/`video_path`/`audio_path`/
+voice files are deleted with it (`_app_discard`) - only regular files inside the inbox, never a symlink, never a path
+outside it. The Discord daemon never stores an attachment under a `.json` name (it appends `.att`), so the adapter
+cannot mistake an attachment for an envelope.
+
+**Scope of v1.** Only `discord` can be bound (`BINDABLE_CHANNELS`): its chat ids are plain numbers, so the
+"fresh chat" check (no ledger, no session directory in any sessions root) knows the directory names. A damaged
+registry drops on doubt (`resolve_strict`).
+
+**Records.** Session ledger: reason `app_channel` (no text, no hash, no reply — a short command is guessable from a
+hash). Audit: `channel_binding.{claimed,activated,refused,suspended,released,routed,dropped}` with counts and ids only.
+A tampered registry or a registry module that cannot be imported: a message whose chat id appears in the registry file
+is dropped rather than handed to the OS turn (drop on doubt).
+
+**Operator CLI.** `python3 corvin_operator/bridges/shared/bindings_cli.py list|confirm|resume|release <binding_id>`
+(`list` shows a chat fingerprint, never the full id).
+
+**Tests.** `shared/test_channel_bindings.py` (registry: race, tampering, refusals, audit, sender token, cleared env) and
+`shared/test_app_bound_channel_e2e.py` (the real daemon: no engine spawn for a bound chat, notices, owner-only,
+`/bind`, failure suspension, ledger without text). Both are in `run-all-tests.sh`.
+
+**Must NOT do:** fall back to the OS turn for a bound chat (suspended, failing or unreadable); call the cloud L44
+classifier for bound-chat text; let a handler choose the reply target; record bound-chat text or its hash in the
+ledger; name a specific app in this public code.

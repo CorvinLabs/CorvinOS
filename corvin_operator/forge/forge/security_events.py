@@ -437,6 +437,14 @@ EVENT_SEVERITY: dict[str, str] = {
     "spg.guest_invited":            "INFO",
     "spg.guest_removed":            "INFO",
     "spg.message_dropped":          "INFO",
+    # App-bound channels (ADR-2333): a chat that belongs to one plugin. Counts only, never text.
+    "channel_binding.claimed":      "INFO",
+    "channel_binding.activated":    "INFO",
+    "channel_binding.refused":      "WARNING",
+    "channel_binding.suspended":    "WARNING",
+    "channel_binding.released":     "INFO",
+    "channel_binding.routed":       "INFO",
+    "channel_binding.dropped":      "INFO",
     # ADR-0017 Phase III — license-gate plugin (corvin-license).
     # Metadata only — JWT body / customer_id / signing key NEVER in chain.
     "license.activated":            "INFO",
@@ -4439,6 +4447,13 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "spg.guest_invited":   frozenset({"uid_hash", "ttl_s", "granted_by_hash", "channel", "chat_key", "tenant_id"}),
     "spg.guest_removed":   frozenset({"uid_hash", "channel", "chat_key", "tenant_id"}),
     "spg.message_dropped": frozenset({"msg_id", "sender_hash", "mode", "reason", "channel", "chat_key", "tenant_id"}),
+    "channel_binding.claimed": frozenset({"tenant_id", "binding_id", "plugin_id", "channel", "chat_key", "reason", "text_len", "kind", "ok"}),
+    "channel_binding.activated": frozenset({"tenant_id", "binding_id", "plugin_id", "channel", "chat_key", "reason", "text_len", "kind", "ok"}),
+    "channel_binding.refused": frozenset({"tenant_id", "binding_id", "plugin_id", "channel", "chat_key", "reason", "text_len", "kind", "ok"}),
+    "channel_binding.suspended": frozenset({"tenant_id", "binding_id", "plugin_id", "channel", "chat_key", "reason", "text_len", "kind", "ok"}),
+    "channel_binding.released": frozenset({"tenant_id", "binding_id", "plugin_id", "channel", "chat_key", "reason", "text_len", "kind", "ok"}),
+    "channel_binding.routed": frozenset({"tenant_id", "binding_id", "plugin_id", "channel", "chat_key", "reason", "text_len", "kind", "ok"}),
+    "channel_binding.dropped": frozenset({"tenant_id", "binding_id", "plugin_id", "channel", "chat_key", "reason", "text_len", "kind", "ok"}),
     # ADR-0163 — ULO store corruption event; chat_key_hash is sha256 prefix (never raw key).
     "ulo.store_corrupted":    frozenset({"channel", "chat_key_hash"}),
     # ADR-0163 — ULO CRUD events. ulo_id is an opaque UUID; action is a controlled vocab string.

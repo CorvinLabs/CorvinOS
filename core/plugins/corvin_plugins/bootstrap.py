@@ -1547,6 +1547,17 @@ def _bootstrap_state_registry(
             "loaded %d plugin(s) from state.TenantRegistry for tenant %r: %s",
             len(loaded), tenant_id, loaded
         )
+
+    # App-bound channels (ADR-2333): restore the binding registry from the
+    # records — claim for every enabled declaring plugin (idempotent, no
+    # duplicates), suspend bindings whose plugin is gone or disabled.
+    # Best-effort; never blocks the boot.
+    try:
+        from .state import reconcile_bridge_channels
+
+        reconcile_bridge_channels(tenant_registry.records.values(), tenant_id=tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        log.error("bridge channel reconcile skipped (%s)", type(exc).__name__)
     return loaded
 
 

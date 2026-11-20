@@ -1758,6 +1758,67 @@ Audit events: `plugin.installed`, `plugin.enabled`, `plugin.enable_denied`,
 `plugin.uninstalled` — all real, hash-chained, and `config_changed` records
 **key names only** (setting values can contain a webhook URL or an account id).
 
+### App-bound channels (`bridge_channel`, ADR-2333)
+
+A plugin may own one messaging chat: its messages go to the plugin's handler and
+nothing else (no OS turn, no delegation, no background task). The registry of such
+chats is `core/channel_bindings` (runtime data, `<corvin_home>/tenants/<tid>/global/channel_bindings.json`,
+mode 0600); the plugin lifecycle keeps it in step with the plugin record.
+
+**Manifest key** (`plugin.yaml`):
+
+```yaml
+bridge_channel:
+  channel: discord                     # a bridge channel name
+  describe: {argv: [python, describe.py]}   # prints {"chat_id": "...", "notices"?: {...}}
+  handler:
+    argv: [python, handler.py]         # text on stdin, {"text": ...} on stdout
+    env_allow: [SOME_SETTING]          # the whole environment the handler gets (no credentials)
+    pythonpath: [src]                  # optional, relative to the plugin directory
+```
+
+`argv[0]` may be `python`/`python3` (the bridge's interpreter); every path-like
+element must stay inside the plugin directory.
+
+**Projection at install/update time.** `marketplace_resolve.record_from_manifest`
+(every marketplace install, update and default-plugin install goes through it)
+runs `channel_bindings.validate_declaration(decl, plugin_dir)` and stores the
+normalised dict (with the resolved plugin `root`) on `PluginRecord.bridge_channel`.
+An invalid declaration — e.g. an `argv` leaving the plugin directory — is logged
+and dropped: it costs the plugin its channel, never the install.
+
+**Persistence rule.** `bridge_channel` is written into `registry.yaml` ONLY when
+set (like `learning_loops`): `PluginRecord.from_dict` rejects unknown keys, so a
+record that declares no channel must stay readable by an older reader.
+
+**Lifecycle mapping** (`state.sync_bridge_channel`, called by the public
+`PluginLifecycle.enable` / `upgrade` / `disable` / `uninstall` AFTER the
+registry write committed — never inside the 2 s registry lock, because
+`describe` is a subprocess):
+
+| Transition | Registry action |
+|---|---|
+| enable, update (of an enabled plugin) | `describe` → `claim(claimed_by="plugin_manifest")`; a fresh chat (no chat profile, no session ledger) is `active`, any other `pending`; a binding suspended by `plugin_disabled`/`orphaned` is `resume`d (back to its previous status — re-enabling never confirms a `pending` one); this plugin's bindings for any other chat are released (`superseded`); an update that drops the key releases (`declaration_removed`) |
+| disable | `mark_was` → `suspend(reason="plugin_disabled")` |
+| uninstall | `release(reason="plugin_uninstalled")` |
+
+Best effort, like the console-panel sync: a `BindingError` (a second plugin
+claiming an owned chat is refused and audited `channel_binding.refused`) or any
+other exception is logged by type name and never blocks the plugin transition.
+Audit goes through the registry's own audit-first writer (`audit=None`), not
+`state._audit`, which swallows write failures.
+
+**Boot reconcile.** `bootstrap._bootstrap_state_registry` (the `bootstrap_tenant`
+path) calls `state.reconcile_bridge_channels`: every ENABLED record with a
+declaration gets the enable sync (claim is idempotent per owner, so restarts
+never duplicate a binding; a lost binding file is rebuilt), and every binding
+whose plugin has no enabled declaring record is suspended (`reason="orphaned"`).
+With `plugin_runtime_lifecycle` off, `bootstrap_tenant` returns early and no
+reconcile runs.
+
+Tests: `core/plugins/tests/test_bridge_channel_lifecycle.py` (real
+`PluginLifecycle`, real registry, real `bootstrap_tenant`).
+
 ### Stage 2 — health collection + metrics (ADR-0231)
 
 `health.HealthCollector` polls `health_check_all()` on an interval and keeps the

@@ -756,9 +756,13 @@ class PluginLifecycle:
         """Enable a record, enforcing the consent gate and dependency health."""
         self._require_enabled("enable")
         with self._mutation() as reg:
-            return self._enable_locked(
+            enabled = self._enable_locked(
                 reg, plugin_id, consent_granted_by=consent_granted_by
             )
+        # After the registry write committed (outside its 2 s lock): the
+        # plugin's describe command is a subprocess.
+        self._sync_bridge_channel(enabled, "enable")
+        return enabled
 
     def _enable_locked(
         self, reg: TenantRegistry, plugin_id: str, *, consent_granted_by: str | None
@@ -950,6 +954,41 @@ class PluginLifecycle:
                 action, record.plugin_id, type(exc).__name__,
             )
 
+    def _sync_bridge_channel(self, record: PluginRecord, action: str) -> None:
+        """Keep the app-bound channel registry (ADR-2333, ``core.channel_bindings``)
+        in step with a plugin transition — the ``_sync_console_panel`` twin.
+
+        Called by the public ``enable``/``upgrade``/``disable``/``uninstall``
+        AFTER the registry write committed, never inside the registry lock: the
+        enable path runs the plugin's ``describe`` subprocess (up to 10 s), and
+        that lock refuses other callers after 2 s.
+
+        Best-effort: a binding failure (``BindingError`` or anything else) is
+        logged by type name and never blocks or undoes the plugin transition.
+
+        Called from inside a running event loop (the console's async routes call
+        the lifecycle directly), the sync runs on ONE long-lived worker thread
+        instead, in order, so the loop never waits for a plugin subprocess
+        (CLAUDE.md "Console Event Loop Stays Free"). Outside a loop it runs inline.
+        """
+        tenant_id = self.tenant_id
+
+        def _run() -> None:
+            try:
+                sync_bridge_channel(record, action, tenant_id=tenant_id)
+            except Exception as exc:  # noqa: BLE001 — never blocks the plugin transition
+                log.error(
+                    "bridge channel sync (%s) failed for %r (%s)",
+                    action, record.plugin_id, type(exc).__name__,
+                )
+        try:
+            import asyncio  # noqa: PLC0415
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _run()
+            return
+        _bridge_sync_pool().submit(_run)
+
     def _deactivate(self, record: PluginRecord) -> None:
         """Unregister the plugin for this record, right now.
 
@@ -1017,10 +1056,13 @@ class PluginLifecycle:
         """
         self._require_enabled("update")
         with self._mutation() as reg:
-            return self._upgrade_locked(
+            upgraded, report = self._upgrade_locked(
                 reg, plugin_id, new_record,
                 updated_by=updated_by, approve_escalations=approve_escalations,
             )
+        if upgraded.enabled:
+            self._sync_bridge_channel(upgraded, "update")
+        return upgraded, report
 
     def _upgrade_locked(
         self,
@@ -1188,7 +1230,9 @@ class PluginLifecycle:
         """Disable a record.  Dependents that are still enabled block the change."""
         self._require_enabled("disable")
         with self._mutation() as reg:
-            return self._disable_locked(reg, plugin_id)
+            disabled = self._disable_locked(reg, plugin_id)
+        self._sync_bridge_channel(disabled, "disable")
+        return disabled
 
     def _disable_locked(self, reg: TenantRegistry, plugin_id: str) -> PluginRecord:
         record = reg.get(plugin_id)
@@ -1245,7 +1289,9 @@ class PluginLifecycle:
         """
         self._require_enabled("uninstall")
         with self._mutation() as reg:
+            record = reg.get(plugin_id)
             self._uninstall_locked(reg, plugin_id, purge_state=purge_state)
+        self._sync_bridge_channel(record, "uninstall")
 
     def _uninstall_locked(
         self, reg: TenantRegistry, plugin_id: str, *, purge_state: bool
@@ -1283,6 +1329,109 @@ class PluginLifecycle:
             tenant_id=self.tenant_id,
         )
         self._sync_console_panel(record, "uninstall")
+
+
+# ── App-bound channels (ADR-2333) ───────────────────────────────────────────
+
+#: Suspension reasons a re-enable (or the boot reconcile) undoes. A binding the
+#: bridge suspended for handler failures stays suspended until the operator acts.
+_RESUMABLE_REASONS = frozenset({"plugin_disabled", "orphaned"})
+
+
+def _channel_bindings():
+    import core.channel_bindings as cb  # noqa: PLC0415 — lazy: core/ is optional for this package
+
+    return cb
+
+
+_BRIDGE_SYNC_POOL = None
+_BRIDGE_SYNC_POOL_LOCK = threading.Lock()
+
+
+def _bridge_sync_pool():
+    """One long-lived worker for bridge-channel syncs started from an event loop (order kept, no thread per request)."""
+    global _BRIDGE_SYNC_POOL
+    with _BRIDGE_SYNC_POOL_LOCK:
+        if _BRIDGE_SYNC_POOL is None:
+            from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+            _BRIDGE_SYNC_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bridge-channel-sync")
+        return _BRIDGE_SYNC_POOL
+
+
+def sync_bridge_channel(record: PluginRecord, action: str, *, tenant_id: str) -> None:
+    """Apply one lifecycle transition of ``record`` to the binding registry.
+
+    ``enable``/``update``: ask the plugin which chat it serves (``describe``),
+    ``claim`` it (idempotent per owner; a fresh chat is ``active``, any other
+    ``pending``), resume a binding suspended by an earlier disable, and release
+    this plugin's bindings for any OTHER chat (the declaration moved).
+    ``disable``: remember each status (``mark_was``), then suspend.
+    ``uninstall``: release. Raises whatever the registry raises; callers decide.
+    Audit: ``audit=None`` — the registry writes through its own audit-first
+    writer; this module's ``_audit`` swallows failures, which would let a
+    binding change land unrecorded.
+    """
+    cb = _channel_bindings()
+    pid = record.plugin_id
+    if action in ("enable", "update"):
+        decl = record.bridge_channel
+        if not decl:
+            # the (new) version declares no channel: release whatever this plugin still holds - also on enable, for a
+            # version that was updated while disabled (its old binding would otherwise stay suspended forever)
+            if any(b["plugin_id"] == pid for b in cb.list_bindings(tenant_id)):
+                cb.release(tenant_id, plugin_id=pid, reason="declaration_removed")
+            return
+        desc = cb.describe(decl, tenant_id)
+        binding = cb.claim(
+            tenant_id, plugin_id=pid, decl=decl, chat_id=desc["chat_id"],
+            notices=desc.get("notices"), claimed_by="plugin_manifest",
+        )
+        for other in cb.list_bindings(tenant_id):
+            if other["plugin_id"] == pid and other["binding_id"] != binding["binding_id"]:
+                cb.release(tenant_id, binding_id=other["binding_id"], reason="superseded")
+        if binding.get("status") == "suspended" and binding.get("reason") in _RESUMABLE_REASONS:
+            cb.resume(tenant_id, plugin_id=pid)
+    elif action == "disable":
+        if not any(b["plugin_id"] == pid for b in cb.list_bindings(tenant_id)):
+            return
+        cb.mark_was(tenant_id, pid)
+        cb.suspend(tenant_id, plugin_id=pid, reason="plugin_disabled")
+    elif action == "uninstall":
+        if any(b["plugin_id"] == pid for b in cb.list_bindings(tenant_id)):
+            cb.release(tenant_id, plugin_id=pid, reason="plugin_uninstalled")
+    else:
+        raise ValueError(f"unknown bridge channel action {action!r}")
+
+
+def reconcile_bridge_channels(records: Any, *, tenant_id: str) -> None:
+    """Boot reconcile (ADR-2333 Decision 2): declared vs registered.
+
+    Every ENABLED record with a ``bridge_channel`` gets the enable sync (claim is
+    idempotent per owner, so a restart never duplicates a binding); every
+    binding whose plugin has no enabled record with a declaration is suspended
+    (``reason="orphaned"``). Best-effort per step; never raises.
+    """
+    declared: set[str] = set()
+    for record in records:
+        if not (getattr(record, "enabled", False) and getattr(record, "bridge_channel", None)):
+            continue
+        declared.add(record.plugin_id)
+        try:
+            sync_bridge_channel(record, "enable", tenant_id=tenant_id)
+        except Exception as exc:  # noqa: BLE001 — one plugin's binding never blocks boot
+            log.error(
+                "bridge channel reconcile failed for %r (%s)",
+                record.plugin_id, type(exc).__name__,
+            )
+    try:
+        cb = _channel_bindings()
+        orphaned = {b["plugin_id"] for b in cb.list_bindings(tenant_id)
+                    if b["plugin_id"] not in declared and b["status"] != "suspended"}
+        for pid in sorted(orphaned):
+            cb.mark_was(tenant_id, pid)   # a later re-enable restores THIS status, never a stale one
+            cb.suspend(tenant_id, plugin_id=pid, reason="orphaned")
+    except Exception as exc:  # noqa: BLE001
+        log.error("bridge channel orphan sweep failed (%s)", type(exc).__name__)
 
 
 #: Every plugin_type that owns a provider slot, mapped to its module name.

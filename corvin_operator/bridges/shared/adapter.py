@@ -5259,6 +5259,210 @@ def _pkb_bridge():
         return None
 
 
+# ── App-bound channels (ADR-2333) ────────────────────────────────────────────────────────────────────────────────
+# A chat that belongs to one plugin: every message goes to the plugin's handler and nowhere else (no model turn, no
+# delegation, no background task). The registry lives in core/channel_bindings; this is the adapter side.
+
+_APP_MEDIA_KEYS = ("image_path", "document_path", "video_path", "audio_path", "voice_path", "voice_attachment_path")
+_APP_SIDE_KEYS = ("_btw", "_reset", "_signal", "_cancel")
+_APP_BIND_RE = re.compile(r"^/bind(?:\s|$)", re.I)
+_CB_IMPORT_FAILED = False
+
+
+def _channel_bindings():
+    """``core.channel_bindings`` or None (then :func:`_app_channel_fallback_bound` decides, fail closed)."""
+    global _CB_IMPORT_FAILED
+    if _CB_IMPORT_FAILED:
+        return None
+    try:
+        _root = str(Path(__file__).resolve().parents[3])
+        if _root not in sys.path:
+            sys.path.append(_root)
+        import core.channel_bindings as _cb  # noqa: PLC0415
+        return _cb
+    except Exception as e:  # noqa: BLE001
+        _CB_IMPORT_FAILED = True
+        log(f"app-bound channels unavailable: {type(e).__name__}")
+        return None
+
+
+def _app_channel_fallback_bound(tenant_id: str, chat_id: str) -> bool:
+    """Without the registry module: is this chat id named in the registry file at all? Then the message is dropped
+    rather than handed to the OS turn (personal text must never reach a model because a module failed to import)."""
+    try:
+        try:
+            from paths import corvin_home as _ch  # type: ignore  # noqa: PLC0415 - the canonical root resolver
+            home = Path(_ch())
+        except Exception:  # noqa: BLE001
+            home = Path(os.path.expandvars(os.environ.get("CORVIN_HOME") or "~/.corvin")).expanduser()
+        p = home / "tenants" / tenant_id / "global" / "channel_bindings.json"
+        return p.is_file() and f'"{chat_id}"' in p.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _app_discard(inbox_file: Path, msg: dict) -> None:
+    """Remove a bound chat's envelope AND the media the daemon saved next to it (a photo, voice note or file of a
+    message the app never takes in must not stay on disk). Only paths inside the inbox are touched."""
+    try:
+        inbox_root = INBOX.resolve()
+        for key in _APP_MEDIA_KEYS:
+            raw = msg.get(key) if isinstance(msg, dict) else None
+            if not raw or not isinstance(raw, str):
+                continue
+            p = Path(raw)
+            try:
+                rp = p.resolve()
+            except OSError:
+                continue
+            if inbox_root in rp.parents and rp.is_file() and not p.is_symlink():
+                rp.unlink(missing_ok=True)
+    except Exception as e:  # noqa: BLE001
+        log(f"app channel: attachment cleanup failed: {type(e).__name__}")
+    inbox_file.unlink(missing_ok=True)
+
+
+def _app_reply(channel: str, sender: str, chat_id, msg_id: str, text: str, n: int = 0) -> None:
+    env = {"channel": channel, "to": sender, "text": text}
+    if chat_id is not None:
+        env["chat_id"] = chat_id
+    _atomic_write_outbox(OUTBOX / f"{msg_id}_{n:02d}.json", json.dumps(env, ensure_ascii=False, indent=2))
+
+
+def _app_channel_turn(msg: dict, inbox_file: Path, channel: str, chat_id, sender: str, msg_id: str) -> bool:
+    """Handle ``msg`` when its chat is app-bound. Returns True when the message was handled (answered or dropped) and
+    the OS turn must NOT run; False for an ordinary chat (or a binding still waiting for its confirmation)."""
+    if chat_id is None:
+        return False
+    tenant_id = os.environ.get("CORVIN_TENANT_ID") or "_default"
+    cb = _channel_bindings()
+    if cb is None:
+        if _app_channel_fallback_bound(tenant_id, str(chat_id)):
+            log(f"app channel {msg_id}: registry module unavailable, message dropped")
+            _app_discard(inbox_file, msg)
+            return True
+        return False
+    # An envelope without a `channel` field (older writers; the adapter would call it whatsapp) is matched by its chat
+    # id alone, so it cannot slip past a binding.
+    try:
+        binding = cb.resolve_strict(tenant_id, channel, str(chat_id), any_channel=not msg.get("channel"))
+    except cb.BindingError:
+        # a damaged registry: drop on doubt (the chat may be bound), never hand the text to the OS turn
+        if _app_channel_fallback_bound(tenant_id, str(chat_id)):
+            log(f"app channel {msg_id}: registry unreadable, message dropped")
+            _app_discard(inbox_file, msg)
+            return True
+        return False
+    if binding is None:
+        return False
+    channel = binding["channel"]
+    chat_key = str(chat_id)
+    text = msg.get("text") if isinstance(msg.get("text"), str) else ""
+    is_bind = bool(_APP_BIND_RE.match(text.strip()))
+
+    def _drop(reason: str) -> bool:
+        _audit_event("channel_binding.dropped", channel=channel, chat_key=chat_key, user=sender,
+                     details={"binding_id": binding["binding_id"], "plugin_id": binding["plugin_id"], "reason": reason})
+        _app_discard(inbox_file, msg)
+        return True
+
+    if binding["status"] == "pending" and not is_bind:
+        return False                                        # not confirmed yet: the chat still behaves as before
+    # 1. observers never feed a bound chat (no buffer, no later prompt injection)
+    if msg.get("_observer"):
+        return _drop("observer")
+    # 2. sender policy: whitelisted owner only; an empty whitelist makes nobody an owner (fail closed)
+    try:
+        import roles as _roles  # noqa: PLC0415
+        owner = bool(sender) and _roles.is_intrinsic_owner(channel, str(sender))
+    except Exception:  # noqa: BLE001
+        owner = False
+    if not owner:
+        return _drop("not_owner")
+    # 2b. system-made envelopes (scheduler, background monitor, shares, completion notices ...): never the owner's
+    #     words, so never fed to the app and never to the OS turn either
+    if any(k.startswith("_") and msg.get(k) for k in msg if k not in _APP_SIDE_KEYS):
+        return _drop("system_envelope")
+    # 3. the core's own command in a bound chat
+    if is_bind:
+        _app_reply(channel, sender, chat_id, msg_id, _app_bind_command(cb, tenant_id, binding, text))
+        _app_discard(inbox_file, msg)
+        return True
+    # 4. a suspended binding answers (rate-limited) and drops - never falls back to the OS turn
+    if binding["status"] == "suspended":
+        if cb.take_notice_slot(tenant_id, binding["binding_id"]):
+            _app_reply(channel, sender, chat_id, msg_id, cb.notice(binding, "suspended"))
+        return _drop("suspended")
+    # 5. side-channel envelopes (/btw, /new, signals) start no OS work here
+    if any(msg.get(k) for k in _APP_SIDE_KEYS):
+        if not msg.get("_cancel"):
+            _app_reply(channel, sender, chat_id, msg_id, cb.notice(binding, "side"))
+        return _drop("side_channel")
+    # 6. pictures, files, voice: one notice, nothing else
+    if any(msg.get(k) for k in _APP_MEDIA_KEYS) or not text.strip():
+        _app_reply(channel, sender, chat_id, msg_id, cb.notice(binding, "media"))
+        return _drop("media")
+    # 7. house rules on the deterministic LOCAL floor only (the cloud classifier is never called for this text)
+    try:
+        from spawn_gates import check_l44_floor as _floor  # type: ignore  # noqa: PLC0415
+        refusal = _floor(text, tenant_id, persona="assistant", channel=channel, chat_key=chat_key)
+    except Exception:  # noqa: BLE001 - fail closed
+        refusal = "This message could not be checked and was not passed on."
+    if refusal is not None:
+        _app_reply(channel, sender, chat_id, msg_id, str(refusal))
+        _ledger_record_side_turn(channel, chat_key, text, "", msg_id=str(msg_id), sender=str(sender),
+                                 refused="app_channel", gated=True)
+        return _drop("house_rules")
+    # 7b. the owning plugin must be enabled right now (a disable whose suspend failed must not keep it running)
+    if not cb.plugin_enabled(tenant_id, binding["plugin_id"]):
+        if cb.take_notice_slot(tenant_id, binding["binding_id"]):
+            _app_reply(channel, sender, chat_id, msg_id, cb.notice(binding, "suspended"))
+        return _drop("plugin_disabled")
+    # 8. the plugin's handler; the reply goes to THIS chat whatever the handler prints
+    ok, reply = cb.call_handler(binding, tenant_id, text=text, sender=str(sender), msg_id=str(msg_id))
+    after = cb.record_result(tenant_id, binding["binding_id"], ok) or binding
+    if ok:
+        _app_reply(channel, sender, chat_id, msg_id, reply)
+    elif after.get("status") == "suspended":
+        _app_reply(channel, sender, chat_id, msg_id, cb.notice(binding, "suspended"))
+    else:
+        _app_reply(channel, sender, chat_id, msg_id, cb.notice(binding, "failed"))
+    _ledger_record_side_turn(channel, chat_key, text, reply, msg_id=str(msg_id), sender=str(sender),
+                             refused="app_channel", gated=True)
+    _audit_event("channel_binding.routed", channel=channel, chat_key=chat_key, user=sender,
+                 details={"binding_id": binding["binding_id"], "plugin_id": binding["plugin_id"],
+                          "text_len": len(text), "ok": bool(ok)})
+    _app_discard(inbox_file, msg)
+    return True
+
+
+def _app_bind_command(cb, tenant_id: str, binding: dict, text: str) -> str:
+    """``/bind status|confirm|release`` for the owner of a bound (or claimed) chat."""
+    parts = text.strip().split()
+    sub = parts[1].lower() if len(parts) > 1 else "status"
+    try:
+        if sub == "confirm":
+            if binding["status"] != "pending":
+                return f"This chat is already bound to the app ({binding['status']})."
+            return ("Confirmed: from now on every message in this chat goes to the app only."
+                    if cb.confirm(tenant_id, binding["binding_id"]) else "Nothing to confirm.")
+        if sub == "resume":
+            if binding["status"] != "suspended":
+                return f"Nothing to resume (status: {binding['status']})."
+            if binding.get("reason") != "handler_failures":
+                return "The app is switched off by the operator; it comes back when the app is enabled again."
+            return ("Resumed: messages go to the app again." if cb.reactivate(tenant_id, binding["binding_id"])
+                    else "Nothing to resume.")
+        if sub == "release":
+            cb.release(tenant_id, binding_id=binding["binding_id"], reason="released_by_owner")
+            return "Released: this chat is an ordinary chat again."
+        return (f"This chat is bound to the app (status: {binding['status']}). "
+                "`/bind confirm` activates a pending binding, `/bind resume` restarts a suspended one, "
+                "`/bind release` gives the chat back.")
+    except Exception as exc:  # noqa: BLE001 - BindingError or an audit failure: nothing changed
+        return f"Nothing changed: {exc}"
+
+
 def _pkb_regate_for_provider(resolved: dict, provider, channel: str, chat_key, *,
                              force_withhold: bool = False) -> None:
     """A turn rerouted to a provider (ADR-2268): the personal block was gated for claude_code, so
@@ -12448,6 +12652,19 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     import hashlib as _hl
     _uid_fp = _hl.sha256(str(sender).encode()).hexdigest()[:8]
     log(f"processing {msg_id} channel={channel} from={_uid_fp}")
+
+    # App-bound channels (ADR-2333): checked before EVERY other branch (observers, side channels, gates, the OS
+    # turn) - a bound chat's text goes to its app and nowhere else. An unexpected error drops the message only when
+    # the chat is named in the registry; an ordinary chat is never affected.
+    try:
+        if _app_channel_turn(msg, inbox_file, channel, chat_id, sender, msg_id):
+            return
+    except Exception as _cb_exc:  # noqa: BLE001
+        log(f"app channel {msg_id}: {type(_cb_exc).__name__}")
+        if chat_id is not None and _app_channel_fallback_bound(os.environ.get("CORVIN_TENANT_ID") or "_default",
+                                                               str(chat_id)):
+            _app_discard(inbox_file, msg)
+            return
 
     # Observer-transcript side-channel (Layer 16, Phase 2 + Layer 17).
     # A read-only sender on a chat with `observer_visibility =

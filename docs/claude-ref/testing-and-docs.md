@@ -264,6 +264,33 @@ defect classes before they reach a Windows install:
   planted-offender positive control. The bare open-flag classes live in
   `tests/skills/test_windows_o_nofollow.py`.
 
+## Pre-push term scan (T-0428)
+
+`scripts/git-hooks/pre-push` refuses to publish forbidden terms to a public remote. For a push to a
+remote whose URL matches a line of the remotes file, it scans every commit about to be pushed
+(`remote_sha..local_sha`; a new branch: commits on no remote-tracking ref): added diff lines, the
+names of added/copied/renamed files and the commit message. A hit prints
+`refused: <file or "commit message"> matches term #<n>` (`<n>` = line number in the terms file;
+the matched text and the term are never printed) and exits 1. A listed remote with a missing,
+empty or invalid terms file is refused (fail closed); an unlisted remote is not scanned; deleting
+a remote ref is allowed.
+
+`scripts/git-hooks/scan-tree` checks the CURRENT tracked tree (`git ls-files`): file names and
+contents (binaries skipped, at most 2 MB per file), prints `<path>: term #<n>` per hit and a count;
+exit 1 on a hit, 0 when clean, 2 when the terms file is missing. It makes content that was tracked
+before the hook existed visible; removing it or rewriting history is the operator's decision.
+
+The two input files are LOCAL and never part of the repository:
+
+| File | Default path (env override) | Format |
+|---|---|---|
+| Public remotes | `~/.config/corvin/public-remotes.txt` (`CORVIN_PUBLIC_REMOTES_FILE`) | one URL substring or Python regex per line, `#` comments |
+| Forbidden terms | `~/.config/corvin/public-forbidden-terms.txt` (`CORVIN_FORBIDDEN_TERMS_FILE`) | one case-insensitive Python regex per line, `#` comments |
+
+Install per clone (opt-in): `git config core.hooksPath scripts/git-hooks` (or
+`scripts/git-hooks/install.sh`, which also activates the other tracked hooks). Tests:
+`tests/scripts/test_pre_push_terms.py` (real `git push` to a local bare repository).
+
 ## Related
 
 - [layer-summary.md](layer-summary.md) — Layer reference index

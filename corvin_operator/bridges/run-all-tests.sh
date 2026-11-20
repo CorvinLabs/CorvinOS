@@ -212,6 +212,8 @@ run "Python: adapter cowork"     python3 shared/test_adapter_cowork.py >/dev/nul
 run "Python: adapter skill-inject" python3 shared/test_adapter_skill_inject.py >/dev/null || fails=$((fails+1))
 run "Python: session ledger (unit)" python3 shared/test_session_ledger.py >/dev/null || fails=$((fails+1))
 run "Python: session ledger E2E (compaction/reset/new)" python3 shared/test_session_ledger_e2e.py >/dev/null || fails=$((fails+1))
+run "Python: app-bound channels - registry, plugin lifecycle, pre-push term scan (ADR-2333)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_channel_bindings.py ../../core/plugins/tests/test_bridge_channel_lifecycle.py ../../tests/scripts/test_pre_push_terms.py -q -p no:cacheprovider >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: app-bound channels - E2E through process_one (ADR-2333)" python3 shared/test_app_bound_channel_e2e.py >/dev/null 2>&1 || fails=$((fails+1))
 run "Python: CEL anchor per-chat key E2E" python3 shared/test_cel_anchor_bridge_e2e.py >/dev/null || fails=$((fails+1))
 run "Python: first audit write on fresh install" python3 shared/test_instance_key_first_audit_no_deadlock.py >/dev/null || fails=$((fails+1))
 run "Python: ledger side turns pass L44" python3 -m pytest -q shared/test_ledger_side_turn_gate.py >/dev/null || fails=$((fails+1))

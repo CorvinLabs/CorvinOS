@@ -446,6 +446,16 @@ class PluginRecord:
     #: declares nothing.
     learning_loops: List[Dict[str, Any]] = field(default_factory=list)
 
+    #: App-bound channel (ADR-2333): the chat this plugin owns, as the normalised
+    #: dict ``core.channel_bindings.validate_declaration`` returns from the
+    #: manifest's ``bridge_channel`` key (``channel``, ``root``, ``describe.argv``,
+    #: ``handler.{argv, env_allow, pythonpath}``). Copied here at install time like
+    #: ``console_panel``; ``PluginLifecycle._sync_bridge_channel`` (state.py)
+    #: keeps the binding registry in step with enable/disable/uninstall.
+    #: Persisted only when set, so an older reader (which rejects unknown keys)
+    #: is not broken by a plugin that declares no channel.
+    bridge_channel: Optional[Dict[str, Any]] = None
+
     def __post_init__(self) -> None:
         if self.plugin_type not in KNOWN_PLUGIN_TYPES:
             raise UnknownPluginType(
@@ -557,6 +567,8 @@ class PluginRecord:
         }
         if self.learning_loops:
             data["learning_loops"] = [dict(loop) for loop in self.learning_loops]
+        if self.bridge_channel is not None:
+            data["bridge_channel"] = dict(self.bridge_channel)
         return data
 
     @classmethod
@@ -626,6 +638,8 @@ class PluginRecord:
                 console_panel=data.get("console_panel"),
                 learning_loops=[dict(loop) for loop in data.get("learning_loops") or []
                                 if isinstance(loop, dict)],
+                bridge_channel=(dict(data["bridge_channel"])
+                                if isinstance(data.get("bridge_channel"), dict) else None),
             )
         except KeyError as exc:
             raise PluginError(f"registry record missing required field {exc}") from exc

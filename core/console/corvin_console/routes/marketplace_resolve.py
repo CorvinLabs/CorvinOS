@@ -286,7 +286,29 @@ def record_from_manifest(manifest: dict, *, plugin_dir: Path) -> "PluginRecord":
         # Learning loops the plugin declares (ADR-0906): only entries that pass the schema reach the
         # registry, so a malformed declaration costs the plugin its loop, never the install.
         learning_loops=_declared_learning_loops(manifest),
+        # The chat the plugin owns (ADR-2333 app-bound channel), validated against
+        # the plugin directory; an invalid declaration costs the channel, never the install.
+        bridge_channel=_declared_bridge_channel(manifest, plugin_dir),
     )
+
+
+def _declared_bridge_channel(manifest: dict, plugin_dir: Path) -> dict | None:
+    """The manifest's ``bridge_channel``, normalised by ``core.channel_bindings.validate_declaration``,
+    or None when absent or invalid (logged, dropped)."""
+    decl = manifest.get("bridge_channel")
+    if decl is None:
+        return None
+    try:
+        from core.channel_bindings import BindingError, validate_declaration
+    except ImportError:  # pragma: no cover - stripped install without core/channel_bindings
+        _log.warning("plugin %s: bridge_channel declared but channel bindings are unavailable; dropped",
+                     manifest.get("plugin_id"))
+        return None
+    try:
+        return validate_declaration(decl, plugin_dir)
+    except BindingError as exc:
+        _log.warning("plugin %s: bridge_channel dropped (%s)", manifest.get("plugin_id"), exc)
+        return None
 
 
 def _declared_learning_loops(manifest: dict) -> list[dict]:

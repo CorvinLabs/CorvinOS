@@ -442,7 +442,7 @@ def append_turn(
     count as live."""
     user_text = str(user_text or "")
     extra: dict[str, Any] = {}
-    if refused == PERSONAL_COMMAND:
+    if refused in (PERSONAL_COMMAND, APP_CHANNEL):
         # A personal-knowledge-base command (ADR-2326 item 12): neither the command nor the reply
         # ("Remembered: ...") is kept, and no hash either (a short command is guessable from it).
         extra = {"user_chars": len(user_text)}
@@ -703,8 +703,11 @@ _OBSERVER_REASONS = frozenset({"observer_consent", "consent_check_unavailable"})
 
 #: The reason a personal-knowledge-base command is recorded under: both halves withheld.
 PERSONAL_COMMAND = "personal_command"
+#: A message in an app-bound chat (ADR-2333): it went to the app, never to the model. Both halves withheld, no hash
+#: either (a short command such as "pause" is guessable from it).
+APP_CHANNEL = "app_channel"
 #: Reasons that withhold the answer too, not only the user's words.
-_WHOLE_TURN_REASONS = frozenset({"data_flow", PERSONAL_COMMAND})
+_WHOLE_TURN_REASONS = frozenset({"data_flow", PERSONAL_COMMAND, APP_CHANNEL})
 
 
 def _apply_withhold(rec: dict[str, Any], why: Optional[str]) -> dict[str, Any]:
@@ -728,7 +731,8 @@ def _withheld(rec: dict[str, Any]) -> str:
              # A turn that raised before any engine was started: nothing proves
              # which pre-spawn gates it passed, so its text is not kept.
              "failed_before_spawn": "the turn failed before any engine was started",
-             PERSONAL_COMMAND: "a personal-space command is never recorded"}.get(why, f"refused by the {why} gate")
+             PERSONAL_COMMAND: "a personal-space command is never recorded",
+             APP_CHANNEL: "a message to an app-bound chat is never recorded"}.get(why, f"refused by the {why} gate")
     return f"(message withheld: {label} — not re-supplied)"
 
 

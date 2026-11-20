@@ -912,7 +912,10 @@ client.on('messageCreate', async (msg) => {
       const safeName = (att.name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
       const ct = (att.contentType || '').toLowerCase();
       const ext = safeExt(att.name);
-      const p = path.join(INBOX, `${id}_${safeName}`);
+      // Never a `.json` name in the inbox: the adapter reads every *.json there as an envelope, so a
+      // JSON attachment would be processed as a message of its own (and survive the app-channel cleanup).
+      const storedName = /\.json$/i.test(safeName) ? `${safeName}.att` : safeName;
+      const p = path.join(INBOX, `${id}_${storedName}`);
       try {
         await fetchToFile(att.url, p, { maxBytes: MAX_ATTACHMENT_BYTES, declaredSize: Number(att.size) });
       } catch (e) {
