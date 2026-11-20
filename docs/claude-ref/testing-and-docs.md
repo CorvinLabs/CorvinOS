@@ -266,7 +266,7 @@ defect classes before they reach a Windows install:
 
 ## Pre-push term scan (T-0428)
 
-`scripts/git-hooks/pre-push` refuses to publish forbidden terms to a public remote. For a push to a
+`scripts/git-hooks/pre-push` (a thin wrapper; the logic is `scripts/git-hooks/term_scan.py`) refuses to publish forbidden terms to a public remote. For a push to a
 remote whose URL matches a line of the remotes file, it scans every commit about to be pushed
 (`remote_sha..local_sha`; a new branch: commits on no remote-tracking ref): added diff lines, the
 names of added/copied/renamed files and the commit message. A hit prints

@@ -9,6 +9,6 @@
 # file is missing, empty or invalid.
 #
 # Not a git hook: git never calls a file with this name. The implementation
-# lives in the sibling pre-push script (shared term loading). Usage, from
+# lives in the sibling term_scan.py (shared term loading). Usage, from
 # anywhere inside a work tree:  scripts/git-hooks/scan-tree
-exec python3 "$(dirname "$0")/pre-push" --scan-tree "$@"
+exec python3 "$(dirname "$0")/term_scan.py" --scan-tree "$@"
