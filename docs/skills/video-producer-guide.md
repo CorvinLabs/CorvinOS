@@ -37,6 +37,7 @@ downloads the bundle (`GET /v1/console/video/videos/{id}/bundle`, the tenant's o
 * **Composer.** Picking the template shows the tour options (voice language: from the brief, English, Deutsch or both; length) and,
   if the switch is off, why. The pick is never remembered (a tour needs an address every time) and the server refuses it as the
   default template (422). A tour is never a revision and never a film.
+* **First real tour (2026-11-22).** CorvinOS as an amplifier for Claude Code, filmed from the live corvin-labs.com in German and English with the OpenAI voice: 3:12 minutes, camera peak 900 px/s with a frame-to-frame change of the step of at most 0.8 px, narration onsets within 0.02 s of the plan (`Corvin-Videos/corvintv-website-tour-amplifier`).
 * **Plugin.** Details, the tour format and the limits (page timers are frozen, no login pages) are in the plugin's
   `docs/WEBSITE-TOUR.md`; the CLI `scripts/website_tour.py` makes a tour without the console.
 
