@@ -41,16 +41,6 @@
 
 ---
 
-## 🔊 Same signal, more judgement
-
-An amplifier does not replace the instrument and does not invent a note. CorvinOS works the same way: the intelligence stays with the model, and CorvinOS makes sure it reaches further — and that every step can be remembered, checked and measured.
-
-- **Memory across sessions.** Every turn is recorded verbatim outside the worker's folder; each start reads a fresh view of it. The model forgets, the environment remembers. → [Session ledger](docs/claude-ref/adapter-runtime.md)
-- **Rules before every engine.** House rules and a data-flow gate check before an engine starts; the path gate hooks in through Claude Code's own hook mechanism. → [Layer 44](docs/claude-ref/layer-44-house-rules.md) · [Layer 10](docs/claude-ref/layer-10-path-gate.md)
-- **Decisions you can read back.** What a check finds goes into the knowledge base and into a hash-chained trail, and can be in the context of the next run. A wrapper passes through; an amplifier feeds back. → [Compliance baseline](docs/claude-ref/compliance-baseline.md)
-
-**Get started:** `curl -fsSL https://corvin-labs.com/install.sh | sh` — the installer brings Claude Code along. [Quick Start](#-quick-start)
-
 ## 🎥 Video — The amplifier for Claude Code
 
 Claude Code is a fixed model. CorvinOS makes it better every day by building the environment around it: it remembers, takes a second look before anything changes, keeps what a check finds, picks the right model per turn and prepares the context before each turn. Claude Code brings the intelligence. CorvinOS brings the judgement.
@@ -64,6 +54,16 @@ This three-minute tour walks you down [corvin-labs.com](https://corvin-labs.com)
 </p>
 
 Watch on YouTube: <a href="https://www.youtube.com/watch?v=w4MSd5NYR2o" target="_blank" rel="noopener">CorvinOS: The amplifier for Claude Code</a> &middot; The story behind it: <a href="https://www.youtube.com/watch?v=G193FVnvTUw&amp;t=268s" target="_blank" rel="noopener">S1E9 The Amplifier in the Fog</a> &middot; All episodes: <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">watch the series</a>
+
+## 🔊 Same signal, more judgement
+
+An amplifier does not replace the instrument and does not invent a note. CorvinOS works the same way: the intelligence stays with the model, and CorvinOS makes sure it reaches further — and that every step can be remembered, checked and measured.
+
+- **Memory across sessions.** Every turn is recorded verbatim outside the worker's folder; each start reads a fresh view of it. The model forgets, the environment remembers. → [Session ledger](docs/claude-ref/adapter-runtime.md)
+- **Rules before every engine.** House rules and a data-flow gate check before an engine starts; the path gate hooks in through Claude Code's own hook mechanism. → [Layer 44](docs/claude-ref/layer-44-house-rules.md) · [Layer 10](docs/claude-ref/layer-10-path-gate.md)
+- **Decisions you can read back.** What a check finds goes into the knowledge base and into a hash-chained trail, and can be in the context of the next run. A wrapper passes through; an amplifier feeds back. → [Compliance baseline](docs/claude-ref/compliance-baseline.md)
+
+**Get started:** `curl -fsSL https://corvin-labs.com/install.sh | sh` — the installer brings Claude Code along. [Quick Start](#-quick-start)
 
 ---
 
