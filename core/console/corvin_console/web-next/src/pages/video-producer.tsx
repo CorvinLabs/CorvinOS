@@ -541,7 +541,7 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, template
           <button type="button" aria-label={`Dismiss ${deck.name}`} onClick={() => setDeck(null)}><X className="w-3 h-3" /></button>
         </div>
       )}
-      {found && found.url !== dismissedUrl && !revising && (
+      {found && found.url !== dismissedUrl && !revising && !tour && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs" data-testid="capture-suggestion">
           {capturedFor[found.url] && stillThere(capturedFor[found.url].id) ? (
             <span data-testid="capture-suggestion-done">Screenshot of {capturedFor[found.url].host} added as <code>{capturedFor[found.url].id}</code>; the storyboard can show it.</span>
