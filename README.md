@@ -51,19 +51,19 @@ An amplifier does not replace the instrument and does not invent a note. CorvinO
 
 **Get started:** `curl -fsSL https://corvin-labs.com/install.sh | sh` — the installer brings Claude Code along. [Quick Start](#-quick-start)
 
-## 🎥 Video — S1E9: The Amplifier in the Fog
+## 🎥 Video — The amplifier for Claude Code
 
-It does not replace Claude Code, and it is more than a wrapper around it: Claude Code stays the engine, and CorvinOS carries its signal further with context engineering, memory, skills and tools, orchestration and a knowledge base. What review finds flows back into the next round.
+Claude Code is a fixed model. CorvinOS makes it better every day by building the environment around it: it remembers, takes a second look before anything changes, keeps what a check finds, picks the right model per turn and prepares the context before each turn. Claude Code brings the intelligence. CorvinOS brings the judgement.
 
-Episode 9 of *From Spark to Foundation* tells this as one story: an agent searching a maze in the fog, the same agent with the map already in the light, and the five controls of the amplifier. The preview plays right here on GitHub; click it to watch the episode on YouTube.
+This three-minute tour walks you down [corvin-labs.com](https://corvin-labs.com) and shows that idea step by step. The preview plays right here on GitHub; click it to watch the video on YouTube.
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=G193FVnvTUw&amp;t=268s" target="_blank" rel="noopener">
-    <img src="docs/media/corvintv-e1s9-preview.en.gif" alt="Preview: S1E9 The Amplifier in the Fog — the title, an agent searching a maze in the fog, the map lit in 3D, the amplifier with five controls, and the growing tree (click to watch on YouTube)" width="720"/>
+  <a href="https://www.youtube.com/watch?v=w4MSd5NYR2o" target="_blank" rel="noopener">
+    <img src="docs/media/corvintv-amplifier-preview.en.gif" alt="Preview: The amplifier for Claude Code: the opening question, the amplifier message, the feedback loop, growing knowledge, model routing, prepared context and the end card (click to watch on YouTube)" width="720"/>
   </a><br/>
 </p>
 
-Watch S1E9 on YouTube: <a href="https://www.youtube.com/watch?v=G193FVnvTUw&amp;t=268s" target="_blank" rel="noopener">The Amplifier in the Fog</a> &middot; All episodes: <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">watch the series</a>
+Watch on YouTube: <a href="https://www.youtube.com/watch?v=w4MSd5NYR2o" target="_blank" rel="noopener">CorvinOS: The amplifier for Claude Code</a> &middot; The story behind it: <a href="https://www.youtube.com/watch?v=G193FVnvTUw&amp;t=268s" target="_blank" rel="noopener">S1E9 The Amplifier in the Fog</a> &middot; All episodes: <a href="https://www.youtube.com/watch?v=yQKzlhtRmbs&amp;list=PLYmWZTfJDs5M" target="_blank" rel="noopener">watch the series</a>
 
 ---
 
