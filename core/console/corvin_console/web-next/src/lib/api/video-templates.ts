@@ -18,6 +18,9 @@ export interface VideoTemplate {
   hook: { kind: "question"; max_words: number } | null;
   evidence: "none" | "sources" | "cited_numbers";
   recommended_model: "haiku" | "sonnet" | "opus";
+  /** "slides" (default) shapes a slide video; "website" is a narrated tour of the page whose address is in the brief. */
+  mode?: "slides" | "website";
+  input?: { kind: "url" } | null;
 }
 
 export interface VideoTemplateList {
@@ -62,3 +65,7 @@ export function templateFacts(t: VideoTemplate): string {
   if (t.hook) bits.push("opens with a question");
   return bits.join(" · ");
 }
+
+/** A template whose job is not a slide video (the website tour): it needs more than text and is never remembered as the default. */
+export const isTourTemplate = (list: VideoTemplateList | undefined, id: string | null): boolean =>
+  list?.templates.find((t) => t.id === id)?.mode === "website";

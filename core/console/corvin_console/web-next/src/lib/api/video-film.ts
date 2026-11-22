@@ -21,6 +21,8 @@ export interface JobBodyInput {
   film: boolean; filmMinutes: number; designs: FilmDesign[];
   /** The video template of a NEW slide video; ignored for a film and for a revision. */
   videoTemplate?: string | null;
+  /** Options of the website tour template (ignored for every other template). */
+  tour?: { langs: Array<"en" | "de">; minutes: number } | null;
 }
 
 /** The POST /video/jobs body. A film adds its keys only when it is on; a revision is always a slide video. */
@@ -29,7 +31,13 @@ export function jobBody(i: JobBodyInput): Record<string, unknown> {
     task: i.task, base_job_id: i.baseJobId, style_id: i.styleId ?? undefined,
     sources: i.sources.map(({ name, text }) => ({ name, text })),
   };
-  if (i.videoTemplate && !i.film && !i.baseJobId) body.video_template = i.videoTemplate;
+  if (i.videoTemplate && !i.film && !i.baseJobId) {
+    body.video_template = i.videoTemplate;
+    if (i.tour) {
+      if (i.tour.langs.length > 0) body.website_langs = i.tour.langs;
+      body.website_minutes = i.tour.minutes;
+    }
+  }
   if (i.film && !i.baseJobId) {
     body.mode = "cinematic";
     body.cinematic_minutes = i.filmMinutes;

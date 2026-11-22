@@ -39,3 +39,22 @@ describe("jobBody", () => {
     expect(Math.max(...FILM_MINUTES)).toBeLessThanOrEqual(30);
   });
 });
+
+describe("jobBody: website tour", () => {
+  const base = { task: "https://example.com Explain the plans", sources: [], film: false, filmMinutes: DEFAULT_FILM_MINUTES, designs: [] };
+  it("carries the template and the tour options, and an automatic language sends none", () => {
+    const b = jobBody({ ...base, videoTemplate: "website", tour: { langs: ["de", "en"], minutes: 3 } });
+    expect(b.video_template).toBe("website");
+    expect(b.website_langs).toEqual(["de", "en"]);
+    expect(b.website_minutes).toBe(3);
+    const auto = jobBody({ ...base, videoTemplate: "website", tour: { langs: [], minutes: 4 } });
+    expect("website_langs" in auto).toBe(false);
+    expect(auto.website_minutes).toBe(4);
+  });
+  it("another template, a film or a revision never carries tour keys", () => {
+    for (const extra of [{ videoTemplate: "marketing" }, { videoTemplate: "website", film: true }, { videoTemplate: "website", baseJobId: "job_x" }]) {
+      const b = jobBody({ ...base, ...extra, tour: extra.videoTemplate === "marketing" ? null : { langs: ["en"], minutes: 2 } });
+      expect(Object.keys(b).filter((k) => k.startsWith("website_"))).toEqual([]);
+    }
+  });
+});

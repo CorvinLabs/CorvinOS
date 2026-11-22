@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clapperboard, Download, Film, Loader2, Maximize2, Mic, Minimize2, Paperclip, Pencil, RefreshCw, Send, Square, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clapperboard, Download, Film, Globe, Loader2, Maximize2, Mic, Minimize2, Paperclip, Pencil, RefreshCw, Send, Square, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,7 @@ import { BUILTIN_STYLE_ID, STYLE_DECK_ACCEPT, isDeckFile, type StyleList } from 
 import { DEFAULT_FILM_MINUTES, FILM_MINUTES, MAX_DESIGN_CHARS, MAX_FILM_DESIGNS, designName, jobBody, type FilmDesign } from "@/lib/api/video-film";
 import { StyleChip, StyleImportDialog, StylesSection } from "@/components/video-styles";
 import { TemplateChip } from "@/components/video-templates";
-import { effectiveTemplateId, type VideoTemplateList } from "@/lib/api/video-templates";
+import { effectiveTemplateId, isTourTemplate, type VideoTemplateList } from "@/lib/api/video-templates";
 import { ProductionSignals } from "@/components/video-quality-report";
 import { AssetsTab, CanvasTab, CaptureDialog, CodeTab } from "@/components/video-expressive";
 import { LearningOverview } from "@/components/video-learning-overview";
@@ -319,7 +319,7 @@ function LearningTab({ job, scenes }: { job: Job; scenes: SceneRow[] }) {
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLElement && (["input", "textarea", "select"].includes(el.tagName.toLowerCase()) || el.isContentEditable);
 
-function VideoStage({ job, loading, csrf }: { job: Job | undefined; loading: boolean; csrf: string }) {
+function VideoStage({ job, loading, csrf, websiteBundle }: { job: Job | undefined; loading: boolean; csrf: string; websiteBundle?: boolean }) {
   const box = useRef<HTMLElement>(null);
   const qc = useQueryClient();
   // Stops the production: the host kills the job's whole process group (ffmpeg, the browser) and the
@@ -389,6 +389,8 @@ function VideoStage({ job, loading, csrf }: { job: Job | undefined; loading: boo
       {playable && (
         <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
           <a href={`${url}/download`} aria-label="Download video" title="Download" className="rounded-md bg-black/60 p-2 text-white hover:bg-black/80"><Download className="w-4 h-4" /></a>
+          {websiteBundle && <a href={`${url}/bundle`} aria-label="Download website bundle" title="Website bundle: the videos and a page to put online" data-testid="website-bundle"
+            className="rounded-md bg-black/60 p-2 text-white hover:bg-black/80"><Globe className="w-4 h-4" /></a>}
           <button type="button" onClick={toggle} disabled={!canFull} aria-label={full ? "Exit fullscreen" : "Fullscreen"} title={full ? "Exit fullscreen (Esc)" : "Fullscreen (F)"} data-testid="fullscreen"
             className="rounded-md bg-black/60 p-2 text-white hover:bg-black/80 disabled:opacity-40">{full ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}</button>
         </div>
@@ -433,6 +435,9 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, template
   const revising = mode === "revise" && canRevise;
   const [pickedTemplate, setPickedTemplate] = useState<string | null>(null);
   const templateId = effectiveTemplateId(templates, pickedTemplate);
+  const tour = isTourTemplate(templates, templateId) && !film && !revising;
+  const [tourLang, setTourLang] = useState<"auto" | "en" | "de" | "both">("auto");
+  const [tourMinutes, setTourMinutes] = useState<number>(4);
   const templateOff = revising ? "A revision keeps the structure of the original video" : film ? "A film has its own structure" : null;
   // the choice is remembered on the server (audited); the pick only stays local when that write fails
   const rememberTemplate = useMutation({
@@ -440,14 +445,16 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, template
     onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: ["video", "templates"] }); },
     onError: (e) => setError(e instanceof ApiError ? e.message : "The template choice could not be saved."),
   });
-  const pickTemplate = (id: string) => { setPickedTemplate(id); if (csrf) rememberTemplate.mutate(id); };
+  // a website tour needs an address in every brief, so the server never accepts it as the remembered default
+  const pickTemplate = (id: string) => { setPickedTemplate(id); if (csrf && !isTourTemplate(templates, id)) rememberTemplate.mutate(id); };
 
   const create = useMutation({
     mutationFn: () => api<{ job_id: string }>(`${BASE}/jobs`, {
       method: "POST", csrf,
-      body: jobBody({ task: text.trim(), baseJobId: revising ? selected!.id : undefined, styleId: pickedStyle, sources, film, filmMinutes, designs, videoTemplate: templateId }),
+      body: jobBody({ task: text.trim(), baseJobId: revising ? selected!.id : undefined, styleId: pickedStyle, sources, film, filmMinutes, designs, videoTemplate: templateId,
+        tour: tour ? { langs: tourLang === "auto" ? [] : tourLang === "both" ? ["en", "de"] : [tourLang], minutes: tourMinutes } : null }),
     }),
-    onSuccess: (r) => { setText(""); setSources([]); setDesigns([]); setError(null); setMode("new"); onCreated(r.job_id); void qc.invalidateQueries({ queryKey: ["video"] }); },
+    onSuccess: (r) => { setText(""); setSources([]); setDesigns([]); setError(null); setMode("new"); if (tour) setPickedTemplate(null); onCreated(r.job_id); void qc.invalidateQueries({ queryKey: ["video"] }); },
     onError: (e) => setError(e instanceof ApiError ? e.message : "The production could not be started."),
   });
   const busy = create.isPending || uploading;
@@ -490,8 +497,8 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, template
           className={`px-2.5 py-1 rounded-md inline-flex items-center gap-1 max-w-[28rem] ${revising ? "bg-accent/15 font-medium text-foreground" : "text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:text-muted-foreground"}`}>
           <Pencil className="w-3 h-3 shrink-0" /><span className="truncate">Revise{canRevise ? `: ${selected!.task}` : ""}</span>
         </button>
-        <button type="button" role="switch" aria-checked={film && !revising} disabled={revising} onClick={() => setFilm((v) => !v)} data-testid="film-toggle"
-          title={revising ? "A revision is a slide video" : "A film of continuous animated scenes instead of slides; attach Penpot SVG designs to show them"}
+        <button type="button" role="switch" aria-checked={film && !revising} disabled={revising || tour} onClick={() => setFilm((v) => !v)} data-testid="film-toggle"
+          title={revising ? "A revision is a slide video" : tour ? "A website tour is its own kind of video" : "A film of continuous animated scenes instead of slides; attach Penpot SVG designs to show them"}
           className={`px-2.5 py-1 rounded-md ${film && !revising ? "bg-accent/15 font-medium text-foreground" : "text-muted-foreground hover:text-foreground disabled:opacity-40"}`}>Cinematic film</button>
         {film && !revising && (
           <select value={filmMinutes} onChange={(e) => setFilmMinutes(Number(e.target.value))} aria-label="Film length" data-testid="film-minutes"
@@ -506,6 +513,25 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, template
             : revising ? "same as original" : (styles?.styles.find((s) => s.id === styles.default_style_id)?.name ?? styles?.builtin.name ?? "CorvinOS")} />
       </div>
       {revising && <p className="text-xs text-muted-foreground -mt-1">A new version is produced; the original stays.</p>}
+      {tour && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs" data-testid="tour-options">
+          <Globe className="w-3 h-3 shrink-0" />
+          <span>Website tour: put the page address in your brief, for example <code>https://example.com</code> and what the tour should say.</span>
+          <label className="inline-flex items-center gap-1">Voice
+            <select value={tourLang} onChange={(e) => setTourLang(e.target.value as typeof tourLang)} aria-label="Tour language" data-testid="tour-lang"
+              className="rounded-md border border-border bg-background px-1.5 py-0.5">
+              <option value="auto">from the brief</option><option value="en">English</option><option value="de">Deutsch</option><option value="both">English + Deutsch</option>
+            </select>
+          </label>
+          <label className="inline-flex items-center gap-1">Length
+            <select value={tourMinutes} onChange={(e) => setTourMinutes(Number(e.target.value))} aria-label="Tour length" data-testid="tour-minutes"
+              className="rounded-md border border-border bg-background px-1.5 py-0.5">
+              {[2, 3, 4, 6, 8, 10].map((m) => <option key={m} value={m}>{m} min</option>)}
+            </select>
+          </label>
+          {(captureError || captureOff) && <span className="text-muted-foreground" data-testid="tour-capture-off">{captureError ? "Website capture is not available on this installation." : captureOff}</span>}
+        </div>
+      )}
       {deck && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs" data-testid="deck-offer">
           <Paperclip className="w-3 h-3" /><span className="max-w-[14rem] truncate">{deck.name}</span>
@@ -712,7 +738,7 @@ export function VideoProducerPage() {
         <Button variant="ghost" size="sm" className="ml-auto shrink-0" aria-label="Refresh" onClick={() => void qc.invalidateQueries({ queryKey: ["video"] })}><RefreshCw className="w-4 h-4" /></Button>
       </div>
 
-      <VideoStage job={j} loading={!!selected && job.isLoading} csrf={csrf} />
+      <VideoStage job={j} loading={!!selected && job.isLoading} csrf={csrf} websiteBundle={quality.data?.source.metadata?.mode === "website"} />
 
       <Composer csrf={csrf} selected={j} mode={mode} setMode={setMode} inputRef={inputRef}
         templates={templates.data} templatesError={templates.isError}

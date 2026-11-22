@@ -22,6 +22,24 @@ One column, top to bottom (ADR-2246):
 | … · Assets | the workspace's uploaded images (not tied to a video): upload a PNG with a required caption, an optional source (only scheme, host and path are kept) and hotspots placed by clicking the picture; a notice that a screenshot can contain other people's data; delete with confirmation. A `still` scene shows an asset; the storyboard reads only caption and hotspot names (ADR-2249 D3) | `GET/POST /v1/console/video/assets`, `/assets/{id}/image`, `DELETE /assets/{id}` (CSRF; each audited) |
 | Settings | output folder, text-to-speech engine, max duration | `/settings` |
 
+### Website tours (CorvinTV 1.9.0, ADR-2336)
+
+The template **Website tour** makes a job a narrated tour of a web page: the page whose address is in the brief is filmed while a
+voice walks the viewer down it, the page's own animations run in time with the words, and the result is a bundle, not only an MP4
+(one MP4 per language, `site/index.html` with chapters and a transcript, and `website-bundle.zip`). The stage's globe button
+downloads the bundle (`GET /v1/console/video/videos/{id}/bundle`, the tenant's own tours only).
+
+* **Gates before anything is fetched.** The address must pass the same rules as "Add website screenshot": the workspace's
+  *Website capture* switch is on, an enabled egress policy exists and allows the host, `check_url` and `precheck_host` accept it
+  (no IP literal, loopback or private name). Every refusal happens before a job exists. The host writes
+  `video_producer.capture_started` first and `capture_finished` when the job's record turns terminal; both carry the host and a
+  hash prefix of the address, never the address.
+* **Composer.** Picking the template shows the tour options (voice language: from the brief, English, Deutsch or both; length) and,
+  if the switch is off, why. The pick is never remembered (a tour needs an address every time) and the server refuses it as the
+  default template (422). A tour is never a revision and never a film.
+* **Plugin.** Details, the tour format and the limits (page timers are frozen, no login pages) are in the plugin's
+  `docs/WEBSITE-TOUR.md`; the CLI `scripts/website_tour.py` makes a tour without the console.
+
 ### Revising a video
 
 Select a produced video (or press **Revise** on its card), describe the change ("make scene 2 shorter",

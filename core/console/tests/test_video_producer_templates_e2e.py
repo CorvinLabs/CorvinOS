@@ -18,7 +18,7 @@ from test_video_producer_routes_e2e import _RecordingRunner, _route_module, _san
 H = lambda csrf: {"X-CSRF-Token": csrf}  # noqa: E731
 V = "/v1/console/video"
 WANT = {"standard", "short", "marketing", "code_debugging", "research", "didactic", "tutorial", "release_notes",
-        "executive_brief", "postmortem", "faq"}
+        "executive_brief", "postmortem", "faq", "website"}  # website = the tour mode (ADR-2336), listed like every template
 
 
 def _events(home: Path, event: str) -> list:

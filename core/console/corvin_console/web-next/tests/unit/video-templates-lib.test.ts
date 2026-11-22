@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_FILM_MINUTES, jobBody } from "@/lib/api/video-film";
-import { effectiveTemplateId, groupTemplates, lengthLabel, templateFacts, templateName, type VideoTemplate, type VideoTemplateList } from "@/lib/api/video-templates";
+import { effectiveTemplateId, groupTemplates, isTourTemplate, lengthLabel, templateFacts, templateName, type VideoTemplate, type VideoTemplateList } from "@/lib/api/video-templates";
 
 const t = (id: string, over: Partial<VideoTemplate> = {}): VideoTemplate => ({
   id, name: { en: id.toUpperCase(), de: id }, summary: { en: "s", de: "s" }, category: "explain", audience: "a", tone: "t", aspect: "16:9",
@@ -60,5 +60,17 @@ describe("jobBody with a template", () => {
   it("a film and a revision never carry one", () => {
     expect(jobBody({ ...base, film: true, videoTemplate: "research" })).not.toHaveProperty("video_template");
     expect(jobBody({ ...base, baseJobId: "job_1", videoTemplate: "research" })).not.toHaveProperty("video_template");
+  });
+});
+
+describe("isTourTemplate", () => {
+  const t = (id: string, mode?: "slides" | "website") => ({ id, mode, name: { en: id, de: id }, summary: { en: "", de: "" }, category: "format", audience: "", tone: "", aspect: "16:9",
+    available: true, unavailable_reason: "", duration: { target_s: 60, min_s: 30, max_s: 120 }, scenes: { min: 1, max: 5 }, structure: [], hook: null, evidence: "none", recommended_model: "sonnet" });
+  const list = { templates: [t("standard"), t("marketing", "slides"), t("website", "website")], default_template_id: "standard", standard_template_id: "standard" } as never;
+  it("is true only for a template whose mode is website", () => {
+    expect(isTourTemplate(list, "website")).toBe(true);
+    expect(isTourTemplate(list, "marketing")).toBe(false);
+    expect(isTourTemplate(list, "standard")).toBe(false);
+    expect(isTourTemplate(undefined, "website")).toBe(false);
   });
 });

@@ -457,6 +457,9 @@ class CreateJobRequest(BaseModel):
     # CONCEPT-0137: a named video recipe (Marketing, Code debugging, ...). Absent = the tenant's default
     # (a revision keeps the standard one); "standard" = the previous behaviour. Slide mode only.
     video_template: Optional[str] = Field(None, max_length=32, pattern=r"^[a-z][a-z0-9_]{1,31}$")
+    # ADR-2336: the options of the `website` template (a narrated tour of the page whose address is in the brief)
+    website_langs: Optional[List[Literal["en", "de"]]] = Field(None, max_length=2)
+    website_minutes: Optional[int] = Field(None, ge=1, le=15)
 
 
 class JobResponse(BaseModel):
@@ -1316,6 +1319,7 @@ def _audit_job_end(tenant_id: str, job, storage, observed_by: str) -> Optional[s
                "duration_s": duration, "observed_by": observed_by,
                **{k: v for k, v in facts.items() if k not in ("report_seconds", "degradation_kinds")}}
     _lifecycle_audit(tenant_id, event, details)
+    _finish_capture_record(tenant_id, job, storage)
     if status == "complete" and facts.get("degradation_count"):
         _lifecycle_audit(tenant_id, "video_producer.job_degraded", {
             "job_id": job.id, "degradation_count": facts["degradation_count"],
@@ -1508,7 +1512,7 @@ async def extract_attachments(files: List[UploadFile] = File(...), rec=_SessionR
 
 
 @router.post("/jobs")
-async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
+async def create_video_job(req: CreateJobRequest, request: Request, rec=_SessionRec):
     """Create a job and start production in the background (non-blocking)."""
     shown = (req.task or "").strip()
     if not shown:
@@ -1518,6 +1522,8 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         raise HTTPException(status_code=409, detail="A cinematic film cannot be a revision; describe the change in a new brief")
     if req.base_job_id:
         _check_job_id(req.base_job_id)
+        if req.video_template and await asyncio.to_thread(_is_website_template, req.video_template):
+            raise HTTPException(status_code=422, detail="A website tour cannot be a revision; start a new one from the page address")
     task = shown
     if not VideoJob or not _get_storage:
         raise HTTPException(status_code=503, detail=_UNAVAILABLE)
@@ -1541,6 +1547,10 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
             "Delete videos you no longer need to produce a new one."))
     web_style = await asyncio.to_thread(_resolve_job_style, rec, req.style_id, req.base_job_id)
     template_id = await asyncio.to_thread(_resolve_job_template, rec, req.video_template, req.mode, bool(req.base_job_id))
+    website = await asyncio.to_thread(_is_website_template, template_id)
+    tour_gate = None
+    if website:  # ADR-2336: the page address in the brief passes the website-capture policy BEFORE anything is fetched
+        tour_gate = await _website_tour_gate(rec, request, shown)
     settings = _tenant_settings(rec)
     settings["tts_engine"] = await asyncio.to_thread(_effective_tts_engine, settings["tts_engine"])
     missing = await asyncio.to_thread(_missing_runtime_dependencies, settings["tts_engine"])
@@ -1567,9 +1577,12 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         raise HTTPException(status_code=403, detail=refusal)
 
     backend, model = await asyncio.to_thread(_storyboard_backend, rec.tenant_id, chat_key, task)
-    grounding_pack, grounding_status = await asyncio.to_thread(
-        _grounding_for_job, rec.tenant_id, chat_key, job_id, task, backend, settings["tts_engine"],
-    )
+    if website:  # the page is the source of a tour: no knowledge-base grounding, no attachments' facts
+        grounding_pack, grounding_status = None, None
+    else:
+        grounding_pack, grounding_status = await asyncio.to_thread(
+            _grounding_for_job, rec.tenant_id, chat_key, job_id, task, backend, settings["tts_engine"],
+        )
     # audit-first: the record exists before the style can reach a pixel
     # (a plain job that never chose a style - no default, no style_id - has nothing to record)
     if (web_style is not None or req.style_id == _BUILTIN_STYLE_ID) and not _audit(
@@ -1606,8 +1619,16 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     }
     if web_style is not None:
         config["web_style"] = web_style
-    if template_id != _STANDARD_TEMPLATE_ID:
+    if template_id != _STANDARD_TEMPLATE_ID and not website:
         config["video_template"] = template_id
+    if website:
+        config.update(mode="website", website_url=tour_gate["url"], website_egress=tour_gate["egress"],
+                      website_console_names=tour_gate["console_names"])
+        if req.website_langs:
+            config["website_langs"] = req.website_langs
+        if req.website_minutes:
+            config["website_minutes"] = req.website_minutes
+        await asyncio.to_thread(_write_capture_sidecar, storage, job_id, tour_gate["audit"])
     if req.mode == "cinematic":
         config["mode"] = "cinematic"
         if req.cinematic_minutes:
@@ -2193,7 +2214,8 @@ _gate_cache_lock = threading.Lock()
 
 _MOD_UNAVAILABLE = {"video_templates": "Video templates are not available on this build",
                     "asset_store": "Uploaded images are not available on this build",
-                    "capture": "Website capture is not available on this build"}
+                    "capture": "Website capture is not available on this build",
+                    "website.plan": "Website tours are not available on this build"}
 
 
 def _style_mod(name: str):
@@ -2354,7 +2376,7 @@ def _read_template_default(rec) -> str:
     try:
         raw = _template_default_file(rec).read_text(encoding="ascii").strip()
         t = _vt_mod().get(raw)
-        return t.id if t.available else _STANDARD_TEMPLATE_ID
+        return t.id if t.available and getattr(t, "mode", "slides") == "slides" else _STANDARD_TEMPLATE_ID
     except Exception:  # noqa: BLE001 - absent, unreadable, unknown or unavailable: the standard recipe
         return _STANDARD_TEMPLATE_ID
 
@@ -2389,9 +2411,12 @@ def _resolve_job_template(rec, requested: Optional[str], mode: str, is_revision:
         raise HTTPException(status_code=422, detail="A video template applies to slide videos, not to cinematic films")
     vt = _vt_mod()
     try:
-        return vt.usable(requested).id
+        chosen = vt.usable(requested)
     except vt.TemplateError as e:
         raise HTTPException(status_code=409 if "not available" in str(e) else 422, detail=str(e)) from None
+    if getattr(chosen, "mode", "slides") != "slides" and is_revision:  # ADR-2336: a tour starts from a page, never from a video
+        raise HTTPException(status_code=422, detail="A website tour cannot be a revision; start a new one from the page address")
+    return chosen.id
 
 
 @router.get("/templates")
@@ -2415,6 +2440,8 @@ def set_default_template(req: DefaultTemplateRequest, rec=_SessionRec):
         chosen = vt.usable(req.template_id)
     except vt.TemplateError as e:
         raise HTTPException(status_code=409 if "not available" in str(e) else 422, detail=str(e)) from None
+    if getattr(chosen, "mode", "slides") != "slides":
+        raise HTTPException(status_code=422, detail="A website tour needs a page address in every brief, so it cannot be the default template")
     previous = _read_template_default(rec)
     if chosen.id != previous:
         # audit-first: the record exists before the default changes
@@ -2924,6 +2951,110 @@ def asset_design(asset_id: str, rec=_SessionRec):
             "board": _board_state(store, asset_id),
             "limits": {"max_steps": pim.MAX_STEPS, "max_label": pim.MAX_STEP_LABEL,
                        "max_shapes": pim.BOARD_MAX_SHAPES}}
+
+
+# ── Website tour (ADR-2336, CONCEPT-0139) ──────────────────────────────────────
+# The template `website` makes a job a narrated tour of the page whose address is in the brief. A page address is fetched
+# under EXACTLY the rules of a website capture (ADR-2249 D4): the tenant's switch is on, an egress policy is enabled, the
+# L35 gate allows the host, and the browser later loads only through the plugin's capture proxy. The host writes
+# ``capture_started`` before the job exists and ``capture_finished`` when its record turns terminal; both carry the host
+# and a hash prefix of the address, never the address, a path or a query.
+_CAPTURE_SIDECAR = "website_capture.json"
+
+
+def _is_website_template(template_id: str) -> bool:
+    if template_id == _STANDARD_TEMPLATE_ID:
+        return False
+    try:
+        return getattr(_vt_mod().get(template_id), "mode", "slides") == "website"
+    except Exception:  # noqa: BLE001 - an unreadable template is not a website tour; the resolver already vetted the id
+        return False
+
+
+async def _website_tour_gate(rec, request: Request, brief: str) -> Dict[str, Any]:
+    """The checks before a tour of a page address starts; raises HTTPException. Returns what the job needs."""
+    import hashlib  # noqa: PLC0415
+
+    wp = _style_mod("website.plan")
+    cap = _style_mod("capture")
+    raw = wp.extract_url(brief)
+    if not raw:
+        raise HTTPException(status_code=422, detail="A website tour needs the page address in the brief (https://...)")
+    try:
+        target = cap.check_url(raw)
+    except cap.CaptureRefused:
+        raise HTTPException(status_code=422, detail="Enter a plain http:// or https:// address") from None
+    tid = rec.tenant_id
+    base = {"host": target["host"][:253], "viewport": "desktop",
+            "url_sha256_prefix": hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:12]}
+    if not await asyncio.to_thread(_capture_enabled, rec):
+        raise HTTPException(status_code=403, detail="Website capture is off for this workspace; turn it on in the Video Producer settings")
+    gate = await asyncio.to_thread(_capture_egress_gate, tid)
+    if gate is None:
+        raise HTTPException(status_code=403, detail="A website tour needs an egress policy for this workspace (spec.egress in tenant.corvin.yaml)")
+    try:
+        decision = await asyncio.to_thread(gate.validate, target["host"], engine_id="video_producer_capture")
+    except Exception:  # noqa: BLE001 - a gate error is a denial
+        decision = None
+    if decision is None or not decision.allowed:
+        raise HTTPException(status_code=403, detail="This workspace's egress policy does not allow this host")
+    names = await asyncio.to_thread(_console_names, request)
+    # an IP literal, loopback, a private or this host's own name: refused without any DNS query, like a capture (the plugin
+    # checks again before it loads anything); one message for every reason
+    if await asyncio.to_thread(cap.precheck_host, target["host"], names):
+        raise HTTPException(status_code=422, detail="This address cannot be used for a tour")
+    if not await asyncio.to_thread(_audit, tid, "video_producer.capture_started", base):
+        raise HTTPException(status_code=503, detail="The tour could not be recorded; nothing was fetched")
+    return {"url": target["url"], "egress": _capture_egress_rules(gate), "console_names": names,
+            "audit": {**base, "started_at": time.time()}}
+
+
+def _write_capture_sidecar(storage, job_id: str, audit: Dict[str, Any]) -> None:
+    """Remember what the terminal ``capture_finished`` record needs (host, hash prefix, start time). Inside the job's own
+    folder, so deleting the job deletes it; written 0600, never followed through a symlink."""
+    import json  # noqa: PLC0415
+
+    folder = Path(storage.videos_dir) / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / _CAPTURE_SIDECAR
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({k: audit[k] for k in ("host", "viewport", "url_sha256_prefix", "started_at")}, fh)
+
+
+def _finish_capture_record(tenant_id: str, job, storage) -> None:
+    """When a tour job ends, write the ``capture_finished`` that closes its ``capture_started`` (best effort, once)."""
+    import json  # noqa: PLC0415
+
+    path = Path(storage.videos_dir) / job.id / _CAPTURE_SIDECAR
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024:
+            return
+        d = json.loads(path.read_text(encoding="utf-8"))
+        host, viewport, prefix = str(d["host"])[:253], str(d["viewport"])[:16], str(d["url_sha256_prefix"])[:12]
+        elapsed = int((time.time() - float(d["started_at"])) * 1000)
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    if _claim_terminal(tenant_id, job.id + ":capture", "video_producer.capture_finished"):
+        return  # an earlier observer already closed it
+    outcome = {"complete": "ok", "cancelled": "cancelled"}.get(getattr(job, "status", ""), "failed")
+    _lifecycle_audit(tenant_id, "video_producer.capture_finished",
+                     {"host": host, "viewport": viewport, "url_sha256_prefix": prefix, "outcome": outcome, "elapsed_ms": max(0, elapsed)})
+
+
+@router.get("/videos/{job_id}/bundle")
+def download_website_bundle(job_id: str, rec=_SessionRec):
+    """The zip of a website tour (the page to put online next to the videos). Only a finished tour of THIS tenant."""
+    from fastapi.responses import FileResponse  # noqa: PLC0415
+
+    out = _video_output(rec, job_id)
+    if (getattr(out, "metadata", None) or {}).get("mode") != "website":
+        raise HTTPException(status_code=404, detail="This video has no website bundle")
+    video = _own_file(rec, out.video_path)
+    path = _own_file(rec, str(video.parent / "website-bundle.zip")) if video is not None else None
+    if path is None:
+        raise HTTPException(status_code=404, detail="The website bundle was not found")
+    return FileResponse(str(path), media_type="application/zip", filename=f"website_tour_{job_id}.zip")
 
 
 # ── Website capture as an asset (ADR-2249 D4, T-0113, T-0194) ─────────────────
