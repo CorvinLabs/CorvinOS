@@ -22,7 +22,7 @@ One column, top to bottom (ADR-2246):
 | … · Assets | the workspace's uploaded images (not tied to a video): upload a PNG with a required caption, an optional source (only scheme, host and path are kept) and hotspots placed by clicking the picture; a notice that a screenshot can contain other people's data; delete with confirmation. A `still` scene shows an asset; the storyboard reads only caption and hotspot names (ADR-2249 D3) | `GET/POST /v1/console/video/assets`, `/assets/{id}/image`, `DELETE /assets/{id}` (CSRF; each audited) |
 | Settings | output folder, text-to-speech engine, max duration | `/settings` |
 
-### Website tours (CorvinTV 1.9.0, ADR-2336)
+### Website tours (CorvinTV 1.9.0-1.11.0, ADR-2336)
 
 The template **Website tour** makes a job a narrated tour of a web page: the page whose address is in the brief is filmed while a
 voice walks the viewer down it, the page's own animations run in time with the words, and the result is a bundle, not only an MP4
@@ -37,6 +37,7 @@ downloads the bundle (`GET /v1/console/video/videos/{id}/bundle`, the tenant's o
 * **Composer.** Picking the template shows the tour options (voice language: from the brief, English, Deutsch or both; length) and,
   if the switch is off, why. The pick is never remembered (a tour needs an address every time) and the server refuses it as the
   default template (422). A tour is never a revision and never a film.
+* **Opens on the page, explains through animation (1.11.0).** A tour no longer opens on a card: `intro_style` defaults to `page`, so the video starts on the finished page, its top with the title (`plain` and `header` keep a card). `animation: "required"` is the default: a tour with a scene whose target section shows no running animation is refused and the findings name the scene; `"off"` allows a static page and the report lists `static_scenes`.
 * **First real tour (2026-11-22).** CorvinOS as an amplifier for Claude Code, filmed from the live corvin-labs.com in German and English with the OpenAI voice: 3:12 minutes, camera peak 900 px/s with a frame-to-frame change of the step of at most 0.8 px, narration onsets within 0.02 s of the plan (`Corvin-Videos/corvintv-website-tour-amplifier`).
 * **Plugin.** Details, the tour format and the limits (page timers are frozen, no login pages) are in the plugin's
   `docs/WEBSITE-TOUR.md`; the CLI `scripts/website_tour.py` makes a tour without the console.
