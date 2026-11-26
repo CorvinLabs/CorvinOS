@@ -90,6 +90,13 @@ def _ensure_scripts_on_path() -> None:  # pragma: no cover — Windows-only
             os.environ["PATH"] = scripts_dir + os.pathsep + path_env
 
         # --- 2. Persist to Windows user PATH in registry ---
+        # Never from a virtual environment. `uv tool install` publishes its
+        # commands in %USERPROFILE%\.local\bin (`uv tool update-shell`), and a
+        # venv's Scripts dir -- the tool venv or a throw-away uv build env --
+        # also carries python.exe: persisting it shadowed the user's Python and
+        # left one dead PATH entry per build behind.
+        if sys.prefix != sys.base_prefix:
+            return
         try:
             import winreg  # type: ignore[import]
             # KEY_QUERY_VALUE to read, KEY_SET_VALUE to write; reserved MUST be 0.

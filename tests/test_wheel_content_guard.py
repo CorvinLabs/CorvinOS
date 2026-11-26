@@ -158,8 +158,8 @@ def test_installers_install_only_the_local_checkout() -> None:
     from a package index (no version floor, no --pypi / -PyPI mode)."""
     sh = (_REPO / "install.sh").read_text(encoding="utf-8")
     ps1 = (_REPO / "install.ps1").read_text(encoding="utf-8")
-    assert re.search(r'uv tool install --force --editable "\$\{EDITABLE\}\[browser\]"', sh)
-    assert re.search(r'@\("tool", "install", "--force", "--editable", \("\{0\}\[browser\]" -f \$RepoPath\)\)', ps1)
+    assert re.search(r'uv tool install --force --python ">=3\.11,<3\.15" --editable "\$\{EDITABLE\}\[browser\]"', sh)
+    assert re.search(r'@\("tool", "install", "--force", "--python", ">=3\.11,<3\.15",\s+"--editable", \("\{0\}\[browser\]" -f \$RepoPath\)\)', ps1)
     for text, name in ((sh, "install.sh"), (ps1, "install.ps1")):
         assert "CORVIN_MIN_VERSION" not in text and "CorvinMinVersion" not in text, name
         assert "--pypi" not in text.lower().replace("no --pypi", ""), name

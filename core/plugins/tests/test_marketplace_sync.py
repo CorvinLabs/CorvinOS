@@ -180,6 +180,32 @@ class EnsureMarketplaceSourceTests(unittest.TestCase):
         leftovers = [p.name for p in (self.home / "marketplace-cache").iterdir() if p.name.startswith((".sync-", ".old-"))]
         self.assertEqual(leftovers, [])
 
+    def test_deep_checkout_syncs_although_the_scratch_path_exceeds_max_path(self):
+        """Windows MAX_PATH: the scratch path is over 260 characters, the final one is not.
+        Directory members are included, as in a real GitHub tarball."""
+        home = self.home / ("d" * max(1, 150 - len(str(self.home))))
+        home.mkdir()
+        os.environ["CORVIN_HOME"] = str(home)  # restored by setUp's patch.dict
+        top = "CorvinLabs-Corvin-Marketplace-deadbeef"
+        rel = "plugins/buildin/memory/foo/" + "n" * 30 + ".yaml"
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            parts = rel.split("/")
+            for depth in range(len(parts)):
+                info = tarfile.TarInfo(name="/".join([top, *parts[:depth]]))
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                tf.addfile(info)
+            info = tarfile.TarInfo(name=f"{top}/{rel}")
+            info.size = 1
+            tf.addfile(info, io.BytesIO(b"x"))
+        with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(buf.getvalue())):
+            bootstrap.ensure_marketplace_source()
+        synced = bootstrap._marketplace_cache_dir() / rel
+        self.assertLess(len(str(synced)), 260)
+        self.assertGreater(len(f"{home}/marketplace-cache/.sync-xxxxxxxx/{top}/{rel}"), 260)
+        self.assertTrue(synced.is_file())
+
     def test_rejects_path_traversal_in_tarball_member(self):
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:

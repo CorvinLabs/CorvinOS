@@ -103,7 +103,7 @@ fi
 
 # ─ Test 5: local-checkout-only install (ADR-2215)
 test_case "installs only the local checkout (editable, no index, no download mode)"
-if grep -q 'uv tool install --force --editable "${EDITABLE}\[browser\]"' "$INSTALL_SCRIPT" \
+if grep -q 'uv tool install --force --python ">=3.11,<3.15" --editable "${EDITABLE}\[browser\]"' "$INSTALL_SCRIPT" \
    && grep -q '_is_checkout' "$INSTALL_SCRIPT" \
    && ! grep -q 'CORVIN_MIN_VERSION\|--pypi\|fetch_source' "$INSTALL_SCRIPT"; then
     test_pass

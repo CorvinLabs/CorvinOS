@@ -420,7 +420,8 @@ fi
 
 # ── 3. Python package (deps can change with the code) ───────────────────────
 step "[3/6] Python package"
-_uv_install() { uv tool install --force --editable "${SRC}[browser]"; }
+# Python range as in install.sh (no onnxruntime wheel for 3.15 yet).
+_uv_install() { uv tool install --force --python ">=3.11,<3.15" --editable "${SRC}[browser]"; }
 _uv_install_healing() {
     _uv_install && return 0
     echo "retry: removing the tool venv" >>"$LOG"

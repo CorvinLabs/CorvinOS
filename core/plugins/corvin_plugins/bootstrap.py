@@ -916,6 +916,26 @@ def ensure_marketplace_source(*, force: bool = False) -> None:
             pass
 
 
+def _extended_length_path(path: str) -> str:
+    r"""*path* in the Windows extended-length form (``\\?\``), unchanged elsewhere.
+
+    The scratch dir plus GitHub's ``<owner>-<repo>-<sha>/`` level pushes the deepest
+    marketplace members past MAX_PATH (260) when the checkout path is moderately
+    long and long-path support is off (the Windows default): the whole sync then
+    failed with FileNotFoundError and the default plugins were never provisioned.
+    """
+    import os
+
+    if os.name != "nt":
+        return path
+    path = os.path.abspath(path)
+    if path.startswith("\\\\?\\"):
+        return path
+    if path.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + path[2:]
+    return "\\\\?\\" + path
+
+
 def _download_and_extract_marketplace(dest_root: Path) -> None:
     """Download+extract the Corvin-Marketplace tarball into *dest_root* so it
     becomes that repo's root (``dest_root/plugins/buildin/...``). Tarball member
@@ -923,6 +943,7 @@ def _download_and_extract_marketplace(dest_root: Path) -> None:
     already does for GitHub downloads elsewhere in this codebase: no absolute
     paths, no ``..`` traversal, no symlink/hardlink escaping the extraction root.
     """
+    import os
     import shutil
     import tarfile
     import tempfile
@@ -954,13 +975,19 @@ def _download_and_extract_marketplace(dest_root: Path) -> None:
                             f" (member: {member.name!r})"
                         )
             names = tf.getnames()
+            if os.name == "nt":
+                # An extended-length path is passed to Windows verbatim: a "/" in a
+                # member name is then a syntax error (WinError 123), not a separator.
+                for member in tf.getmembers():
+                    member.name = member.name.replace("/", "\\")
             # GitHub's tarball API nests everything under one "<owner>-<repo>-<sha>/"
             # directory; extract to a scratch dir first and flatten it into
             # dest_root so callers see dest_root AS the repo root.
             # The scratch dir sits NEXT TO dest_root (same filesystem) so the final swap
             # is a rename, never a copy: a crash mid-sync cannot leave half a cache.
             dest_root.parent.mkdir(parents=True, exist_ok=True)
-            scratch = tempfile.mkdtemp(prefix=".sync-", dir=str(dest_root.parent))
+            scratch = _extended_length_path(
+                tempfile.mkdtemp(prefix=".sync-", dir=str(dest_root.parent)))
             try:
                 # ``filter="data"`` (PEP 706): no absolute paths, no links leaving the
                 # destination, no device files, no setuid/setgid/sticky bits, files

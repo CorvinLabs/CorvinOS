@@ -877,7 +877,7 @@ Write-Step "[4/6] Python package"
 Stop-Console
 
 function Install-Package {
-    return ((Invoke-Native -Exe $UvExe -Arguments @("tool", "install", "--force", "--editable", "$Src[browser]")) -eq 0)
+    return ((Invoke-Native -Exe $UvExe -Arguments @("tool", "install", "--force", "--python", ">=3.11,<3.15", "--editable", "$Src[browser]")) -eq 0)
 }
 function Install-PackageHealing {
     if (Install-Package) { return $true }

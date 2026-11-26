@@ -77,7 +77,8 @@ curl -fsSL https://corvin-labs.com/install.sh | sh
 ```
 
 ```powershell
-# Windows (PowerShell)
+# Windows (PowerShell) — the first line allows script files in this window only
+Set-ExecutionPolicy -Scope Process Bypass -Force
 irm https://corvin-labs.com/install.ps1 | iex
 ```
 

@@ -904,8 +904,8 @@ def _pid_alive(pid: int) -> bool:
         try:
             out = _run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, check=False, timeout=10,
-            ).stdout
+                capture_output=True, text=True, errors="replace", check=False, timeout=10,
+            ).stdout or ""
         except (OSError, subprocess.TimeoutExpired):
             return False
         return f'"{pid}"' in out
@@ -1044,10 +1044,14 @@ def _win_process_snapshot() -> tuple[dict[int, str], bool]:
         try:
             out = _run(
                 [powershell, "-NoProfile", "-NonInteractive", "-Command",
+                 # A pipe gets the OEM code page by default; ask for UTF-8 so
+                 # a path such as C:\Users\Jörg survives (and still matches).
+                 "try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }; "
                  "Get-CimInstance Win32_Process | "
                  "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
-                capture_output=True, text=True, check=False, timeout=15,
-            ).stdout
+                capture_output=True, encoding="utf-8", errors="replace",
+                check=False, timeout=15,
+            ).stdout or ""
         except (OSError, subprocess.TimeoutExpired):
             out = ""
         if out.strip():
@@ -1063,8 +1067,8 @@ def _win_process_snapshot() -> tuple[dict[int, str], bool]:
     try:
         out = _run(
             ["wmic", "process", "get", "ProcessId,CommandLine", "/FORMAT:LIST"],
-            capture_output=True, text=True, check=False, timeout=15,
-        ).stdout
+            capture_output=True, text=True, errors="replace", check=False, timeout=15,
+        ).stdout or ""
     except (OSError, subprocess.TimeoutExpired):
         return {}, False
     if not out.strip():

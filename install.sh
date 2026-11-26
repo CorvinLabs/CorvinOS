@@ -397,7 +397,7 @@ fi
 # makes every later `uv tool install` fail on the broken receipt — the second
 # attempt removes the venv first; the third also drops uv's cache.
 _uv_install() {
-    uv tool install --force --editable "${EDITABLE}[browser]"
+    uv tool install --force --python ">=3.11,<3.15" --editable "${EDITABLE}[browser]"
 }
 _uv_install_healing() {
     _uv_install && return 0

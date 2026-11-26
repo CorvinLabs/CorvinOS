@@ -810,6 +810,21 @@ function Stop-ToolVenvProcess {
     return $stopped
 }
 
+# PIDs of every process this installer descends from. A parent that started
+# AFTER its child is a recycled PID, not an ancestor.
+function Get-AncestorProcessId {
+    $ids = @()
+    $current = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction SilentlyContinue
+    while ($current -and $ids.Count -lt 64) {
+        $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($current.ParentProcessId)" -ErrorAction SilentlyContinue
+        if (-not $parent -or $parent.CreationDate -gt $current.CreationDate) { break }
+        if ($ids -contains [int]$parent.ProcessId) { break }
+        $ids += [int]$parent.ProcessId
+        $current = $parent
+    }
+    return $ids
+}
+
 # Turns captured server output into one actionable sentence. Every branch here
 # is a failure that has actually happened on a Windows box.
 function Get-ConsoleFailureHint {
@@ -1118,6 +1133,7 @@ Write-Log -Message "PATH prepended with: $UvBin; $CargoBin; $NodeRoot" -Level "S
 Write-Header "Phase 5: Stale-State Detection"
 
 Write-Step "Checking for running CorvinOS processes"
+$hostProcess = $null
 try {
     # Scoped ON PURPOSE. An earlier revision force-killed every python.exe,
     # node.exe and uv.exe on the machine, which takes out editors, language
@@ -1141,6 +1157,13 @@ try {
             ($_.Path -and $_.Path.StartsWith($UvToolDir, [StringComparison]::OrdinalIgnoreCase))
         )
     } | Where-Object { Test-ProcessOwnedByMe -ProcessId $_.Id })
+
+    # Run from inside CorvinOS (a chat, its terminal, an agent), the tree kill
+    # below takes this installer down with its host: the install stops half-way
+    # and nothing says why (observed 2026-11-26). Refuse before stopping anything.
+    $ancestors = @(Get-AncestorProcessId)
+    $hostProcess = $candidates | Where-Object { $ancestors -contains $_.Id } | Select-Object -First 1
+    if ($hostProcess -and -not $DryRun) { $candidates = @() }
 
     if ($candidates.Count -gt 0) {
         Write-Log -Message "Found $($candidates.Count) CorvinOS process(es) holding file locks" -Level "Warn"
@@ -1167,7 +1190,7 @@ try {
     # console orphaned by an earlier run has no CorvinOS-named ancestor left, so
     # it is found by who owns the port instead -- and only stopped if it really
     # is ours (Test-IsCorvinConsoleProcess).
-    if (-not $DryRun) {
+    if (-not $DryRun -and -not $hostProcess) {
         $orphans = Stop-ConsoleOnPort -TargetPort $Port
         if ($orphans -gt 0) {
             Write-Log -Message "Stopped $orphans orphaned console process(es) on port $Port" -Level "Info"
@@ -1175,6 +1198,11 @@ try {
     }
 } catch {
     Write-Log -Message "Process check failed: $_" -Level "Warn"
+}
+if ($hostProcess -and -not $DryRun) {
+    Stop-WithError ("This installer was started from inside the running CorvinOS " +
+        "($($hostProcess.ProcessName), PID $($hostProcess.Id)). Stopping it would stop this installer too.`n" +
+        "  Open a separate PowerShell window and run the installer there.") 1 "FAILED (started from inside CorvinOS)"
 }
 
 Write-Step "Checking for conflicting HTTP packages"
@@ -1372,7 +1400,12 @@ Write-Step "Installing corvinos via uv"
 # Invoke-Expression "uv tool install --force corvinos>=2.0.0", where PowerShell
 # parses '>' as a redirection operator and wrote uv's output into a file named
 # '=2.0.0' -- so the version floor was silently dropped.
-$uvArgs = @("tool", "install", "--force", "--editable", ("{0}[browser]" -f $RepoPath))
+# The Python range is pinned: uv would otherwise take the newest interpreter on
+# the machine, and the voice dependency onnxruntime publishes no wheel for 3.15
+# yet -- the whole install then fails to resolve. Same range in update.ps1,
+# install.sh and update.sh.
+$uvArgs = @("tool", "install", "--force", "--python", ">=3.11,<3.15",
+    "--editable", ("{0}[browser]" -f $RepoPath))
 
 if ($DryRun) {
     Write-Log -Message "[DRY RUN] Would run: uv $($uvArgs -join ' ')" -Level "Info"
@@ -1684,6 +1717,7 @@ function New-HiddenConsoleAction {
 Write-Step "Registering autostart task"
 $taskName = "CorvinOS-AutoRestart"
 $taskPath = "\CorvinOS\"
+$autostartReady = $false
 if ($DryRun) {
     Write-Log -Message "[DRY RUN] Would register scheduled task $taskPath$taskName" -Level "Info"
 } else {
@@ -1707,6 +1741,7 @@ if ($DryRun) {
         }).Count)
         if ($existingTask -and $existingIsHidden) {
             Write-Log -Message "Scheduled task $taskName already exists (state: $($existingTask.State))" -Level "Info"
+            $autostartReady = $true
         } else {
             $serveCmd = Get-Command corvinos-serve -ErrorAction SilentlyContinue
             if (-not $serveCmd) {
@@ -1744,6 +1779,7 @@ if ($DryRun) {
                     -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction Stop
             }
             Write-Log -Message "Scheduled task registered (hidden launcher): $taskPath$taskName" -Level "Success"
+            $autostartReady = $true
         }
     } catch {
         # Non-fatal: group policy commonly blocks task registration.
@@ -2034,7 +2070,11 @@ if ($script:ConsoleReady) {
     # The USERNAME filter matters on a multi-session host: without it an
     # elevated shell stops every user's console.
     Write-Host "   Stop it:     taskkill /F /T /FI `"USERNAME eq $env:USERNAME`" /IM corvinos-serve.exe" -ForegroundColor White
-    Write-Host "   Restarts automatically at logon (task $taskPath$taskName)." -ForegroundColor White
+    if ($autostartReady) {
+        Write-Host "   Restarts automatically at logon (task $taskPath$taskName)." -ForegroundColor White
+    } else {
+        Write-Host "   No autostart: after the next logon start it with corvinos-serve." -ForegroundColor Yellow
+    }
     if ($NoBrowser) {
         Write-Host ""
         Write-Host "   Open $ConsoleUrl to reach the chat." -ForegroundColor White
